@@ -52,7 +52,7 @@ jobs:
 
       - name: Run fast tests (verbose)
         run: |
-          pytest -vv -s --maxfail=1 -k "full_stack_validation_e2e or full_stack_validation_json_deterministic"
+          pytest -vv -s --maxfail=1 tests/e2e/test_full_stack_validation.py
 
       - name: Upload artifacts on failure
         if: failure()
@@ -63,3 +63,4 @@ jobs:
             .pytest_cache/**
             artifacts/**
           if-no-files-found: ignore
+
