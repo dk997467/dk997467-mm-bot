@@ -24,31 +24,27 @@ jobs:
       - name: Prepare minimal requirements for CI
         shell: bash
         run: |
-          if [ -f requirements.txt ]; then
-            awk 'BEGIN{IGNORECASE=1}
-                 /^bybit-connector/ {next}
-                 /^git\+ssh:/        {next}
-                 {print}' requirements.txt > requirements_ci.txt
-            echo "---- requirements_ci.txt ----"
-            cat requirements_ci.txt || true
-            echo "-----------------------------"
-          fi
+          awk '
+            BEGIN{IGNORECASE=1}
+            /^bybit-connector/ {next}
+            /^mm-orderbook/    {next}
+            /^git\+ssh:/       {next}
+            /^git\+https:/     {next}
+            {print}
+          ' requirements.txt > requirements_ci.txt
+          echo "---- requirements_ci.txt ----"
+          cat requirements_ci.txt
+          echo "-----------------------------"
 
       - name: Install deps (CI subset)
-        shell: bash
         run: |
           python -m pip install -U pip
-          if [ -s requirements_ci.txt ]; then
-            pip install -r requirements_ci.txt
-          else
-            echo "requirements_ci.txt is empty or missing ? skipping pip install"
-          fi
+          pip install -r requirements_ci.txt
           pip list
 
-      - name: Run fast tests
-        shell: bash
+      - name: Run fast tests (verbose)
         run: |
-          pytest -q -k "full_stack_validation_e2e or full_stack_validation_json_deterministic"
+          pytest -vv -s --maxfail=1 -k "full_stack_validation_e2e or full_stack_validation_json_deterministic"
 
       - name: Upload artifacts on failure
         if: failure()
