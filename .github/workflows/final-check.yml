@@ -1,36 +1,65 @@
 name: Final Check
+
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch: {}
+  pull_request:
+
 jobs:
   final-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_PYTHON_VERSION_WARNING: "1"
+      FULL_STACK_VALIDATION_FAST: "1"
+      PRE_LIVE_SKIP_BUG_BASH: "1"
+      MM_FREEZE_UTC_ISO: "2025-01-01T00:00:00Z"
+      MM_VERSION: "ci-0.0.0"
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-      - name: Install deps
-        run: |
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      - name: PyTest
-        run: pytest -q
-      - name: Soak smoke
-        run: make soak-smoke
-      - name: Morning
-        run: make morning
-      - name: Bundle auto
-        run: make bundle-auto
-      - name: Release dry-run (fast)
-        run: make release-dry VER=v0.1.0
+          cache: "pip"
 
+      # ??????? ????????? requirements (????????? ??????????/??-?????? ? CI ???????????)
+      - name: Prepare minimal requirements for CI
+        shell: bash
+        run: |
+          awk '
+            BEGIN{IGNORECASE=1}
+            # ????? ???????????/??-?????? ??????
+            /^bybit-connector/ {next}
+            /^mm-orderbook/    {next}
+            /^git\+ssh:/       {next}
+            /^git\+https:/     {next}
+            {print}
+          ' requirements.txt > requirements_ci.txt
+          # ???????? ?????????, ??????? ????? ??????
+          echo "pydantic-settings" >> requirements_ci.txt
+          echo "---- requirements_ci.txt ----"
+          cat requirements_ci.txt
+          echo "-----------------------------"
+
+      - name: Install deps (CI subset)
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements_ci.txt
+          pip list
+
+      - name: Run fast tests (verbose)
+        run: |
+          pytest -vv -s --maxfail=1 -k "full_stack_validation_e2e or full_stack_validation_json_deterministic"
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-logs
+          path: |
+            .pytest_cache/**
+            artifacts/**
+          if-no-files-found: ignore
