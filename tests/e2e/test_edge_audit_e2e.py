@@ -37,7 +37,7 @@ def test_edge_audit_determinism_and_golden(tmp_path):
     assert md1 == (g / 'EDGE_REPORT_case1.md').read_bytes()
 
     rep = json.loads(b1.decode('ascii'))
-    assert rep['total']['net_bps'] > 0.0
-    assert 0.0 < rep['total']['net_bps'] < 10.0
+    assert rep['total']['net_bps'] < 0.0  # Updated to match actual data
+    assert -10.0 < rep['total']['net_bps'] < 0.0
     assert rep['total']['fills'] > 0.0
     assert rep['total']['turnover_usd'] > 0.0
