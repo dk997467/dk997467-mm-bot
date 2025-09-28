@@ -598,7 +598,7 @@ def main(argv=None) -> int:
     })
 
 
-    # ===== FAST PATH (ранний выход) =====
+    # ===== FAST PATH (?????? ?????) =====
     if FAST_MODE:
         print("Running tests (FAST subset)...", file=sys.stderr)
         rc = _run_pytest_fast()
@@ -736,3 +736,4 @@ if __name__ == '__main__':
         if (rc == 0) and ('--accept' in sys.argv):
             print('event=full_accept status=OK')
         sys.exit(rc)
+
