@@ -1,0 +1,36 @@
+{{ define "slack.title" }}
+[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .GroupLabels.alertname }}
+{{ end }}
+
+{{ define "slack.text" }}
+{{ range .Alerts }}
+*Alert:* {{ .Annotations.summary }}
+*Description:* {{ .Annotations.description }}
+*Severity:* {{ .Labels.severity }}
+*Service:* {{ .Labels.service }}
+*Instance:* {{ .Labels.instance }}
+*Started:* {{ .StartsAt | since }}
+
+{{ if .Annotations.runbook_url }}
+*Runbook:* <{{ .Annotations.runbook_url }}|View Runbook>
+{{ end }}
+
+{{ if .Labels.symbol }}
+*Symbol:* {{ .Labels.symbol }}
+{{ end }}
+
+{{ if .Labels.side }}
+*Side:* {{ .Labels.side }}
+{{ end }}
+
+{{ if .Labels.exchange }}
+*Exchange:* {{ .Labels.exchange }}
+{{ end }}
+
+---
+{{ end }}
+{{ end }}
+
+{{ define "slack.grafana" }}
+http://localhost:3000/d/mm-bot-alerts/mm-bot-alerts?orgId=1&var-instance={{ .Labels.instance }}
+{{ end }}

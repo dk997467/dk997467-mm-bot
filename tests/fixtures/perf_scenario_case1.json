@@ -1,0 +1,13 @@
+{
+  "symbols": 2,
+  "duration_ms": 600000,
+  "ack_delay_ms": 60,
+  "place_rate_per_sec": 8,
+  "replace_burst": 2,
+  "min_interval_ms": 60,
+  "max_concurrent": 2,
+  "tail_age_ms": 800,
+  "max_batch": 10
+}
+
+

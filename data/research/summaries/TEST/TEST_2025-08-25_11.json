@@ -1,0 +1,49 @@
+{
+  "counts": {
+    "fills": 8,
+    "orders": 25,
+    "quotes": 348
+  },
+  "hit_rate_by_bin": {
+    "0": {
+      "count": 88,
+      "fills": 3
+    },
+    "15": {
+      "count": 88,
+      "fills": 3
+    },
+    "40": {
+      "count": 100,
+      "fills": 1
+    },
+    "5": {
+      "count": 72,
+      "fills": 1
+    }
+  },
+  "hour_utc": "2025-08-25T11:00:00+00:00Z",
+  "metadata": {
+    "cfg_hash": "smoke_test_hash",
+    "git_sha": "smoke_test_sha"
+  },
+  "queue_wait_cdf_ms": [
+    {
+      "p": 0.5,
+      "v": 232.4
+    },
+    {
+      "p": 0.9,
+      "v": 279.0
+    },
+    {
+      "p": 0.95,
+      "v": 279.0
+    },
+    {
+      "p": 0.99,
+      "v": 279.0
+    }
+  ],
+  "symbol": "TEST"
+}

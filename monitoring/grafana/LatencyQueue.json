@@ -1,0 +1,3 @@
+{"panels":[{"targets":[{"expr":"order_age_p50_ms"}],"title":"order_age_p50_ms"},{"targets":[{"expr":"order_age_p95_ms"}],"title":"order_age_p95_ms"},{"targets":[{"expr":"order_age_p99_ms"}],"title":"order_age_p99_ms"},{"targets":[{"expr":"replace_rate_per_min"}],"title":"replace_rate_per_min"},{"targets":[{"expr":"cancel_batch_events_total"}],"title":"cancel_batch_events"}],"title":"Latency & Queue"}
+
+

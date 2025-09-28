@@ -1,0 +1,183 @@
+{
+  "title": "MM Bot Overview - Enhanced",
+  "uid": "mm-bot-enhanced",
+  "version": 2,
+  "refresh": "5s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Profit",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "maker_pnl",
+          "legendFormat": "{{symbol}} - maker P&L"
+        },
+        {
+          "expr": "taker_fees",
+          "legendFormat": "{{symbol}} - taker fees"
+        },
+        {
+          "expr": "maker_pnl - taker_fees",
+          "legendFormat": "{{symbol}} - net P&L"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Hit Rate",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "rate(quotes_placed_total[5m]) > 0 and (rate(creates_total[5m]) / rate(quotes_placed_total[5m])) * 100",
+          "legendFormat": "Hit Rate %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Flow",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
+      "targets": [
+        {
+          "expr": "creates_total",
+          "legendFormat": "{{symbol}} - creates"
+        },
+        {
+          "expr": "cancels_total",
+          "legendFormat": "{{symbol}} - cancels"
+        },
+        {
+          "expr": "replaces_total",
+          "legendFormat": "{{symbol}} - replaces"
+        },
+        {
+          "expr": "create_rate",
+          "legendFormat": "{{symbol}} - create rate"
+        },
+        {
+          "expr": "cancel_rate",
+          "legendFormat": "{{symbol}} - cancel rate"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Risk",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "targets": [
+        {
+          "expr": "inventory_abs",
+          "legendFormat": "{{symbol}} - inventory"
+        },
+        {
+          "expr": "drawdown_day",
+          "legendFormat": "daily drawdown %"
+        },
+        {
+          "expr": "risk_paused",
+          "legendFormat": "risk paused"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Market",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "targets": [
+        {
+          "expr": "spread_bps",
+          "legendFormat": "{{symbol}} - spread (bps)"
+        },
+        {
+          "expr": "vola_1m",
+          "legendFormat": "{{symbol}} - volatility"
+        },
+        {
+          "expr": "ob_imbalance",
+          "legendFormat": "{{symbol}} - imbalance"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "System",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(latency_ms_bucket[5m]))",
+          "legendFormat": "p95 latency (ms)"
+        },
+        {
+          "expr": "ws_reconnects_total",
+          "legendFormat": "{{exchange}} - reconnects"
+        },
+        {
+          "expr": "rest_error_rate",
+          "legendFormat": "{{exchange}} - error rate"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Active Orders",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+      "targets": [
+        {
+          "expr": "orders_active",
+          "legendFormat": "{{symbol}} {{side}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Config",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 32},
+      "targets": [
+        {
+          "expr": "cfg_levels_per_side",
+          "legendFormat": "levels per side"
+        },
+        {
+          "expr": "cfg_min_time_in_book_ms",
+          "legendFormat": "min time in book (ms)"
+        },
+        {
+          "expr": "cfg_k_vola_spread",
+          "legendFormat": "k_vola_spread"
+        },
+        {
+          "expr": "cfg_skew_coeff",
+          "legendFormat": "skew_coeff"
+        },
+        {
+          "expr": "cfg_imbalance_cutoff",
+          "legendFormat": "imbalance_cutoff"
+        },
+        {
+          "expr": "cfg_max_create_per_sec",
+          "legendFormat": "max create/sec"
+        },
+        {
+          "expr": "cfg_max_cancel_per_sec",
+          "legendFormat": "max cancel/sec"
+        }
+      ]
+    }
+  ]
+}

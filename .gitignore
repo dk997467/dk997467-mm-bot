@@ -1,0 +1,14 @@
+# venv / IDE / cache
+venv/
+.env/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# build & local outputs
+artifacts/
+artifacts/**
+
+# OS junk
+.DS_Store
+Thumbs.db

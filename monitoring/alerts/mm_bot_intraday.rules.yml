@@ -1,0 +1,12 @@
+groups:
+  - name: mm-bot-intraday-caps
+    rules:
+      - alert: IntradayCapBreached
+        expr: intraday_caps_breached{env="canary"} == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Intraday caps breached"
+          description: "Allocator is blocked due to intraday risk caps."
+

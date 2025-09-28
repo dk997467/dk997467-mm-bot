@@ -1,0 +1,17 @@
+[package]
+name = "mm_orderbook"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Market Maker Team"]
+description = "High-performance L2 order book for Python via pyo3"
+
+[lib]
+name = "mm_orderbook"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.20", features = ["extension-module", "abi3-py311"] }
+indexmap = "2"
+
+

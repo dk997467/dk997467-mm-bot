@@ -1,0 +1,25 @@
+profiles:
+  econ_moderate:
+    allocator:
+      smoothing:
+        max_delta_ratio: 0.12
+        max_delta_abs_base_units: 0.0
+        backoff_steps: [1.0, 0.7, 0.5]
+        bias_cap_ratio: 0.30
+        fee_bias_cap_ratio: 0.05
+    signals:
+      impact_cap_ratio: 0.08
+    latency_boost:
+      replace:
+        min_interval_ms: 80
+        max_concurrent: 2
+      tail_batch:
+        tail_age_ms: 700
+        max_batch: 8
+    canary:
+      fraction: 0.05
+    logging:
+      level: "INFO"
+      trace_alloc_micro: false
+
+

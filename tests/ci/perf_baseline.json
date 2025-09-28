@@ -1,0 +1,1 @@
+{"loops":{"export":{"p95_ms":50.0},"prune":{"p95_ms":50.0},"ramp":{"p95_ms":50.0},"slo":{"p95_ms":50.0}},"admin_latency_buckets":{"/admin/perf/snapshot":{"0":1,"5":1,"10":1}}}

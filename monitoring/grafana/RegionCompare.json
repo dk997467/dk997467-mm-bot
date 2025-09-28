@@ -1,0 +1,3 @@
+{"panels":[{"targets":[{"expr":"sum by (region)(region_net_bps)"}],"title":"region_net_bps"},{"targets":[{"expr":"sum by (region)(region_order_age_p95_ms)"}],"title":"region_order_age_p95_ms"},{"targets":[{"expr":"region_winner"}],"title":"winner"}],"title":"Region Compare"}
+
+

@@ -1,0 +1,8 @@
+{
+  "latency_ms_mean": 15.0,
+  "latency_ms_std": 5.0,
+  "amend_latency_ms": 10.0,
+  "cancel_latency_ms": 8.0,
+  "toxic_sweep_prob": 0.02,
+  "extra_slippage_bps": 0.5
+}

@@ -1,0 +1,11 @@
+{"ts":"2025-01-01T00:00:00Z","symbol":"BTCUSDT","current":0.0,"desired":10.0,"breach":false}
+{"ts":"2025-01-01T00:00:10Z","symbol":"BTCUSDT","current":10.0,"desired":25.0,"breach":false}
+{"ts":"2025-01-01T00:00:20Z","symbol":"BTCUSDT","current":25.0,"desired":60.0,"breach":true}
+{"ts":"2025-01-01T00:00:30Z","symbol":"BTCUSDT","current":40.0,"desired":90.0,"breach":true}
+{"ts":"2025-01-01T00:00:40Z","symbol":"BTCUSDT","current":55.0,"desired":95.0,"breach":true}
+{"ts":"2025-01-01T00:00:50Z","symbol":"BTCUSDT","current":70.0,"desired":80.0,"breach":false}
+{"ts":"2025-01-01T00:01:00Z","symbol":"BTCUSDT","current":75.0,"desired":74.0,"breach":false}
+{"ts":"2025-01-01T00:01:10Z","symbol":"BTCUSDT","current":74.0,"desired":74.0,"breach":false}
+{"ts":"2025-01-01T00:01:20Z","symbol":"BTCUSDT","current":74.0,"desired":72.0,"breach":false}
+{"ts":"2025-01-01T00:01:30Z","symbol":"BTCUSDT","current":72.0,"desired":72.0,"breach":false}
+

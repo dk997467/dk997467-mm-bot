@@ -1,0 +1,6 @@
+{"fields":{"api_secret":"****","delta":0.1},"kind":"ALLOC","prev_sha256":"GENESIS","sha256":"b9efd2b0f895f6e1d7f4a0b2b4f4b8a8b932f2f7f5c3e3b2a1a0c9f8d7e6c5b4","symbol":"BTCUSDT","ts":"1970-01-01T00:00:01Z"}
+{"fields":{"order_id":"abc","price":100.1},"kind":"REPLACE","prev_sha256":"b9efd2b0f895f6e1d7f4a0b2b4f4b8a8b932f2f7f5c3e3b2a1a0c9f8d7e6c5b4","sha256":"a1a2a3a4a5a6a7a8b1b2b3b4c5c6c7c8d1d2d3d4e5e6e7e8f1f2f3f4a5a6a7a8","symbol":"BTCUSDT","ts":"1970-01-01T00:01:00Z"}
+{"fields":{"order_id":"def"},"kind":"CANCEL","prev_sha256":"a1a2a3a4a5a6a7a8b1b2b3b4c5c6c7c8d1d2d3d4e5e6e7e8f1f2f3f4a5a6a7a8","sha256":"c9c8c7c6c5c4c3c2b9b8b7b6a5a4a3a2f9f8f7f6e5e4e3e2d1d0cfcfefefabab","symbol":"ETHUSDT","ts":"1970-01-01T00:02:00Z"}
+{"fields":{"reason":"DRIFT_EDGE"},"kind":"GUARD","prev_sha256":"c9c8c7c6c5c4c3c2b9b8b7b6a5a4a3a2f9f8f7f6e5e4e3e2d1d0cfcfefefabab","sha256":"d0d1d2d3d4d5d6d7e0e1e2e3f4f5f6f7a0a1a2a3b4b5b6b7c0c1c2c3d4d5d6d7","symbol":"","ts":"1970-01-01T00:03:00Z"}
+
+

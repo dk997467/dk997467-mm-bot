@@ -1,0 +1,23 @@
+regions:
+- name: "eu-west"
+  dc: "eu-west-1"
+  labels: {tier: "primary"}
+  enabled: true
+- name: "us-east"
+  dc: "us-east-1"
+  labels: {tier: "secondary"}
+  enabled: true
+- name: "ap-sg"
+  dc: "ap-southeast-1"
+  labels: {tier: "secondary"}
+  enabled: false
+metrics:
+  keys: ["net_bps","order_age_p95_ms","fill_rate","taker_share_pct"]
+switch:
+  safe_thresholds:
+    net_bps_min: 2.50
+    order_age_p95_ms_max: 350
+    taker_share_pct_max: 15
+  cooldown_s: 600
+
+

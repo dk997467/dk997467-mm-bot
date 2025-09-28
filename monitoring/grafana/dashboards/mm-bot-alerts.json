@@ -1,0 +1,116 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "MM Bot Alerts",
+    "tags": ["mm-bot", "alerts", "monitoring"],
+    "style": "dark",
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Alert Status Overview",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "ALERTS{alertname=~\".*\"}",
+            "legendFormat": "{{alertname}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "red", "value": 1}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Critical Alerts",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "ALERTS{severity=\"critical\"}",
+            "legendFormat": "{{alertname}}"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "Time": true,
+                "__name__": true,
+                "job": true
+              },
+              "renameByName": {
+                "alertname": "Alert",
+                "severity": "Severity",
+                "instance": "Instance",
+                "description": "Description"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Warning Alerts",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "ALERTS{severity=\"warning\"}",
+            "legendFormat": "{{alertname}}"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "Time": true,
+                "__name__": true,
+                "job": true
+              },
+              "renameByName": {
+                "alertname": "Alert",
+                "severity": "Severity",
+                "instance": "Instance",
+                "description": "Description"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Alert History",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "changes(ALERTS{alertname=~\".*\"}[1h])",
+            "legendFormat": "{{alertname}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            }
+          }
+        }
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "30s"
+  }
+}

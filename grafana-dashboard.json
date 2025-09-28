@@ -1,0 +1,322 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "MM Bot - Market Making Dashboard",
+    "tags": ["mm-bot", "trading"],
+    "timezone": "UTC",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Guard & AutoPolicy Status",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "guard_paused_effective",
+            "legendFormat": "Guard Paused",
+            "refId": "A"
+          },
+          {
+            "expr": "autopolicy_level",
+            "legendFormat": "AutoPolicy Level",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 1},
+                {"color": "red", "value": 3}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Throttle Backoff",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "throttle_backoff_ms_max_observed",
+            "legendFormat": "Max Backoff (ms)",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(throttle_backoffs_total[5m])",
+            "legendFormat": "Backoff Rate",
+            "refId": "B"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Circuit Breaker State",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "circuit_state{state=\"closed\"}",
+            "legendFormat": "Closed",
+            "refId": "A"
+          },
+          {
+            "expr": "circuit_state{state=\"open\"}",
+            "legendFormat": "Open",
+            "refId": "B"
+          },
+          {
+            "expr": "circuit_state{state=\"half_open\"}",
+            "legendFormat": "Half-Open",
+            "refId": "C"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Portfolio Budget & Allocation",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "portfolio_budget_available_usd",
+            "legendFormat": "Available Budget USD",
+            "refId": "A"
+          },
+          {
+            "expr": "portfolio_drawdown_pct",
+            "legendFormat": "Drawdown %",
+            "refId": "B"
+          },
+          {
+            "expr": "allocator_soft_factor",
+            "legendFormat": "Soft Factor",
+            "refId": "C"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "id": 5,
+        "title": "Rollout Traffic Split",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rollout_traffic_split_pct",
+            "legendFormat": "Traffic Split %",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(rollout_orders_total{color=\"blue\"}[5m])",
+            "legendFormat": "Blue Orders/s",
+            "refId": "B"
+          },
+          {
+            "expr": "rate(rollout_orders_total{color=\"green\"}[5m])",
+            "legendFormat": "Green Orders/s",
+            "refId": "C"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      },
+      {
+        "id": 6,
+        "title": "Rollout Latency Comparison",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rollout_avg_latency_ms{color=\"blue\"}",
+            "legendFormat": "Blue Latency",
+            "refId": "A"
+          },
+          {
+            "expr": "rollout_avg_latency_ms{color=\"green\"}",
+            "legendFormat": "Green Latency",
+            "refId": "B"
+          },
+          {
+            "expr": "rollout_avg_latency_ms{color=\"green\"} - rollout_avg_latency_ms{color=\"blue\"}",
+            "legendFormat": "Green Delta",
+            "refId": "C"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24}
+      },
+      {
+        "id": 7,
+        "title": "Shadow Mode Diff",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "shadow_price_diff_bps_avg{symbol=~\"$symbol\"}",
+            "legendFormat": "Price Diff BPS - {{symbol}}",
+            "refId": "A"
+          },
+          {
+            "expr": "shadow_size_diff_pct_avg{symbol=~\"$symbol\"}",
+            "legendFormat": "Size Diff % - {{symbol}}",
+            "refId": "B"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32}
+      },
+      {
+        "id": 8,
+        "title": "F2 Gate Failures",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(f2_throttle_gate_failures_total{reason=\"throttle_overload\"}[5m])",
+            "legendFormat": "Throttle Overload",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(f2_throttle_gate_failures_total{reason=\"guard_paused\"}[5m])",
+            "legendFormat": "Guard Paused",
+            "refId": "B"
+          },
+          {
+            "expr": "rate(f2_throttle_gate_failures_total{reason=\"circuit_open\"}[5m])",
+            "legendFormat": "Circuit Open",
+            "refId": "C"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32}
+      },
+      {
+        "id": 9,
+        "title": "Fill-rate & attenuation",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "cost_fillrate_ewma{symbol=~\"$symbol\"}",
+            "legendFormat": "Fill-rate - {{symbol}}",
+            "refId": "A"
+          },
+          {
+            "expr": "allocator_fillrate_attenuation{symbol=~\"$symbol\"}",
+            "legendFormat": "Attenuation - {{symbol}}",
+            "refId": "B"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 40}
+      },
+      {
+        "id": 10,
+        "title": "Estimated cost (bps)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "allocator_estimated_cost_bps{symbol=~\"$symbol\"}",
+            "legendFormat": "Cost bps - {{symbol}}",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 48}
+      }
+      ,
+      {
+        "id": 11,
+        "title": "Turnover (USD)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "turnover_usd{symbol=~\"$symbol\"}",
+            "legendFormat": "Turnover - {{symbol}}",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 56}
+      },
+      {
+        "id": 12,
+        "title": "Turnover factor",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "allocator_turnover_factor{symbol=~\"$symbol\"}",
+            "legendFormat": "Factor - {{symbol}}",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 64}
+      },
+      {
+        "id": 13,
+        "title": "Markout 200ms delta (bps)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "markout_avg_bps{horizon_ms=\"200\",color=\"green\"} - markout_avg_bps{horizon_ms=\"200\",color=\"blue\"}",
+            "legendFormat": "Green - Blue Delta (200ms)",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 72}
+      },
+      {
+        "id": 14,
+        "title": "Markout 500ms delta (bps)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "markout_avg_bps{horizon_ms=\"500\",color=\"green\"} - markout_avg_bps{horizon_ms=\"500\",color=\"blue\"}",
+            "legendFormat": "Green - Blue Delta (500ms)",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 72}
+      },
+      {
+        "id": 15,
+        "title": "Markout samples",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "markout_samples_total{horizon_ms=~\"200|500\",color=~\"$color\"}",
+            "legendFormat": "{{horizon_ms}}ms {{color}}",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 80}
+      }
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "symbol",
+          "type": "query",
+          "query": "label_values(portfolio_weight, symbol)",
+          "current": {
+            "value": ".*USDT",
+            "text": "All USDT pairs"
+          },
+          "options": [],
+          "includeAll": true,
+          "allValue": ".*USDT"
+        },
+        {
+          "name": "color",
+          "type": "custom",
+          "options": [
+            {"text": "All", "value": ".*", "selected": true},
+            {"text": "Blue", "value": "blue", "selected": false},
+            {"text": "Green", "value": "green", "selected": false}
+          ]
+        }
+      ]
+    },
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "30s",
+    "version": 1,
+    "schemaVersion": 36
+  }
+}

@@ -1,0 +1,211 @@
+groups:
+  - name: mm_bot_alerts
+    rules:
+      - alert: RejectRateHigh
+        expr: rest_error_rate{exchange="bybit"} > 0.02
+        for: 5m
+        labels:
+          severity: "warning"
+          env: {{ $labels.env | default "prod" }}
+          service: "mm-bot"
+        annotations:
+          summary: "High REST error rate detected"
+          description: "REST error rate is {{ $value | humanizePercentage }} for exchange {{ $labels.exchange }}"
+          runbook_url: "https://runbook.example.com/mm-bot/rest-errors"
+          grafana_panel: "https://grafana.example.com/d/mm-bot/mm-bot-overview?orgId=1&var-exchange={{ $labels.exchange }}"
+
+      - alert: CancelRateNearLimit
+        expr: cancel_rate > 0.9 * cfg_max_cancel_per_sec
+        for: 5m
+        labels:
+          severity: "warning"
+          env: {{ $labels.env | default "prod" }}
+          service: "mm-bot"
+        annotations:
+          summary: "Cancel rate approaching limit"
+          description: "Cancel rate {{ $value | humanize }} is {{ $value | humanizePercentage }} of max allowed rate"
+          runbook_url: "https://runbook.example.com/mm-bot/cancel-rate-limits"
+          grafana_panel: "https://grafana.example.com/d/mm-bot/mm-bot-overview?orgId=1&panel=cancel-rate"
+
+      - alert: HighLatencyREST
+        expr: histogram_quantile(0.95, sum(rate(latency_ms_bucket{stage="rest"}[5m])) by (le)) > 300
+        for: 5m
+        labels:
+          severity: "critical"
+          env: {{ $labels.env | default "prod" }}
+          service: "mm-bot"
+        annotations:
+          summary: "REST API latency is too high"
+          description: "95th percentile REST latency is {{ $value | humanize }}ms (threshold: 300ms)"
+          runbook_url: "https://runbook.example.com/mm-bot/high-latency"
+          grafana_panel: "https://grafana.example.com/d/mm-bot/mm-bot-overview?orgId=1&panel=latency"
+
+      - alert: RiskPaused
+        expr: risk_paused == 1
+        for: 2m
+        labels:
+          severity: "critical"
+          env: {{ $labels.env | default "prod" }}
+          service: "mm-bot"
+        annotations:
+          summary: "Bot is paused by risk management"
+          description: "Trading bot has been paused due to risk management rules being triggered"
+          runbook_url: "https://runbook.example.com/mm-bot/risk-paused"
+          grafana_panel: "https://grafana.example.com/d/mm-bot/mm-bot-overview?orgId=1&panel=risk-status"
+
+      - alert: CircuitBreakerOpen
+        expr: circuit_breaker_state == 1
+        for: 3m
+        labels:
+          severity: "critical"
+          env: {{ $labels.env | default "prod" }}
+          service: "mm-bot"
+        annotations:
+          summary: "Circuit breaker is open"
+          description: "Circuit breaker has been triggered, preventing further API calls to exchange"
+          runbook_url: "docs/runbooks/circuit_gate.md#triage"
+          grafana_panel: "https://grafana.example.com/d/mm-bot/mm-bot-overview?orgId=1&panel=circuit-breaker"
+
+      - alert: AmendFailureRateHigh
+        expr: rate(amend_attempts_total[5m]) > 0 and (rate(amend_success_total[5m]) / rate(amend_attempts_total[5m])) < 0.9
+        for: 5m
+        labels:
+          severity: "warning"
+          env: {{ $labels.env | default "prod" }}
+          service: "mm-bot"
+        annotations:
+          summary: "High amend failure rate detected"
+          description: "Amend success rate is {{ $value | humanizePercentage }} (threshold: 90%)"
+          runbook_url: "https://runbook.example.com/mm-bot/amend-failures"
+          grafana_panel: "https://grafana.example.com/d/mm-bot/mm-bot-overview?orgId=1&panel=amend-success-rate"
+
+      - alert: QueuePositionDegraded
+        expr: queue_pos_delta{symbol=~".*"} < -0.1
+        for: 10m
+        labels:
+          severity: "warning"
+          env: {{ $labels.env | default "prod" }}
+          service: "mm-bot"
+        annotations:
+          summary: "Queue position is degrading"
+          description: "Queue position delta is {{ $value }} for symbol {{ $labels.symbol }} (threshold: -0.1)"
+          runbook_url: "https://runbook.example.com/mm-bot/queue-position"
+          grafana_panel: "https://grafana.example.com/d/mm-bot/mm-bot-overview?orgId=1&panel=queue-position&var-symbol={{ $labels.symbol }}"
+
+      - alert: HighBackoffTime
+        expr: increase(backoff_seconds_sum[15m]) > 300
+        for: 5m
+        labels:
+          severity: "warning"
+          env: {{ $labels.env | default "prod" }}
+          service: "mm-bot"
+        annotations:
+          summary: "High backoff time accumulation"
+          description: "Backoff time accumulated {{ $value | humanize }}s in the last 15 minutes (threshold: 300s)"
+          runbook_url: "docs/runbooks/circuit_gate.md#high-error-rate"
+          grafana_panel: "https://grafana.example.com/d/mm-bot/mm-bot-overview?orgId=1&panel=backoff-time"
+
+      # Keep commented until fills_* metrics exist
+      # - alert: LowMakerShare
+      #   expr: (fills_maker / max(fills_total, 1)) < 0.85
+      #   for: 30m
+      #   labels:
+      #     severity: "warning"
+      #     service: "mm-bot"
+      #   annotations:
+      #     summary: "Maker share is below threshold"
+      #     description: "Maker share is {{ $value | humanizePercentage }} (threshold: 85%)"
+      #     runbook_url: "https://runbook.example.com/mm-bot/low-maker-share"
+      #     grafana_panel: "https://grafana.example.com/d/mm-bot/mm-bot-overview?orgId=1&panel=maker-share"
+
+      - alert: DrawdownDay
+        expr: drawdown_day < -0.01
+        for: 10m
+        labels:
+          severity: "critical"
+          env: {{ $labels.env | default "prod" }}
+          service: "mm-bot"
+        annotations:
+          summary: "Daily drawdown beyond limit"
+          description: "Daily drawdown is {{ $value | humanizePercentage }} (threshold: -1%)"
+          runbook_url: "docs/runbooks/kpi.md#degrade"
+          grafana_panel: "https://grafana.example.com/d/mm-bot/mm-bot-overview?orgId=1&panel=drawdown"
+
+      - alert: OrderManagerUnhealthy
+        expr: up{job="mm_bot"} == 0
+        for: 1m
+        labels:
+          severity: "critical"
+          env: {{ $labels.env | default "prod" }}
+          service: "mm-bot"
+        annotations:
+          summary: "Order Manager is down"
+          description: "Order Manager service has been down for more than 1 minute"
+          runbook_url: "docs/runbooks/full_stack.md#triage"
+          grafana_panel: "https://grafana.example.com/d/mm-bot/mm-bot-overview?orgId=1&panel=service-status"
+
+  - name: mm-bot-pos-skew
+    rules:
+      - record: mm:pos_skew_threshold
+        expr: 0 * pos_skew_abs + 0
+
+      - alert: PosSkewBreachCanary
+        expr: increase(pos_skew_breach_total{env="canary"}[10m]) > 0
+        for: 5m
+        labels:
+          severity: "warning"
+          env: "canary"
+          service: "mm-bot"
+          team: "mm"
+        annotations:
+          summary: "Position skew breach in canary"
+          description: "Check artifacts/metrics.json and allocator logs."
+          runbook_url: "docs/RUNBOOKS.md#alert-sop"
+
+      - alert: PosSkewRecovered
+        expr: (pos_skew_abs < on(env,service) mm:pos_skew_threshold) and (increase(pos_skew_breach_total[60m]) > 0)
+        for: 10m
+        labels:
+          severity: "info"
+          env: "canary"
+          service: "mm-bot"
+        annotations:
+          summary: "Position skew recovered on {{ $labels.service }} ({{ $labels.env }})"
+          runbook_url: "docs/RUNBOOKS.md#diagnose"
+
+      - record: mm:pos_skew_breach_rate_10m
+        expr: increase(pos_skew_breach_total[10m]) / 600
+
+  - name: mm-bot-fee-awareness
+    rules:
+      - alert: EffectiveFeeJump
+        expr: (effective_fee_bps_now{env="live"} - fee_tier_expected_bps{env="live"}) > 0.4
+        for: 10m
+        labels:
+          severity: warning
+          env: live
+          service: mm-bot
+          team: mm
+        annotations:
+          summary: "Effective fee bps significantly above expected"
+          description: "Check maker/taker mix and tier distance."
+          runbook_url: "docs/RUNBOOKS.md#alert-sop"
+
+      - record: mm:effective_fee_gap_bps
+        expr: max(effective_fee_bps_now - fee_tier_expected_bps, 0)
+
+  - name: mm-bot-recordings
+    rules:
+      - record: mm:order_age_p99_ms_5m
+        expr: histogram_quantile(0.99, sum(rate(order_age_seconds_bucket[5m])) by (le, symbol)) * 1000
+
+      - alert: OrderAgeP99High
+        expr: mm:order_age_p99_ms_5m > 500
+        for: 10m
+        labels:
+          severity: warning
+          env: {{ $labels.env | default "prod" }}
+          service: mm-bot
+        annotations:
+          summary: "order_age p99 elevated ({{ $value }} ms)"
+          runbook_url: https://runbooks/latency

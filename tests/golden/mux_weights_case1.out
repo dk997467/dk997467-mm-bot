@@ -1,0 +1,7 @@
+ts=0 regime=low weights=Aggressive:0.000000,Conservative:0.700000,Moderate:0.300000
+ts=10 regime=low weights=Aggressive:0.000000,Conservative:0.700000,Moderate:0.300000
+ts=55 regime=low weights=Aggressive:0.000000,Conservative:0.700000,Moderate:0.300000
+ts=65 regime=mid weights=Aggressive:0.100000,Conservative:0.400000,Moderate:0.500000
+ts=120 regime=high weights=Aggressive:0.300000,Conservative:0.200000,Moderate:0.500000
+ts=130 regime=high weights=Aggressive:0.300000,Conservative:0.200000,Moderate:0.500000
+ts=195 regime=high weights=Aggressive:0.300000,Conservative:0.200000,Moderate:0.500000

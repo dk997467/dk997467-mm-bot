@@ -1,0 +1,3558 @@
+[OPS One-Pager](docs/OPS_ONE_PAGER.md) — ежедневный чек‑лист и команды. Быстрый старт по артефактам и рутине: [OPS Quickstart](docs/OPS_QUICKSTART.md).
+
+### One-click утро
+Запустить ежедневный цикл одной командой:
+```bash
+make morning
+```
+На Windows:
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/ops/morning.ps1
+```
+
+### Soak runs
+- Smoke:
+```bash
+make soak-smoke
+```
+- Long run:
+```bash
+make soak
+```
+Отчёты сохраняются в `artifacts/soak_reports/*.json`.
+
+### READY-gate
+Проверка валидатором:
+```bash
+python tools/ci/full_stack_validate.py
+```
+## Running tests reliably
+We disable third-party pytest plugin autoloading and fix TZ/locale to keep
+snapshots deterministic. Use:
+  python tools/ci/run_tests.py
+If you run `pytest` directly and see odd failures, set:
+  export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+
+[OPS One-Pager](docs/OPS_ONE_PAGER.md) — ежедневный чек‑лист и команды. Быстрый старт по артефактам и рутине: [OPS Quickstart](docs/OPS_QUICKSTART.md).
+
+## Full-Stack Validation
+
+Единая «красная/зелёная» проверка всего проекта перед развёртыванием:
+
+```bash
+# Полная валидация (линтеры, тесты, dry-run'ы, артефакты)
+python tools/ci/full_stack_validate.py
+
+# Генерация человекочитаемого отчёта
+python tools/ci/report_full_stack.py artifacts/FULL_STACK_VALIDATION.json
+```
+
+Результат: детерминированный отчёт `artifacts/FULL_STACK_VALIDATION.md` с разбивкой по разделам.
+Статус `RESULT=OK` означает готовность к деплою.
+
+**Что проверяется:**
+- Линтеры (ASCII логи, JSON writer, метрики, секреты)
+- Whitelist тестов из `tools/ci/test_selection.txt`
+- Dry-run сценарии (soak, chaos, tuning, rotate)
+- Генерация отчётов на фикстурах
+- Валидация Grafana дашбордов
+- Аудит цепочка
+
+См. [VALIDATION_CHECKLIST.md](docs/VALIDATION_CHECKLIST.md) для операторов.
+
+## Release Bundle
+
+Полный пакет готовности релиза (отчёты, дашборды, runbooks, one-pager, scorecard, validation):
+
+```bash
+# Сборка манифеста и архива релиз-бандла
+MM_VERSION=<version> MM_FREEZE_UTC_ISO=<utc> \
+python tools/release/make_bundle.py
+```
+
+Скрипт сформирует:
+- `artifacts/RELEASE_BUNDLE_manifest.json` — детерминированный манифест (пути, sha256, bytes)
+- `dist/release_bundle/<UTC>-mm-bot.zip` — архив с фиксированным порядком файлов
+
+Входы (если есть):
+- `artifacts/PRE_LIVE_PACK.{json,md}`
+- `artifacts/READINESS_SCORE.{json,md}`
+- `artifacts/WEEKLY_ROLLUP.{json,md}`
+- `artifacts/KPI_GATE.{json,md}`
+- `artifacts/FULL_STACK_VALIDATION.{json,md}`
+- `docs/OPS_ONE_PAGER.md`, `docs/RUNBOOKS.md`, `docs/REPORTS.md`, `docs/REPORT_SOAK.md`, `docs/INDEX.md`, `CHANGELOG.md`
+- `monitoring/grafana/*.json`, `monitoring/promql/queries.md`
+
+Статус печатается в stdout: `RELEASE_BUNDLE=READY|PARTIAL`. Для READY все входы должны существовать.
+
+## Make Bundle READY
+
+Один шаг, чтобы сгенерировать недостающие артефакты и собрать READY-бандл:
+
+```bash
+# посмотреть план (ничего не изменяет)
+python tools/release/make_ready.py --dry-run
+
+# выполнить и собрать READY-бандл
+python tools/release/make_ready.py
+```
+
+Где искать артефакты:
+- `artifacts/PRE_LIVE_PACK.{json,md}`
+- `artifacts/READINESS_SCORE.{json,md}`
+- `artifacts/RELEASE_BUNDLE_manifest.json`
+- `dist/release_bundle/*.zip`
+
+### FinOps Automation
+
+One-shot daily runner:
+
+```bash
+MM_FREEZE_UTC=1 python -m tools.finops.cron_job --artifacts tests/fixtures/artifacts_sample/metrics.json --exchange-dir tests/fixtures/exchange_reports --out-dir dist/finops/19700101T000000Z
+```
+
+Outputs (all ASCII, LF):
+- CSV: `pnl.csv`, `fees.csv`, `turnover.csv`, `latency.csv`, `edge.csv`
+- JSON: `reconcile_report.json` (deterministic, sorted keys, trailing `\n`)
+- Markdown: `reconcile_diff.md` (fixed ASCII table, trailing `\n`)
+
+See `REPORT_RECONCILE.md` for report fields and tolerances.
+
+### Backtest Pipe
+
+### Micro Signals
+
+### HA Failover
+
+### Investor Package
+
+Сборка «инвесторского» пакета в один шаг:
+
+```
+python -m tools.finops.assemble_investor_pkg artifacts/metrics.json
+# или
+MM_FREEZE_UTC=1 python -m tools.finops.assemble_investor_pkg tests/fixtures/artifacts_sample/metrics.json
+```
+
+Выход:
+- CSV/JSON в `dist/investor/<ts>/` (UTC, без мс)
+- Детерминированные `docs/INVESTOR_DECK.md` и `docs/SOP_CAPITAL.md`
+Blue/Green квотер с лидер-локом (TTL+renew). `LeaderLock` использует `setnx/pexpire` с тайм-аутом, heartbeats через `renew(now_ms)`. В `QuoterRunner.tick(now_ms)` лидер пытается продлить лок, фолловер пытается захватить.
+
+Метрики для наблюдения:
+- `leader_state{env,service,instance}` — 1/0
+- `leader_elections_total{env,service}` — число выборов
+- `leader_renew_fail_total{env,service}` — фейлы продления
+- `order_idem_hits_total{env,service,op}` — попадания фильтра идемпотентности
+
+См. e2e `tests/e2e/test_ha_failover.py` и golden `tests/golden/ha_failover_case1.out`.
+Добавлены микросигналы: orderbook imbalance, microprice tilt и режим по сигме. Скомбинированный bias применяется к целевым `desired` до клампа Δ, с жёстким ограничением влияния `impact_cap_ratio ≤ 0.10` per-tick. Метрики:
+
+- `micro_bias_strength{symbol}` — |bias_adjust|/max(|delta_raw|,1e-9)
+- `adverse_fill_rate{symbol}` — доля сделок с отрицательным 5-тик markout
+
+Проверка локально (snapshot эффектов):
+- `python tools/ci/run_selected.py`
+Оффлайн-прогон на JSONL-тригах (Recorder) с упрощённым walk-forward. Детализация:
+
+- Команды:
+  - `python -m tools.backtest.cli run --ticks tests/fixtures/backtest_ticks_case1.jsonl --mode queue_aware --out artifacts/BACKTEST_REPORT.json`
+  - `python -m tools.backtest.cli wf --ticks tests/fixtures/backtest_ticks_case1.jsonl --mode queue_aware --train 200 --test 100 --out artifacts/BACKTEST_WF.json`
+- Артефакты:
+  - JSON — детерминированный: ASCII, отсортированные ключи, компактные сепараторы, завершается `\n`, атомарная запись с fsync.
+  - MD — рядом с `BACKTEST_REPORT.json`, таблица ключевых метрик, числа в формате `%.6f`.
+- Пороговые проверки по фикстуре: `net_bps >= 2.5`, `taker_share_pct <= 15`, `order_age_p95_ms <= 350`.
+
+#### Determinism & Thresholds
+
+- Проверить детерминизм и пороги локально:
+  - `MM_FREEZE_UTC=1 python tools/ci/run_backtest_checks.py`
+- Запустить только backtest-тесты:
+  - `python tools/ci/run_selected.py`
+
+## Position Skew Guard
+
+The PositionSkewGuard monitors position skew by symbol and color, applying protective effects:
+
+- **freeze_symbols**: Prevents new/expanding orders for symbols exceeding per-symbol limits
+- **bias_color**: Applies +/-5..10% sizing drift for colors exceeding per-color limits
+
+Configuration:
+```yaml
+guards:
+  pos_skew:
+    per_symbol_abs_limit: 1000.0  # USD, 0=disabled
+    per_color_abs_limit: 2000.0   # USD, 0=disabled
+allocator:
+  smoothing:
+    bias_cap: 0.10
+```
+
+Metrics exported to `artifacts/metrics.json` under `position_skew` section.
+
+## Intraday Risk Caps
+
+IntradayCapsGuard блокирует размещение новых ордеров при превышении дневных лимитов:
+- daily_pnl_stop: суммарный PnL за день <= -stop
+- daily_turnover_cap: суммарный дневной оборот >= cap
+- daily_vol_cap: суммарная дневная волатильность >= cap
+
+Конфигурация:
+```yaml
+guards:
+  intraday_caps:
+    daily_pnl_stop: 0.0      # EUR, 0=disabled
+    daily_turnover_cap: 0.0  # USD, 0=disabled
+    daily_vol_cap: 0.0       # %
+```
+
+Метрики:
+- `intraday_caps_pnl`, `intraday_caps_turnover`, `intraday_caps_vol`, `intraday_caps_breached`
+
+Алерт: `IntradayCapBreached` (см. `monitoring/alerts/mm_bot_intraday.rules.yml`).
+
+## VIP Fee Awareness
+
+Блок `fees.bybit` включает оценку ожидаемого VIP-уровня по 30-дневному обороту и мягкий наклон аллокатора к снижению издержек, если:
+- расстояние до следующего уровня ниже `distance_usd_threshold`
+- ожидаемое улучшение комиссий >= `min_improvement_bps`
+
+Метрики:
+- `fee_tier_level`, `fee_tier_expected_bps`, `fee_tier_distance_usd`, `effective_fee_bps_now`
+
+Настройки:
+```yaml
+fees:
+  bybit:
+    distance_usd_threshold: 25000.0
+    min_improvement_bps: 0.2
+allocator:
+  smoothing:
+    fee_bias_cap: 0.05
+```
+
+Алерт: `EffectiveFeeJump` в `monitoring/alerts/mm_bot.rules.yml`.
+
+## Quick Start (оператор)
+
+См. `docs/OPS_QUICKSTART.md` для быстрого запуска типовых операций (READY-бандл, мегапроверка, 14-дневный soak). Доступны цели Makefile:
+
+```
+make ready-bundle
+make full-validate
+make soak-14d
+make all-ops
+```
+
+Также есть памятка для дежурного на один экран: `docs/OPS_DAY0.md`.
+
+### Audit wire-up
+
+Дамп: `artifacts/AUDIT_DUMP.jsonl` (ASCII, append-only, детерминированные ключи, hash-chain).
+
+События:
+- ALLOC: clamp/backoff (delta_raw, cap, delta_capped, backoff_level, next)
+- REPLACE/CANCEL: решения троттлинга (allow/deny, batch)
+- MUX: смена режима и веса (компактная строка)
+- GUARD: breach/recover для position_skew и block/resume для intraday_caps
+
+### Verification
+## Ops → Cron Sentinel
+
+Ежедневная сводная проверка статусов и свежести артефактов (ловим сбои планировщика и «тихие» падения):
+
+```
+python tools/ops/cron_sentinel.py --window-hours 24 --artifacts-dir artifacts
+```
+
+Интерпретация статуса:
+- FAIL: немедленное внимание (нет отчёта дня, сломана цепочка аудита, full-stack красный).
+- WARN: планировщик/окружение могли не сработать (нет digest или full-stack в окне, score старый).
+- OK: все джобы и статусы зелёные.
+
+Рекомендуется запускать sentinel по завершении nightly пайплайна.
+
+## Deterministic artifacts & smoke
+
+Артефакты JSON должны быть детерминированы (ASCII, sort_keys, compact, LF). Быстрая проверка:
+
+```
+make ci-fix-json
+make ci-smoke
+```
+
+Первая цель приводит JSON к канону; вторая — проверяет наличие H1 в `docs/INDEX.md` и базовую sanity `mm_bot.rules.yml`.
+
+
+Ежедневная проверка целостности hash-цепочки `audit.jsonl`:
+
+Запуск:
+
+```
+python -m tools.audit.verify_chain --audit artifacts/audit.jsonl --utc-date YYYY-MM-DD --out-json artifacts/AUDIT_CHAIN_VERIFY.json --out-md artifacts/AUDIT_CHAIN_VERIFY.md
+```
+
+- Отчёт JSON: `artifacts/AUDIT_CHAIN_VERIFY.json`
+- Отчёт MD: `artifacts/AUDIT_CHAIN_VERIFY.md`
+- stdout завершается строкой `AUDIT_VERIFY=OK` или `AUDIT_VERIFY=BROKEN`.
+
+Если статус `BROKEN`:
+- Снимите дамп файла `artifacts/audit.jsonl` (копия без изменений)
+- Заархивируйте и приложите к тикету
+- Откройте issue в трекере с датой, размером файла и приложенным архивом
+
+## RC-Validator (pre-deploy sanity)
+
+RC-Validator выполняет проверки готовности перед запуском и создаёт детерминированный JSON-отчёт.
+
+Запуск:
+```bash
+python -m cli.preflight
+```
+
+Выход:
+- `artifacts/rc_validator.json` — полный отчёт
+- Exit code: 0 (успех) / 1 (ошибки)
+- Stdout: `rc_validator: ok` или `rc_validator: failed (N errors)`
+
+Проверки:
+- **ENV**: `MM_ENV`, `MM_CONFIG_PATH` (обязательные), `MM_PORTS` (опционально)
+- **Config**: парсинг YAML, минимальная схема
+- **Directories**: запись в `artifacts/`, `artifacts/runtime/`
+- **Ports**: доступность портов из `MM_PORTS`
+- **Artifacts**: наличие `snapshots.json` (предупреждение)
+
+Типичные ошибки и исправления:
+- `missing_env:MM_CONFIG_PATH` → установить переменную окружения
+- `config_parse` → исправить синтаксис YAML
+- `port_busy:8080` → освободить порт или изменить `MM_PORTS`
+- `writable_dir:artifacts` → проверить права доступа к каталогу
+
+Документация и операционные материалы
+- docs/RUNBOOKS.md — пошаговые runbooks (kill-switch, promote, rollback, diagnose)
+- docs/GO_CHECKLIST.md — чеклист из 20+ воспроизводимых шагов перед GO
+- REPORT_CANARY.md — шаблон отчёта канарейки (ключевые метрики и вердикт)
+
+Quickstart
+1) Preflight: python -m cli.preflight
+2) Checklist: следуйте docs/GO_CHECKLIST.md (выполните все шаги)
+3) Report+Promote: заполните REPORT_CANARY.md и выполните promote по RUNBOOKS
+
+Determinism & Atomic Writer
+Атомарная запись артефактов обеспечивает байт-в-байт идентичный JSON при одинаковом входе и устойчивость к сбоям:
+- ensure_ascii=True, sort_keys=True, separators=(",", ":"), завершающий '\n'
+- запись во временный файл → fsync(fd) → os.replace → fsync(dir)
+См. тесты: tests/test_artifacts_determinism.py.
+
+Allocator smoothing
+В аллокатор добавлен пер-тик лимит изменения целевого размера и экспоненциальный backoff при повторных skew-breach:
+- delta_raw = desired - current; cap = max(|current|*max_delta_ratio, max_delta_abs) * backoff_multiplier
+- backoff_multiplier берётся из cfg.allocator.smoothing.backoff_steps; на breach уровень растёт до N-1; без breach снижается не чаще, чем раз в 10 тиков.
+Метрики: allocator_backoff_level, allocator_delta_capped_total, allocator_sizing_delta_ratio.
+E2E snapshot формат чисел фиксированным образом выводится как %.6f (без экспоненты) для детерминизма; сравнение с golden выполняется байт-в-байт.
+
+Artifacts → metrics.json
+Единый срез метрик экспортируется в `artifacts/metrics.json` с детерминированной записью:
+```json
+{
+  "fees": {"tier_level": 0, "maker_bps": 1.0, "distance_usd": 0.0, "effective_fee_bps_now": 1.0},
+  "intraday_caps": {"pnl": 0.0, "turnover": 0.0, "vol": 0.0, "breached": false},
+  "position_skew": {"positions": {}, "symbol_breach": [], "color_breach": false},
+  "runtime": {"utc": "2025-01-01T12:00:00Z", "version": "0.1.0", "git_sha": "abc12345", "mode": "sim", "env": "dev"}
+}
+```
+Ключи в алфавитном порядке, atomic writer с fsync, ASCII-only. См. тесты: tests/test_artifacts_determinism.py.
+
+Config hygiene & units
+Имена ключей конфигурации явны по единицам:
+- *_bps ∈ [-1000.0,1000.0]
+- *_usd/*_eur ≥ 0.0
+- *_base_units ≥ 0
+- *_ratio ∈ [0.0,1.0]
+Legacy алиасы временно поддерживаются и нормализуются (однострочные предупреждения):
+- bias_cap → bias_cap_ratio
+- fee_bias_cap → fee_bias_cap_ratio
+- fee_bias_cap_bps → fee_bias_cap_ratio (value/10000.0)
+Дамп cfg.describe() детерминированный (лексикографический порядок ключей, числа с 6 знаками), ASCII, завершается \n.
+
+Multi-Strategy Mux
+Мультиплексор стратегий с переключением по волатильности и гистерезисом:
+- Режимы определяются по σ-bands: low [0.0,0.8), mid [0.8,1.5), high [1.5,9.99]
+- Гистерезис 60s предотвращает частые переключения при флуктуациях на границах
+- weight_caps ограничивают веса стратегий (например, Aggressive ≤ 35%), затем нормализация до суммы 1.0
+- Метрики: strategy_weight_* (gauge по стратегиям), strategy_switch_total (counter переключений)
+- Логи ASCII: "MUX ts=... sigma=... regime=... weights=Conservative:0.700000,Moderate:0.300000,Aggressive:0.000000"
+
+### Testing hooks
+
+Для удобства unit/e2e тестирования добавлены stdlib-only хуки в метрики и единый снапшот состояния раскатки:
+
+- В `src/metrics/exporter.py` (класс `Metrics`):
+  - `test_seed_rollout_counters(fills_blue, fills_green, rejects_blue, rejects_green, split_expected_pct=None, observed_green_pct=None)` — сидирует счетчики и выставляет связанные gauge (ожидаемый/наблюдаемый split).
+  - `test_seed_rollout_latency_ms(blue_ms, green_ms)` — выставляет EWMA задержек и соответствующие gauge.
+  - `test_reset_rollout()` — сбрасывает все rollout-счетчики/gauge в ноль.
+  - `_get_rollout_snapshot_for_tests()` — единая структура снапшота: `{"fills":{...},"rejects":{...},"latency_ewma":{...},"split":int,"observed":float}`.
+
+Внутренние потребители (`_build_canary_payload`, `_rollout_ramp_tick`) читают данные через этот снапшот, обеспечивая одинаковое представление значений в канарейке и ramp-логике.
+
+### ARTIFACTS_DIR
+
+Для изоляции артефактов тестов/запусков поддерживается переменная окружения `ARTIFACTS_DIR`.
+- По умолчанию используется каталог `artifacts`.
+- При установке `ARTIFACTS_DIR=/tmp/run123` все артефакты (alerts.log, canary_*.json, REPORT_CANARY_*.md, canary_baseline.json и т.п.) будут писаться туда.
+
+### E2E quick run (fast mode)
+
+Для ускоренного прогона e2e используйте fast-mode переменные окружения и изолированный каталог артефактов.
+
+- ENV:
+  - `ARTIFACTS_DIR=/tmp/mm-bot-artifacts` (или tmpdir CI)
+  - `CANARY_EXPORT_INTERVAL_SEC=1`
+  - `PRUNE_INTERVAL_SEC=2`
+  - `ROLLOUT_STEP_INTERVAL_SEC=1`
+  - `SCHEDULER_RECOMPUTE_SEC=0`
+
+- Запуск:
+  - `python -m pytest -q -k "fast_mode_intervals"`
+  - `python -m pytest -q -k "e2e and (incident_dry_run or incident_live_rollback or stabilize_autopromote or prune_and_alerts_tail or gate_canary_reasons)"`
+
+### E2.5 — Latency buckets
+
+Добавлены хвостовые метрики латентности per-color:
+
+- Бакеты (верхние границы, мс): `[0,5,10,20,50,100,200,400,800,1600,+Inf)`
+- Счётчики: `rollout_latency_bucket_total{color,bucket_ms}` — накопительные по бакетам
+- Гейджи: `rollout_latency_p95_ms{color}`, `rollout_latency_p99_ms{color}` — оцениваются по ближайшему рангу (nearest-rank) к кумулятивной гистограмме
+- Обновление выполняется при каждом `inc_rollout_fill(color, latency_ms)` и детерминировано
+- В canary/audit payload попадают поля:
+  - `latency_ms_p95_blue`, `latency_ms_p95_green`
+  - `latency_ms_p99_blue`, `latency_ms_p99_green`
+
+Ограничения: агрегация по фиксированным бакетам (без внешних библиотек); p95/p99 из ближайшего ранга по кумулятиву.
+
+### S3.1 — Per-symbol canary thresholds
+
+Пороги canary-гейта поддерживают глобальные и пер-символьные overrides с hot-reload из thresholds.yaml, нормализацией символов (UPPER) и STRICT-режимом.
+
+- YAML пример:
+  ```yaml
+  canary_gate:
+    max_reject_delta: 0.02
+    max_latency_delta_ms: 50
+    min_sample_fills: 200
+    drift_cap_pct: 5
+  canary_gate_per_symbol:
+    BTCUSDT:
+      max_reject_delta: 0.01
+      max_latency_delta_ms: 30
+      min_sample_fills: 300
+      drift_cap_pct: 3
+  ```
+- Поведение:
+  - Значения merge'ятся поверх глобальных; ключи вне списка игнорируются.
+  - STRICT_THRESHOLDS=True: невалидные override → ValueError; False: ASCII warn + fallback.
+- Эндпоинты:
+  - `POST /admin/thresholds/reload {"path": ".../thresholds.yaml"}`
+  - `GET /admin/thresholds/snapshot` → содержит `canary_gate` и `canary_gate_per_symbol`.
+
+### S3.2 — Tail caps
+
+Tail-aware пороги для F2 canary-гейта с min-sample гардом и per-symbol overrides:
+
+- Глобальные ключи в `canary_gate` (и в overrides per-symbol):
+  - `tail_min_sample` (по умолчанию 200)
+  - `tail_p95_cap_ms` (по умолчанию 50)
+  - `tail_p99_cap_ms` (по умолчанию 100)
+- Порядок причин гейта: `killswitch_fired` → `rollout_drift` → `reject_delta_exceeds` → `latency_delta_exceeds` → `latency_tail_p95_exceeds` → `latency_tail_p99_exceeds`.
+- В audit.rollout.canary_gate.used_thresholds включаются tail_* значения.
+
+### S3.3 — Per-symbol SLO tail caps
+
+Пер-символьные капы для SLO (p95/p99) с min-sample гардом, учитываемые в F2 canary-гейте.
+
+- Глобальные ключи (и per-symbol overrides):
+  - `slo_tail_min_sample` (int)
+  - `slo_tail_p95_cap_ms` (int)
+  - `slo_tail_p99_cap_ms` (int)
+- YAML-пример:
+  ```yaml
+  canary_gate:
+    slo_tail_min_sample: 200
+    slo_tail_p95_cap_ms: 50
+    slo_tail_p99_cap_ms: 100
+  canary_gate_per_symbol:
+    BTCUSDT:
+      slo_tail_p95_cap_ms: 40
+      slo_tail_p99_cap_ms: 90
+  ```
+- STRICT-режим: некорректные overrides вызывают `ValueError`; иначе — warn+fallback.
+- Порядок причин гейта (детерминированный):
+  `killswitch_fired → rollout_drift → reject_delta_exceeds → latency_delta_exceeds → latency_tail_p95_exceeds → latency_tail_p99_exceeds → slo_tail_p95_breach → slo_tail_p99_breach`.
+- Min-sample guard: slo_tail_* активируются только если `latency_samples_{blue,green} ≥ slo_tail_min_sample`.
+- Audit: `rollout.canary_gate.used_thresholds` содержит и `slo_tail_*`.
+
+### S4 — Canary replay (offline)
+
+Офлайн-проверка канарейки без изменения рантайм-порогов.
+
+- Эндпоинт: `POST /admin/report/canary/replay`
+- Вход (дет-JSON, ASCII):
+  - `{ "canary_path": ".../canary_20250101_120000.json", "thresholds_path": ".../thresholds.yaml" }`
+  - Ограничение размера каждого файла: ≤ 1MB
+- Поведение:
+  1) Загружаются `canary_*.json` и текст `thresholds.yaml` (проверка размера, ASCII)
+  2) Текущие thresholds снимаются в снапшот с версией
+  3) Выполняется `refresh_thresholds(thresholds_path)` (RCU, версия++)
+  4) Строится минимальный `wf_report` из canary payload и вызывается `gate.evaluate()`
+  5) Возвращается ответ и ВСЕГДА восстанавливаются исходные thresholds (версия возвращается на исходное значение)
+- Ответ (дет-JSON):
+  - `{ "decision":"PASS|FAIL", "reasons":[...], "used_thresholds":{...}, "thresholds_version_before":int, "thresholds_version_after":int }`
+- Ошибки:
+  - `{"error":"file_too_large"}` для файлов > 1MB (HTTP 400)
+  - Некорректный YAML/STRICT-ошибки → `{"error":"..."}` (HTTP 400)
+
+### L6 — Cost/Slippage allocator
+
+Ослабление целей target_usd по оценке полной стоимости (fee+slippage), детерминированно.
+
+- Конфиг `portfolio.cost`:
+  - `fee_bps_default`: базовая комиссия в bps (по умолчанию 1.0)
+  - `slippage_bps_base`: базовый slippage в bps (по умолчанию 0.5)
+  - `slippage_k_bps_per_kusd`: прирост slippage на каждые $1k (bps) (по умолчанию 0.1)
+  - `cost_sensitivity`: 0..1, доля ослабления (по умолчанию 0.5)
+  - `per_symbol`: опциональные override по символу для ключей выше
+
+- Оценка стоимости для символа `sym` и цели `t_usd`:
+  - `fee_bps = override(sym).fee_bps | fee_bps_default`
+  - `slippage_bps = slippage_bps_base + slippage_k_bps_per_kusd * max(0,t_usd)/1000`
+  - `cost_bps = fee_bps + slippage_bps`
+  - `attenuation = max(0, 1 - cost_sensitivity * min(1, cost_bps/100))`
+  - `t_usd = t_usd * attenuation`
+
+- Метрики (per-symbol):
+  - `allocator_estimated_cost_bps{symbol}` — оценка полной стоимости (bps)
+  - `allocator_cost_attenuation{symbol}` — применённый множитель (0..1)
+
+- Порядок в allocator:
+  - После существующих clamp/soft факторов применяется cost attenuation
+  - Затем повторный суммарный детерминированный кламп и финальный min_guard
+  - Округление целей до 1e-6
+
+### L6.1 — Dynamic cost inputs
+
+Динамические входы стоимости из метрик/shadow с фолбэками и капами.
+
+- Конфиг `portfolio.cost`:
+  - `use_shadow_spread: bool` — использовать оценку спреда (по умолчанию true)
+  - `use_shadow_volume: bool` — учитывать низкий объём для усиления k (по умолчанию true)
+  - `min_volume_usd: float` — порог низкого объёма (по умолчанию 1000)
+  - `max_slippage_bps_cap: float` — кап слippage bps (по умолчанию 50)
+  - `per_symbol` — overrides аналогично базовым L6 полям
+- Формула:
+  - `slippage_bps = slippage_bps_base`
+  - если `use_shadow_spread && valid_spread` → `slippage_bps = max(slippage_bps, spread_bps/2)`
+  - `k_eff = slippage_k_bps_per_kusd`
+  - если `use_shadow_volume && volume_usd < min_volume_usd` → `k_eff = 2*k_eff`
+  - `slippage_bps += k_eff * (target_usd/1000)`
+  - `slippage_bps = min(slippage_bps, max_slippage_bps_cap)`
+  - `cost_bps = fee_bps + slippage_bps`
+- Метрики (per-symbol):
+  - `allocator_cost_inputs_spread_bps{symbol}`
+  - `allocator_cost_inputs_volume_usd{symbol}`
+  - `allocator_cost_slippage_bps{symbol}`
+  - Также обновляются `allocator_estimated_cost_bps` и `allocator_cost_attenuation`
+- Детерминизм: снимки тест-хуков включают входы/выходы; порядок вычислений прежний (soft→sum clamp→min_guard → attenuation → повторный clamp).
+
+### L6.2 — Cost calibration (онлайн-калибровка издержек)
+
+Зачем: снизить реальные издержки за счёт подстройки per-symbol параметров стоимости по наблюдениям (shadow/fills) без рестарта.
+
+Как работает: собираем наблюдения и ведём EWMA по `spread_bps`, `volume_usd`, `slippage_bps_observed`. По ним вычисляем «эффективные» параметры:
+- `k_eff` — крутизна слиппейджа;
+- `cap_eff_bps` — верхняя граница слиппейджа (bps).
+
+Allocator автоматически использует `k_eff/cap_eff_bps`, если калибровка есть; иначе — настройки из `portfolio.cost`.
+
+Формулы (в общих чертах)
+
+- EWMA: `ewma_new = alpha * x + (1 - alpha) * ewma_old`, `alpha = 0.1`
+- Предсказание слиппейджа (пример):
+  `slippage_bps = min( max(base_bps, spread_bps/2) + k_eff * (target_usd/1000) * vol_factor, cap_eff_bps )`
+  где `vol_factor = 2.0`, если `volume_usd < min_volume_usd`, иначе `1.0`.
+
+- Ослабление цели:
+  `attenuation = 1 - cost_sensitivity * min(1.0, slippage_bps/100.0)`
+  Применяется после L5 soft/clamp и до финального суммарного клампа и `min_guard`.
+
+Метрики
+
+Гауйджи/счётчики (кардинальность ограничена `{symbol}`):
+- `cost_calib_samples_total{symbol}`
+- `cost_calib_spread_ewma_bps{symbol}`
+- `cost_calib_volume_ewma_usd{symbol}`
+- `cost_calib_slippage_ewma_bps{symbol}`
+- `cost_calib_k_eff{symbol}`
+- `cost_calib_cap_eff_bps{symbol}`
+
+Allocator (ранее добавленные):
+- `allocator_cost_inputs_spread_bps{symbol}`
+- `allocator_cost_inputs_volume_usd{symbol}`
+- `allocator_cost_slippage_bps{symbol}`
+- `allocator_estimated_cost_bps{symbol}`
+- `allocator_cost_attenuation{symbol}`
+
+Админ-эндпоинты (детерминированный JSON)
+
+- Превью калибровки
+  - `GET /admin/allocator/cost_calibration` → snapshot по всем символам
+- Применение эффективных параметров (runtime-overrides)
+  - `POST /admin/allocator/cost_calibration/apply`
+    ```json
+    {
+      "symbols": {
+        "BTCUSDT": {"k_eff": 0.35, "cap_eff_bps": 60},
+        "ETHUSDT": {"k_eff": 0.28}
+      }
+    }
+    ```
+- Снапшоты калибровки
+  - `GET /admin/allocator/cost_calibration/snapshot`
+  - `POST /admin/allocator/cost_calibration/load`
+    - ограничения: ASCII, ≤ 1MB; запись: tmp→flush→fsync(file)→replace + fsync(dir)
+
+Тесты
+
+Быстрый прогон по L6.2:
+```bash
+python -m pytest -q -k "cost_calib_ewma_accumulate or cost_calib_apply_overrides or cost_calib_snapshot_cycle or allocator_uses_calibrated_params"
+```
+
+### L6.3 — Fill-rate aware
+
+Ослабление целей с учётом наблюдаемой доли успешных исполнений (fill-rate) per-symbol.
+
+- Конфиг `portfolio.cost`:
+  - `fill_rate_half_life_sec: int >= 10` — половинный период EWMA (сек)
+  - `fill_rate_floor: float in [0,1]` — порог, ниже которого включается ослабление
+  - `fill_rate_sensitivity: float in [0,1]` — сила ослабления
+  - Поддерживаются per-symbol overrides (`per_symbol.SYMBOL.{fill_rate_*}`)
+
+- Метрики:
+  - `cost_fillrate_ewma{symbol}` — текущий EWMA fill-rate (0..1)
+  - `cost_fillrate_samples_total{symbol}` — количество сэмплов
+  - `allocator_fillrate_attenuation{symbol}` — множитель ослабления по fill-rate (0..1)
+
+- Формула:
+  - Пусть r = `cost_fillrate_ewma` (если нет — r=1.0)
+  - `attenuation_fill = 1 - fill_rate_sensitivity * max(0, fill_rate_floor - r)` (далее кламп 0..1)
+
+- Порядок стадий в аллокаторе:
+  1) L5 soft/clamp
+  2) L6.1/L6.2 cost attenuation
+  3) L6.3 fill-rate attenuation
+  4) Финальный суммарный кламп
+  5) min_guard
+
+- Тесты:
+```bash
+python -m pytest -q -k "fillrate_ewma_converges or allocator_fillrate_attenuation_floor or allocator_fillrate_isolation or allocator_fillrate_stage_order or allocator_fillrate_determinism"
+```
+
+### L6 dashboards
+
+PromQL:
+- Fill-rate per symbol: `cost_fillrate_ewma{symbol}`
+- Fill-rate attenuation per symbol: `allocator_fillrate_attenuation{symbol}`
+- Estimated cost (bps) per symbol: `allocator_estimated_cost_bps{symbol}`
+
+Grafana (grafana-dashboard.json):
+- Panel: "Fill-rate & attenuation" (Time series)
+  - `cost_fillrate_ewma{symbol}`
+  - `allocator_fillrate_attenuation{symbol}`
+- Panel: "Estimated cost (bps)" (Time series)
+  - `allocator_estimated_cost_bps{symbol}`
+
+### L6.4 — Liquidity-aware sizing
+
+Добавлен детерминированный этап ослабления целей `target_usd` на основе наблюдаемой глубины стакана per-symbol.
+
+- Конфиг `portfolio.cost` (глобально и через `per_symbol`):
+  - `liquidity_depth_usd_target: float >= 0` — целевая «достаточная» глубина
+  - `liquidity_sensitivity: float in [0,1]` — сила ослабления
+  - `liquidity_min_floor: float in [0,1]` — нижний предел фактора
+
+- Вход/выход метрики (per-symbol):
+  - `liquidity_depth_usd{symbol}` — наблюдаемая глубина (из shadow/OB или тест-хуков)
+  - `allocator_liquidity_factor{symbol}` — итоговый фактор в диапазоне `[liquidity_min_floor, 1]`
+
+- Формулы (для символа `sym`):
+  - Пусть `depth_target = liquidity_depth_usd_target`, `depth = liquidity_depth_usd{sym}`
+  - `raw = 1.0` если `depth_target == 0`, иначе `min(1.0, depth / depth_target)`
+  - `liquidity_factor = max(liquidity_min_floor, raw)`
+  - `attenuation_liq = 1 - liquidity_sensitivity * (1 - liquidity_factor)`
+  - `target_usd *= attenuation_liq`
+
+- Порядок стадий (сохранён):
+  - L5 soft/clamp → L6.1/6.2 cost → L6.3 fill-rate → L6.4 liquidity → финальный суммарный кламп → min_guard
+
+- Пример: при `depth_target=50000`, `depth=25000`, `liquidity_sensitivity=0.5`, `liquidity_min_floor=0.6`
+  - `raw=0.5`, `liquidity_factor=max(0.6,0.5)=0.6`, `attenuation_liq=1-0.5*(1-0.6)=0.8`
+  - `target_usd` умножается на `0.8`.
+
+### L7 — Turnover-aware allocator
+
+Штраф за исторический оборот (EWMA notional), добавляется после L6.4.
+
+- Конфиг `portfolio.cost` (глобально и `per_symbol`):
+  - `turnover_half_life_sec >= 10`
+  - `turnover_sensitivity ∈ [0..1]`
+  - `turnover_floor ∈ [0..1]`
+
+- Метрики:
+  - `turnover_usd{symbol}` — EWMA оборота USD
+  - `allocator_turnover_factor{symbol}` — применённый фактор [floor..1]
+  - Запись на fill: `record_trade_notional(symbol, usd)` в `OrderManager`
+
+- Формулы (для символа `sym`):
+  - `r = turnover_ewma_usd / max(1.0, budget_available_usd * weight_sym)`
+  - `raw = clamp01(1 - r)`
+  - `turnover_factor = max(turnover_floor, 1 - turnover_sensitivity * (1 - raw))`
+  - `target_usd *= turnover_factor`
+
+- Порядок стадий: L5 → L6.1/6.2 → L6.3 → L6.4 → L7 → финальный кламп → min_guard
+
+Dashboards / PromQL:
+- `turnover_usd{symbol}` — Time series панель "Turnover (USD)"
+- `allocator_turnover_factor{symbol}` — Time series панель "Turnover factor"
+
+### Throttle & Backoff (L4)
+
+### E3.3 — Soak & leak guard
+
+### Admin token rotation & signed audit
+
+### Snapshots: integrity header
+
+### SRE — /admin/selfcheck
+
+- Эндпоинт: `GET /admin/selfcheck` (token, rate-limit)
+- Проверки и reasons (детерминированный JSON):
+  - `artifacts_dir_write`: атомарная запись tmp в `ARTIFACTS_DIR`
+  - `alerts_log_writable`: append JSON в `alerts.log` (с последующим удалением строки)
+  - `snapshots_dirs_access`: проверка прав на запись/replace в директориях снапшотов
+  - `loops_heartbeats_fresh`: все зарегистрированные петли присылали heartbeat не старше `SELFCHK_LOOP_MAX_AGE_SEC` (по умолчанию 10)
+  - `event_loop_drift`: `event_loop_max_drift_ms` ≤ `SELFCHK_DRIFT_MAX_MS` (по умолчанию 150)
+  - `admin_latency_budget`: медиана из `admin_endpoint_latency_bucket_total` для `/admin/selfcheck` ≤ `SELFCHK_ADMIN_P50_MS` (по умолчанию 50) — при наличии прошлых вызовов
+- ENV ручки: `SELFCHK_LOOP_MAX_AGE_SEC`, `SELFCHK_DRIFT_MAX_MS`, `SELFCHK_ADMIN_P50_MS`.
+- Ответ:
+  `{ "status":"ok|fail", "reasons":[...], "ts":"ISO", "artifacts_dir":"...", "loops":[...] }`
+
+- Формат на диске: детерминированный JSON-объект
+  - `{ "version": <int>, "sha256": "<hex>", "payload": <object> }`
+  - `sha256` считается от `json.dumps(payload, sort_keys=True, separators=(",", ":"))` (байты UTF‑8)
+  - Запись атомарная: `tmp → flush → fsync(file) → os.replace → fsync(dir)`
+- Writer'ы переведены на новый формат через helper `_atomic_snapshot_write(path, payload_obj, version=...)`:
+  - allocator, throttle, rollout_ramp, rollout_state
+- Loader‑эндпоинты (лимит ≤ 1MB, ASCII) валидируют структуру и checksum:
+  - при несоответствии — HTTP 400 `{ "error": "bad_checksum" }` (или `invalid_structure`)
+  - метрика `snapshot_integrity_fail_total{kind}` инкрементируется на негативных кейсах
+  - ошибки: `file_too_large`, `non_ascii`, `invalid_structure`, `bad_checksum`, `invalid_payload`
+  - покрытые загрузчики и метки kind: allocator, throttle, rollout_ramp, rollout_state, cost_calib
+- Пример файла:
+  ```json
+  {"payload":{"version":1,"hwm_equity_usd":123.0},"sha256":"a3b...","version":1}
+  ```
+
+- Двойной токен админа:
+  - ENV: `ADMIN_TOKEN_PRIMARY`, `ADMIN_TOKEN_SECONDARY` (второй опционален).
+  - Проверка `_check_admin_token` принимает любой из пары; при неуспехе инкрементирует `admin_unauthorized_total`.
+  - Эндпоинт: `POST /admin/auth/rotate` — атомарная смена токенов без рестарта.
+    - Тело: `{ "primary":"...", "secondary":"...", "activate":"primary|secondary" }`.
+    - Секреты в admin‑audit маскируются ("***").
+- Подписи audit:
+  - ENV: `ADMIN_AUDIT_HMAC_KEY` (ASCII/hex).
+  - Для каждой audit-записи вычисляется HMAC-SHA256 по детерминированному JSON payload; поле `sig` добавляется в запись.
+  - `GET /admin/audit/log` возвращает `sig` вместе с остальными полями.
+- Тесты:
+  - `tests/test_admin_token_rotation.py` — доступ по старому/новому/вторичному токену и ротация.
+  - `tests/test_admin_audit_hmac_signatures.py` — детерминированные подписи и детектирование подмены.
+
+- Метрики (Prometheus Gauges, stdlib-only):
+  - `soak_mem_rss_bytes`, `soak_open_fds` (на Windows всегда 0), `soak_gc_gen{gen="0|1|2"}`, `soak_threads_total`.
+  - `event_loop_max_drift_ms` — максимальный дрейф сна event loop за окно.
+- Цикл `_soak_guard_loop()`:
+  - Тик каждые 50мс; окно агрегации `S` секунд: `SOAK_WINDOW_SEC` (по умолчанию 300).
+  - Обновляет метрики из stdlib: RSS через `resource.getrusage` и/или `tracemalloc` (fallback), `len(threading.enumerate())`, `gc.get_count()`.
+  - Дрифт как в perf: измеряется через `perf_counter()` и `asyncio.sleep(0.05)`; копится максимум за окно в `event_loop_max_drift_ms`.
+  - Пороговые ENV-опции: `SOAK_RSS_MAX_MB`, `SOAK_DRIFT_MAX_MS`, `SOAK_THREADS_MAX`. При превышении — запись строки в `artifacts/alerts.log` в дет-JSON: `{ "kind":"soak_guard_breach", ... }`.
+- Эндпоинт: `GET /admin/perf/soak_snapshot` — возвращает детерминированный JSON снимок текущих значений и максимума за окно.
+- Тесты:
+  - `tests/test_soak_snapshot_endpoint.py` — структура JSON и детерминированные ключи.
+  - `tests/test_soak_drift_alert.py` — искусственно увеличивает дрейф и проверяет запись `soak_guard_breach` в `alerts.log`.
+  - `tests/test_soak_gc_threads_metrics.py` — значения метрик неотрицательны и обновляются.
+
+Адаптивный троттлинг запросов без внешних зависимостей.
+
+- Скользьщие окна по операциям: create/amend/cancel; per-session и per-symbol.
+- Adaptive backoff при повышенном error rate или WS lag.
+- Жёсткий cap на backoff и детерминированный джиттер ±10% (по `(symbol, 5s bucket)`).
+- События в окне считаются только по факту вызова REST (блоки/скипы не учитываются).
+
+Рекомендованные стартовые пороги:
+
+- window: 3s; max_creates: 10/s; max_amends: 20/s; max_cancels: 25/s
+- backoff_cap_ms: 5000; jitter_pct: 0.1
+
+Метрики Prometheus:
+
+- `throttle_backoff_ms{symbol}`: текущий бэкофф per-symbol
+- `throttle_backoff_ms_max`: максимальный бэкофф за ран
+- `throttle_events_in_window{op,symbol}`: события в окне по операциям
+
+Пример поведения:
+- F2 gate — Throttle: в gate thresholds добавлены поля
+  - `max_throttle_backoff_ms` (по умолчанию 5000)
+  - `max_throttle_events_in_window_total` (по умолчанию 50)
+  В аудите F2 мониторинга используются `throttle_backoff_ms_max` и `throttle_events_in_window.total`. При превышении порогов деплой блокируется с соответствующей причиной.
+
+- При росте `rest_error_rate` или `ws_lag_ms` — backoff увеличивается экспоненциально до cap и снабжается детерминированным джиттером; при нормализации — сбрасывается в 0.
+
+### Throttle & Backoff — Alerts & F2 gate
+
+Примеры алертов (PromQL):
+
+1) ThrottleBackoffHigh
+
+```
+max_over_time(throttle_backoff_ms_max[10m]) > 5000
+```
+for: 3m, labels: severity="warning"
+
+2) ThrottleBurstEvents
+
+```
+sum by (symbol) (throttle_events_in_window) > 50
+```
+for: 2m, labels: severity="warning"
+
+3) RateLimitAndGuard
+
+```
+(throttle_backoff_ms_max > 5000) and on() (guard_paused_effective == 1)
+```
+for: 1m, labels: severity="critical"
+
+4) (опционально)
+
+```
+avg_over_time(order_reject_rate[5m]) > 0.05
+avg_over_time(cancel_latency_p95_ms[5m]) > 300
+avg_over_time(ws_lag_ms[5m]) > 3000
+```
+
+F2 gate — Throttle:
+- thresholds: `max_throttle_backoff_ms` (default 5000), `max_throttle_events_in_window_total` (default 50)
+### Per-symbol throttle thresholds
+
+- Формат YAML (ключи регистронезависимы, нормализуются в UPPER):
+
+```yaml
+throttle:
+  global:
+    max_throttle_backoff_ms: 2000
+    max_throttle_events_in_window_total: 100
+  per_symbol:
+    BTCUSDT:
+      max_throttle_backoff_ms: 100
+      max_throttle_events_in_window_total: 10
+```
+
+- Hot-reload без рестарта:
+  - POST `/admin/thresholds/reload` с JSON: `{ "path": ".../thresholds.yaml" }`
+  - Ответ: детерминированный JSON `{ "global_keys":N, "per_symbol_count":M, "symbols":[...] }`
+  - GET `/admin/thresholds/snapshot` вернет текущие значения (детерминированный JSON)
+
+- STRICT-режим (dev → True, prod → False):
+  - При `STRICT_THRESHOLDS=True` некорректные override (строка/отриц.) вызывают `ValueError`
+  - При `False` — лог предупреждения (ASCII) и fallback на глобальные
+
+- audit sources: `throttle_backoff_ms_max`, `throttle_events_in_window.total`
+- reasons on fail: "Throttle backoff too high: {max} > {thr}", "Throttle events in window too high: {tot} > {thr}"
+
+### F2 gate — Autopolicy
+
+- Порог: `max_autopolicy_level_on_promote` (по умолчанию 1). Если `autopolicy_level > порога` — F2 FAIL: "Autopolicy level too high: {lvl} > {thr}".
+- Если `autopolicy_level >= 1`, но в пределах порога — canary-патч смягчается:
+  - уровни (`levels_per_side`) дополнительно уменьшаются на `autopolicy_soft_canary_shrink_pct` (по умолчанию 25%)
+  - `min_time_in_book_ms` и `replace_threshold_bps` увеличиваются на `autopolicy_soft_tib_bump_pct`/`autopolicy_soft_repbps_bump_pct` (по умолчанию по 15%)
+- В логе: `[F2] canary softened due to autopolicy_level={lvl}: levels_shrink=..., tib_bump=..., repbps_bump=...`
+
+### Admin — Autopolicy
+### Shadow mode
+
+- В shadow-режиме REST не вызывается, активные структуры (active_orders/снапшоты) не мутируются.
+- Виртуальные CIDs детерминированы: `shadow:{symbol}:{ts_ms}`.
+- Метрики собираются через агрегатор метрик; F2 audit читает агрегированные `shadow_stats` напрямую (а не из /metrics) и включает их только при достаточном количестве событий (`shadow.min_count`).
+
+Примеры вызовов:
+
+```bash
+curl -H "X-Admin-Token:$TOKEN" http://localhost:8080/admin/autopolicy
+curl -XPOST -H "X-Admin-Token:$TOKEN" -H "Content-Type: application/json" \
+     -d '{"level":2}' http://localhost:8080/admin/autopolicy
+curl -XPOST -H "X-Admin-Token:$TOKEN" -H "Content-Type: application/json" \
+     -d '{"reset":true}' http://localhost:8080/admin/autopolicy
+```
+
+Алерты PromQL (Autopolicy):
+
+1) AutopolicyEscalated (warning)
+
+```
+max_over_time(autopolicy_level[10m]) >= 2
+```
+for: 5m
+
+2) AutopolicyMaxClamp (warning)
+
+```
+autopolicy_levels_per_side_max_eff <= 2
+```
+for: 3m
+
+3) AutopolicyAndGuard (critical)
+
+```
+(autopolicy_level >= 1) and on() (guard_paused_effective == 1)
+```
+for: 1m
+
+# Market Maker Bot
+
+A high-frequency market making bot with advanced order management, risk controls, and monitoring.
+
+## Features
+
+- **Order Management**: Intelligent order placement, amendment, and replacement
+- **Risk Management**: Position limits, drawdown protection, and circuit breakers
+- **Monitoring**: Prometheus metrics, health checks, and comprehensive alerting
+- **Backtesting**: Historical data replay and strategy validation
+- **Parameter Tuning**: Automated optimization with walk-forward validation
+
+## Circuit Breaker
+
+Circuit Breaker защищает от каскадных сбоев API, мониторя ошибки и автоматически блокируя запросы при превышении лимитов:
+
+### Состояния
+- `closed`: Нормальная работа, все запросы проходят
+- `open`: Блокируются новые ордера (create/amend), cancel разрешен
+- `half_open`: Тестовый режим с ограниченными probe-запросами
+
+### Конфигурация
+```yaml
+circuit:
+  window_sec: 60.0          # Окно анализа ошибок
+  err_rate_open: 0.5        # Общий error rate для открытия (50%)
+  http_5xx_rate_open: 0.2   # Rate 5xx ошибок для открытия (20%)
+  http_429_rate_open: 0.2   # Rate 429 ошибок для открытия (20%)
+  open_duration_sec: 30.0   # Время в open состоянии
+  half_open_probes: 5       # Количество probe запросов
+  cooldown_sec: 5.0         # Пауза между попытками
+```
+
+### Метрики
+- `circuit_state{state}` - текущее состояние (closed=1/open=0/half_open=0)
+
+### OrderManager интеграция
+- `place_order()` и `amend_order()` проверяют `circuit.allowed(op)`
+- Результаты фиксируются через `circuit.on_result(cid, ok, http_code, now)`
+- В состоянии `open` бросается `circuit_open` exception
+- Hot-reload: Конфигурация обновляется автоматически при изменении `circuit` секции
+
+## Quick Start
+
+### Throttle ring buffer
+
+Заменили списки таймстампов на кольцевой буфер по секундам для O(1) операций и стабильного memory footprint:
+
+**Внутренний класс `_Ring`:**
+- `ring[size]` — счётчики событий по секундам
+- `base_ts + idx` — текущая позиция в окне
+- `_advance(now_sec)` — продвижение времени с обнулением expired buckets
+- `add(now_sec, n)` — добавление событий в текущий bucket
+- `total(now_sec)` — сумма по всему скользящему окну
+
+**Snapshot v2 format:**
+```json
+{
+  "version": 2,
+  "window_sec": 60,
+  "symbols": {
+    "BTCUSDT": {
+      "create": {"base_ts": 1640000000, "idx": 5, "ring": [0,1,2,0,0,...]},
+      "amend": {...},
+      "cancel": {...}
+    }
+  }
+}
+```
+
+**Backward compatibility:** загружает legacy v1 snapshots (списки timestamp) и конвертирует meta-поля.
+
+**Преимущества:** детерминированные O(1) операции, стабильная память, быстрые скользящие окна без сортировки/поиска.
+
+### Throttle snapshots
+
+## S2 — Chaos hooks (dev only)
+
+Назначение: управляемо ухудшать GREEN только на уровне метрик, для проверки ramp/rollback и canary hints на dev/stage.
+
+Конфигурация (`chaos`):
+- `enabled: bool` (по умолчанию false)
+- `reject_inflate_pct: float` (0..1.0) — при каждом reject GREEN дополнительно инкрементируем метрику на floor(reject_inflate_pct)
+- `latency_inflate_ms: int` (0..10000) — к latency_ms для GREEN добавляется константа в метриках
+
+Эндпоинт `/admin/chaos`:
+- GET — вернуть текущие поля в детерминированном JSON
+- POST — валидация и обновление, ответы детерминированные; защищено X-Admin-Token
+
+Важно: Chaos hooks не трогают реальные REST-вызовы/поведение биржи — меняются только метрики.
+
+## E2 — Canary report
+### E2.2 — Scheduled canary export & baseline diff
+
+Автосъём canary-срезов по расписанию и сравнение с baseline.
+
+Переменные окружения:
+- `CANARY_EXPORT_INTERVAL_SEC` — период автосъёма (по умолчанию 300)
+- `CANARY_DIFF_REJECT_DELTA` — порог для reject rate delta (по умолчанию 0.02)
+- `CANARY_DIFF_LAT_MS` — порог для latency delta (по умолчанию 50)
+
+Файлы артефактов:
+- `artifacts/canary_YYYYmmdd_HHMMSS.json`
+- `artifacts/REPORT_CANARY_YYYYmmdd_HHMMSS.md`
+- baseline: `artifacts/canary_baseline.json`
+
+Эндпоинты:
+- `POST /admin/report/canary/baseline` — принять baseline из указанного JSON-файла (дет-JSON)
+- `GET /admin/report/canary/diff` — сравнить текущий payload с baseline, вернуть `{delta:{...}, regressions:[...]}`
+
+Запись артефактов — атомарная (tmp→flush→fsync→replace, best-effort fsync(dir)).
+
+## F4 — Canary kill-switch
+
+Автоматическая реакция на регрессию GREEN по дельтам canary: rollback шага ramp или freeze.
+
+Параметры `killswitch`:
+- `enabled: bool` — включить детектор
+- `dry_run: bool` — только метрики/аудит без изменения состояния
+- `max_reject_delta: float` — порог по дельте reject rate (green-blue)
+- `max_latency_delta_ms: int` — порог по дельте latency (green-blue)
+- `min_fills: int` — минимальный сэмпл (за тик ramp)
+- `action: "rollback"|"freeze"` — действие при срабатывании
+
+Метрики:
+- `killswitch_checks_total`
+- `killswitch_triggers_total{action="dry_run|rollback|freeze"}`
+
+Эндпоинт:
+- `GET/POST /admin/rollout/killswitch` — получить/обновить конфигурацию (дет-JSON, X-Admin-Token)
+
+Canary payload включает блок:
+```
+"killswitch": {"enabled":bool,"dry_run":bool,"action":str,"fired":bool,"reason":"reject_delta|latency_delta|none"}
+```
+
+Эндпоинты для получения «среза канарейки» и записи артефактов:
+
+- GET `/admin/report/canary` — возвращает детерминированный JSON со структурой:
+```
+{
+  "meta": {"commit","params_hash","generated_at"},
+  "rollout": {
+    "split_expected_pct","split_observed_pct",
+    "orders_blue","orders_green",
+    "fills_blue","fills_green",
+    "rejects_blue","rejects_green",
+    "latency_ms_avg_blue","latency_ms_avg_green",
+    "salt_hash","overlay_diff_keys",
+    "ramp": {"enabled","step_idx","frozen","holds_sample","holds_cooldown","cooldown_seconds"}
+  },
+  "drift": {"cap_pct","min_sample_orders","alert","reason"}
+}
+```
+
+- POST `/admin/report/canary/generate` — собирает payload и сохраняет:
+  - `artifacts/canary.json` — детерминированный JSON (sort_keys=True, separators=(",",":"))
+  - `artifacts/REPORT_CANARY.md` — ASCII-табличное краткое резюме
+
+Безопасность: X-Admin-Token обязателен (локально можно отключить `ADMIN_AUTH_DISABLED=1`).
+Запись артефактов атомарная: tmp→flush→fsync(file)→replace (+ best-effort fsync(dir)).
+
+### Canary triage hints
+
+### E2.3 — Alerts log
+
+### E2.4 — Artifacts prune
+
+## F5 — Auto-promotion (Color Flip)
+
+Автоповышение GREEN до базы при устойчивой «здоровости»:
+- Условия стабильности за тик: kill-switch не сработал, нет drift.alert, ramp не frozen, нет triage hints.
+- Накапливаем `consecutive_stable_steps`; публикуем `autopromote_stable_steps`.
+- Если включено `autopromote.enabled`, и `consecutive_stable_steps >= stable_steps_required`, и текущий `traffic_split_pct >= min_split_pct`:
+  - `autopromote_attempts_total++`
+  - Выполняем flip атомарно: `active="green"`, `rollout_ramp.enabled=false`, `frozen=false`, `step_idx=0`, `traffic_split_pct=0`.
+  - `autopromote_flips_total++`, пишем alert `kind="autopromote_flip"` в `artifacts/alerts.log` и запись в admin audit.
+
+Эндпоинт:
+- `GET /admin/rollout/promote` — превью изменений
+- `POST /admin/rollout/promote` — ручной flip (token-guard, rate-limit, дет-JSON)
+
+Canary payload:
+```
+"autopromote":{"enabled":bool,"stable_steps_required":int,"min_split_pct":int,"stable_steps_current":int}
+```
+Фоновая чистка артефактов в `artifacts/`:
+- Ограничение количества снапшотов: `canary_*.json` и `REPORT_CANARY_*.md` — храним не более `CANARY_MAX_SNAPSHOTS` (по времени mtime, оставляем последние)
+- Ограничение по возрасту: удаляем старше `CANARY_MAX_DAYS` дней
+- `alerts.log`: удерживаем хвост `ALERTS_MAX_LINES` (переписывается атомарно)
+
+Переменные окружения:
+- `PRUNE_INTERVAL_SEC` (по умолчанию 3600)
+- `CANARY_MAX_SNAPSHOTS` (по умолчанию 200)
+- `CANARY_MAX_DAYS` (по умолчанию 7)
+- `ALERTS_MAX_LINES` (по умолчанию 5000)
+
+Локальный журнал тревог в `artifacts/alerts.log` — по одной JSON-строке на событие (детерминированный JSON):
+- kind: `killswitch_fired` | `split_drift_alert` | `triage_hints`
+- ts: ISO-время
+- payload: объект с данными по событию
+
+Эндпоинты (X-Admin-Token, дет-JSON):
+- GET `/admin/alerts/log?tail=N` — последние N записей (по умолчанию 100)
+- POST `/admin/alerts/clear` — очистка файла (атомарная замена + fsync)
+
+Метрика:
+- `admin_alert_events_total{kind}` — инкремент при записи события
+
+Пример строки:
+```
+{"kind":"killswitch_fired","payload":{"action":"rollback","dry_run":true,...},"ts":"2024-01-01T00:00:00Z"}
+```
+В поле `hints` возвращается список диагностик (детерминированный порядок) по простым правилам:
+- `green_rejects_spike` — если `fills_total >= 500` и `(reject_rate_green - reject_rate_blue) > 0.02`
+- `green_latency_regression` — если `(latency_ms_avg_green - latency_ms_avg_blue) > 50`
+- `split_drift_exceeds_cap` — если `drift.alert == true`
+- `ramp_hold_low_sample` — если `ramp.holds_sample > 0`
+- `ramp_on_cooldown` — если `ramp.holds_cooldown > 0`
+
+### F3 — Blue/Green rollout
+
+Детерминированный sticky split по CID для маршрутизации заявок между конфигурациями BLUE/GREEN:
+
+- Хэш: `sha1(cid) -> int -> v%100`; `v < traffic_split_pct` => GREEN, иначе BLUE
+- Salt: финальный ключ `sha1("{salt}|{cid}")`, позволяет сменой salt детерминированно перераспределить сплит
+- Fallback CID при пустом: хэш от `(symbol|side|price|size)` как в shadow
+- Pin-лист: `pinned_cids_green` — список/CSV CID, всегда маршрутизируются в GREEN
+- Метрики: `rollout_orders_total{color}`, `rollout_traffic_split_pct`
+  
+Per-color метрики:
+
+| Metric | Labels | Description |
+|---|---|---|
+| rollout_orders_total | color | Orders routed by color |
+| rollout_fills_total | color | Successful order sends/fills |
+| rollout_rejects_total | color | REST rejects count |
+| rollout_avg_latency_ms | color | EWMA latency (ms) |
+| rollout_pnl_usd | color | PnL per color (if available) |
+- Админка:
+  - GET `/admin/rollout` → `{traffic_split_pct, active}`
+  - POST `/admin/rollout` → `{"traffic_split_pct":int, "active":"blue|green", "salt":"...", "pinned_cids_green":["CID1","CID2"]}`
+  - Ограничения: `salt` ≤ 64 символов, pin-лист ≤ 10k записей
+
+#### Ramp (ступенчатый рост GREEN)
+
+- Конфиг `rollout_ramp`: `enabled`, `steps_pct` (напр. [0,5,10,25,50]), `step_interval_sec`, капы: `max_reject_rate_delta_pct`, `max_latency_delta_ms`, `max_pnl_delta_usd` (опц.)
+- Фоновый тикер: считает дельты per-color (rejects/fills → reject_rate; latency EWMA; опц. pnl) за шаг
+- Если GREEN «здоров» относительно BLUE → повышает split к следующей ступени, иначе понижает (rollback)
+- Метрики: `rollout_ramp_enabled`, `rollout_ramp_step_idx`, `rollout_ramp_transitions_total{direction}`, `rollout_ramp_rollbacks_total`
+- Эндпоинты: GET/POST `/admin/rollout/ramp`
+
+Ramp snapshots & incident freeze
+
+- Снапшот (JSON): `{version, enabled, step_idx, last:{fills{blue,green},rejects{blue,green}}, updated_ts, frozen}`
+- Флаги CLI: `--rollout-ramp-snapshot-path`, `--rollout-ramp-snapshot-interval-seconds`
+- Запись атомарно: tmp→flush→fsync→replace, джиттер ±10% (детерминированный)
+- Админ: 
+  - GET `/admin/rollout/ramp/snapshot`
+  - POST `/admin/rollout/ramp/load`
+  - GET `/admin/rollout/ramp/snapshot_status`
+  - POST `/admin/rollout/ramp/freeze` → ручной фриз/анфриз
+- Freeze-логика: при инциденте (жёсткие капы rejects/latency и др.) — `frozen=1`, метрики `rollout_ramp_frozen=1`, `rollout_ramp_freezes_total++`; включён kill-switch — шаг вниз.
+
+### F3.5 — Blue/Green overlays
+
+Canary (GREEN) может применять «мягкие» параметры независимо от BLUE через dotted-keys в rollout.blue/rollout.green.
+
+Пример:
+```yaml
+rollout:
+  blue:
+    levels_per_side_max: 6
+    replace_threshold_bps: 2.0
+  green:
+    autopolicy.level_max: 3
+    replace_threshold_bps: 3.5
+```
+
+- Ключи применяются поверх эффективной конфигурации перед размещением ордера только для выбранного цвета
+- Поддерживаются вложенные dotted-keys (например, `autopolicy.level_max`)
+- Метрики: `rollout_overlay_applied_total{color}`
+
+## Dashboards
+## M3 — Smart scheduler v2
+
+## S3 — F2 gate: Canary signals
+
+F2-gейт учитывает сигналы canary для детерминированного FAIL при деградации:
+- Пороговые значения (`canary_gate`): `max_reject_delta`, `max_latency_delta_ms`, `min_sample_fills` (hot-reload через thresholds).
+- Последовательность причин:
+  1) `killswitch_fired` (вне dry-run)
+  2) `rollout_drift` (drift.alert)
+  3) `reject_delta_exceeds` (green-blue)
+  4) `latency_delta_exceeds`
+- При `fills_total < min_sample_fills` — PASS с reason `low_sample`.
+- Аудит `rollout` дополняется блоком `canary_gate {used_thresholds, reasons}`.
+
+Пример YAML:
+```
+canary_gate:
+  max_reject_delta: 0.02
+  max_latency_delta_ms: 50
+  min_sample_fills: 500
+```
+Предложение торговых окон на основе собранных метрик (демо-качество, детерминированно):
+- Формула score учитывает медианный спред (меньше — лучше), волатильность (меньше — лучше), объём (больше — лучше) с весами по режиму: conservative/neutral/aggressive.
+- Превью: `GET /admin/scheduler/suggest` → `{windows:[{"start","end","score"},...]}` (дет-JSON)
+- Применение: `POST /admin/scheduler/apply {"windows":[{"start":"HH:MM","end":"HH:MM"},...]}` — hot-apply в текущий scheduler.
+- Периодический пересчёт (по умолчанию выкл.): `SCHEDULER_RECOMPUTE_SEC` > 0 — фоновая петля обновляет окна.
+
+Конфиг `scheduler_suggest` (будущий): `enabled, top_k, min_sample, mode`.
+
+### Guard/AutoPolicy PromQL
+```promql
+# Guard state and AutoPolicy levels
+guard_paused_effective
+autopolicy_level
+levels_per_side_max_eff
+
+# AutoPolicy effective parameters
+autopolicy_min_time_in_book_ms_eff
+autopolicy_replace_threshold_bps_eff
+autopolicy_levels_per_side_max_eff
+
+# Steps and transitions
+autopolicy_steps_total
+rate(autopolicy_steps_total[5m])
+```
+
+### Throttle/F2 PromQL
+```promql
+# Backoff and events
+throttle_backoff_ms_max_observed
+throttle_events_in_window_total
+rate(throttle_backoffs_total[5m])
+
+# F2 gate failures by reason
+f2_throttle_gate_failures_total{reason="throttle_overload"}
+f2_throttle_gate_failures_total{reason="guard_paused"}
+f2_throttle_gate_failures_total{reason="circuit_open"}
+rate(f2_throttle_gate_failures_total[5m])
+```
+
+### Circuit Breaker PromQL
+```promql
+# Circuit state (0=closed, 1=open, 2=half_open)
+circuit_state{state="closed"}
+circuit_state{state="open"}
+circuit_state{state="half_open"}
+
+# Transitions
+rate(circuit_transitions_total[5m])
+```
+
+### Allocator/Budget PromQL
+```promql
+# Budget and drawdown
+allocator_soft_factor
+portfolio_budget_available_usd
+portfolio_drawdown_pct
+allocator_hwm_equity_usd
+
+# Per-symbol weights and targets
+portfolio_weight{symbol=~".*USDT"}
+portfolio_target_usd{symbol=~".*USDT"}
+```
+
+### Shadow Mode PromQL
+```promql
+# Shadow orders and diffs
+rate(shadow_orders_total[5m])
+shadow_price_diff_bps_avg{symbol=~".*USDT"}
+shadow_size_diff_pct_avg{symbol=~".*USDT"}
+
+# Shadow vs real comparison
+abs(shadow_price_diff_bps_avg) > 10
+abs(shadow_size_diff_pct_avg) > 5
+```
+
+### Rollout PromQL
+```promql
+# Traffic split and orders by color
+rollout_traffic_split_pct
+rate(rollout_orders_total[5m])
+rate(rollout_fills_total[5m])
+rate(rollout_rejects_total[5m])
+
+# Latency and PnL by color
+rollout_avg_latency_ms{color="blue"}
+rollout_avg_latency_ms{color="green"}
+rollout_pnl_usd{color="blue"}
+rollout_pnl_usd{color="green"}
+
+# Ramp state
+rollout_ramp_enabled
+rollout_ramp_step_idx
+rollout_ramp_frozen
+rate(rollout_ramp_transitions_total[5m])
+rollout_ramp_rollbacks_total
+```
+
+### E2 — rollout drift & overlay diff
+
+- Поля аудита:
+  - `salt_hash`: первые 8 символов `sha1(rollout.salt)`
+  - `overlay_diff_keys`: объединённый список dotted-keys, где overlay BLUE/GREEN отличается от базовой конфигурации (diff vs base)
+  - `split_expected_pct`: ожидаемый сплит из `rollout_traffic_split_pct`
+  - `split_observed_pct`: фактический % GREEN (берётся из `rollout_split_observed_pct`)
+  - `split_drift_alert`: `true`, если `|observed-expected| > drift_cap_pct` при достаточной выборке
+  - `split_drift_reason`: `ok | low_sample | exceeds_cap`
+
+- Метрики:
+  - `rollout_split_observed_pct` — наблюдаемый сплит GREEN, 0..100
+  - `rollout_split_drift_alerts_total` — количество срабатываний детектора дрейфа
+
+- Порог/семплинг:
+  - `drift_cap_pct` по умолчанию 5.0
+  - `min_sample_orders` по умолчанию 200; до набора этого объёма алерт не срабатывает (`low_sample`).
+
+- Причины дрейфа: pinned CIDs, salt, фильтры/валидации до REST, ошибки/ретраи.
+
+## Rollout state snapshots
+
+Состояние Blue/Green rollout (split/active/salt/pins/overlays и ramp) сохраняется на диск атомарно и переживает рестарты.
+
+Формат JSON:
+```json
+{"version":1,"traffic_split_pct":25,"active":"blue","salt":"default","pinned_cids_green":["CID1","CID2"],"overlays":{"blue":{},"green":{"replace_threshold_bps":3.5}},"ramp":{"enabled":false,"steps_pct":[0,5,10,25,50],"step_interval_sec":600,"max_reject_rate_delta_pct":2.0,"max_latency_delta_ms":50,"max_pnl_delta_usd":0.0},"updated_ts":1735000000.0}
+```
+
+Флаги CLI:
+- `--rollout-state-snapshot-path=/var/lib/mm/rollout_state.json`
+- `--rollout-state-snapshot-interval-seconds=60`
+
+Атомарная запись:
+- tmp→flush→fsync→replace (os.replace)
+- детерминированный джиттер интервала ±10% на основе пути (HMAC-SHA1)
+
+Админ-эндпоинты (X-Admin-Token):
+- `GET  /admin/rollout/state/snapshot`
+- `POST /admin/rollout/state/load`
+- `GET  /admin/rollout/state/snapshot_status` → `{path,last_write_ts,last_load_ts}`
+
+Метрики:
+- `rollout_state_snapshot_writes_total`, `_failed_total`
+- `rollout_state_snapshot_loads_total`, `_failed_total`
+- `rollout_state_snapshot_mtime_seconds{op="write"|"load"}`
+
+## Rollout Ramp Safety
+
+Уменьшение «пилы канарейки» и ложных откатов/прыжков.
+
+Новые поля в `RolloutRampConfig`:
+- `min_sample_fills: int = 200` — минимум дельты fills per-color для валидности выборки
+- `max_step_increase_pct: int = 10` — максимальный прирост split% за один тик (0..100)
+- `cooldown_after_rollback_sec: int = 900` — cooldown после rollback (≥0)
+
+Логика в `_rollout_ramp_tick()`:
+1. **Sample Hold**: если `min(blue_delta, green_delta) < min_sample_fills` → HOLD (step/split неизменны, `inc_ramp_hold("sample")`)
+2. **Step Cap**: ограничение прироста split не более `max_step_increase_pct` за тик
+3. **Cooldown Hold**: после rollback в течение `cooldown_after_rollback_sec` → HOLD (`inc_ramp_hold("cooldown")`)
+
+Метрики:
+- `rollout_ramp_holds_total{reason="sample"|"cooldown"}` — счётчик задержек по причинам
+- `rollout_ramp_cooldown_seconds` — gauge остатка cooldown
+
+Админ `/admin/rollout/ramp` поддерживает новые поля (GET/POST).
+
+## F3.6a — Compiled overlays
+
+Оптимизация hot-path: предкомпилированные overlay-присвоители вместо парсинга dotted-keys при каждом применении.
+
+### Зачем
+
+- Убирает парсинг `"autopolicy.level_max"` → `["autopolicy", "level_max"]` из критического пути заявок
+- Copy-on-write гарантирует отсутствие мутаций base-конфига
+- Детерминированный порядок применения (sorted paths)
+
+### Как включается
+
+Автоматически при обновлении rollout-конфига:
+```python
+order_manager.update_rollout_config(new_rollout_config)
+# → компилирует blue/green overlays в tuple-пути
+# → метрика rollout_overlay_compiled_total++
+```
+
+### Применение
+
+```python
+# Быстрый путь (если overlays скомпилированы)
+result = order_manager._apply_overlay(base_config, green_overlay)
+# → использует предкомпилированные [(path_tuple, value), ...]
+
+# Fallback (если overlays пусты)
+# → стандартная логика dotted-строк
+```
+
+### Детерминизм
+
+- Tuple-пути сортируются лексикографически: `("a", "b")` < `("a", "c")` < `("b", "x")`
+- Base-конфиг не мутируется (copy-on-write по ветке дерева)
+- Семантика идентична plain overlay применению
+
+### Метрики
+
+- `rollout_overlay_compiled_total` — количество компиляций overlay (не применений)
+
+### Thresholds/Reloads PromQL
+```promql
+# Version and reload metrics
+thresholds_version
+rate(thresholds_reload_total{result="ok"}[5m])
+rate(thresholds_reload_total{result="failed"}[5m])
+
+# Snapshot operations
+rate(throttle_snapshot_writes_total[5m])
+rate(throttle_snapshot_loads_total[5m])
+```
+
+### Admin/SRE PromQL
+```promql
+# Admin endpoint usage
+rate(admin_requests_total[5m])
+rate(admin_unauthorized_total[5m])
+rate(admin_rate_limited_total[5m])
+rate(admin_audit_events_total[5m])
+
+# Health checks (if implemented)
+up{job="mm-bot"}
+rate(http_requests_total{endpoint="/healthz"}[5m])
+rate(http_requests_total{endpoint="/readyz"}[5m])
+```
+
+## Admin audit & rate-limit
+
+- In-memory журнал последних 1000 операций
+  - Запись:
+    ```json
+    {"ts":"2025-01-01T12:00:00Z","endpoint":"/admin/...","actor":"token:abcd1234","payload_hash":"<sha1>"}
+    ```
+  - `actor` = первые 8 символов `sha1(X-Admin-Token)`. Сам токен не логируется.
+  - `payload_hash` = `sha1(sorted_json(body))`.
+
+- Лимитирование: окно 60s, не более 60 запросов на {actor, endpoint}. При превышении: HTTP 429 и метрика `admin_rate_limited_total{endpoint}`.
+
+- Эндпоинты:
+  - `GET /admin/audit/log`   → список записей (детерминированный JSON)
+  - `POST /admin/audit/clear` → очистка журнала (сама операция логируется)
+
+- Рекомендации: периодическая ротация `ADMIN_TOKEN`, ограничение доступа по сети/ACL, central-logs при необходимости.
+
+### Alerting PromQL Examples
+```promql
+# AutoPolicy escalated
+autopolicy_level > 3
+
+# Guard paused
+guard_paused_effective == 1
+
+# High throttle backoff
+throttle_backoff_ms_max_observed > 5000
+
+# Circuit open
+circuit_state{state="open"} == 1
+
+# Rollout health degradation
+(rollout_avg_latency_ms{color="green"} - rollout_avg_latency_ms{color="blue"}) > 100
+```
+
+Состояние `ThrottleGuard` сохраняется между рестартами и записывается атомарно:
+
+- Формат JSON (детерминированный):
+  ```json
+  {"version":1,"window_since":"2025-01-01T00:00:00+00:00","events_total":0,"backoff_ms_max":0,"last_event_ts":"2025-01-01T00:00:00+00:00"}
+  ```
+- Запись: `tmp -> flush -> fsync -> os.replace` (без гонок, ASCII-логи)
+- Джиттер интервала записи: ±10% (детерминированный, stdlib hmac)
+
+Флаги CLI:
+```bash
+--throttle-snapshot-path artifacts/throttle_snapshot.json \
+--throttle-snapshot-interval-seconds 30
+```
+
+Admin эндпоинты (X-Admin-Token):
+- GET `/admin/throttle/snapshot` – текущий снапшот
+- POST `/admin/throttle/load` – применить снапшот
+- POST `/admin/throttle/reset` – очистить окно/счетчики
+- GET `/admin/throttle/snapshot_status` – `{path,last_write_ts,last_load_ts}`
+
+Метрики:
+- `throttle_snapshot_writes_total`, `throttle_snapshot_writes_failed_total`
+- `throttle_snapshot_loads_total`, `throttle_snapshot_loads_failed_total`
+- `throttle_snapshot_mtime_seconds{op="write|load"}`
+
+### 1. Configuration
+
+Create a configuration file `config/app.yaml`:
+
+```yaml
+strategy:
+  k_vola_spread: 1.0
+  skew_coeff: 0.3
+  levels_per_side: 3
+  level_spacing_coeff: 0.4
+  min_time_in_book_ms: 500
+  replace_threshold_bps: 3
+  imbalance_cutoff: 0.65
+
+trading:
+  maker_fee_bps: 1.0
+  taker_fee_bps: 5.0
+
+risk:
+  max_position_usd: 10000
+  max_drawdown_pct: 0.05
+  risk_pause_threshold: 0.03
+```
+
+### 2. Run the Bot
+
+```bash
+# Start the bot
+python -m src.main --config config/app.yaml
+
+# Or with specific symbol
+python -m src.main --config config/app.yaml --symbol BTCUSDT
+```
+
+### 3. Monitor
+
+```bash
+# Check health
+curl http://localhost:8080/healthz
+
+# View metrics
+curl http://localhost:8080/metrics
+```
+
+## Walk-forward Tuning
+
+The bot includes a sophisticated walk-forward tuning system for strategy parameter optimization.
+
+### Basic Usage
+
+```bash
+# Enable walk-forward tuning
+python -m src.strategy.tuner --walk-forward \
+  --data ./data/research \
+  --symbol BTCUSDT \
+  --config config/app.yaml \
+  --train-days 7 \
+  --validate-hours 8 \
+  --method random \
+  --trials 150 \
+  --seed 42 \
+  --out artifacts/tuning/BTCUSDT/
+```
+
+### Advanced Options
+
+```bash
+# Grid search with custom time range
+python -m src.strategy.tuner --walk-forward \
+  --data ./data/research \
+  --symbol BTCUSDT \
+  --config config/app.yaml \
+  --train-days 14 \
+  --validate-hours 24 \
+  --method grid \
+  --density 5 \
+  --start 2024-01-01T00:00:00Z \
+  --end 2024-03-01T00:00:00Z \
+  --seed 123 \
+  --out artifacts/tuning/BTCUSDT_advanced/
+```
+
+### How It Works
+
+1. **Time Splits**: Data is automatically split into training and validation windows
+2. **Rolling Windows**: Training windows slide forward, creating multiple validation periods
+3. **Parameter Search**: Each training window uses random or grid search
+4. **Validation**: Best parameters are evaluated on out-of-sample validation data
+5. **Champion Selection**: Best overall performer across all splits is selected
+
+### Output Artifacts
+
+The tuning process generates several artifacts:
+
+- **`split_N_results.json`**: Results for each individual split
+- **`walkforward_summary.json`**: Overall summary and statistics
+- **`champion.json`**: Best performing parameter set
+- **`REPORT.md`**: Human-readable summary with tables and analysis
+
+### Determinism
+
+Set `--seed` for reproducible results:
+
+```bash
+# Same seed = same results
+python -m src.strategy.tuner --walk-forward --seed 42 ...
+python -m src.strategy.tuner --walk-forward --seed 42 ...  # Identical results
+```
+
+### Performance Metrics
+
+Each split evaluates parameters on:
+- **Net PnL**: Total profit/loss
+- **Sharpe Ratio**: Risk-adjusted returns
+- **Hit Rate**: Percentage of profitable trades
+- **Max Drawdown**: Largest peak-to-trough decline
+- **CVaR95**: Conditional Value at Risk at 95%
+
+### Determinism & Gates
+
+**Units Policy**: All JSON artifacts store metrics in base units (USD, rates as 0-1 fractions, time in ms). REPORT.md displays convenience units (%, bps) in headers only.
+
+**CVaR95 Definition**: Mean of the worst 5% PnL observations from validation runs. Stored as `cvar95_usd` (≤ 0 for loss-heavy left tail). Gates use absolute loss limits: pass if `abs(cvar95_usd) <= max_cvar_loss_usd`.
+
+**Exit Codes**: 
+- `0` = Success, all gates passed
+- `2` = Gate failure, strategy rejected
+- `1` = Internal/IO error
+
+**Skipped Splits**: Validation slices are skipped if they have fewer than `--min-fills` fills or duration shorter than `--min-val-minutes`. Skipped splits are excluded from aggregates but recorded in `report.json.skipped_splits` with reasons.
+
+**Reproducibility**: Same `--seed` produces identical `champion.json` and stable aggregated metrics in `report.json` (within `--round-dp` precision). Per-split seeding ensures independent but deterministic random streams.
+
+## Portfolio Allocator (L1/L2)
+
+The bot includes a sophisticated portfolio allocation system with multiple allocation modes and real-time rebalancing.
+
+### Configuration
+
+Add portfolio configuration to your `config.yaml`:
+
+```yaml
+portfolio:
+  budget_usd: 10000.0
+  mode: "inverse_vol"  # "manual" | "inverse_vol" | "risk_parity"
+  manual_weights: {}  # Only used in manual mode
+  min_weight: 0.02    # Minimum weight per symbol (2%)
+  max_weight: 0.5     # Maximum weight per symbol (50%)
+  rebalance_minutes: 5
+  ema_alpha: 0.3      # EMA smoothing coefficient
+  levels_per_side_min: 1
+  levels_per_side_max: 10
+```
+
+### Allocation Modes
+
+#### Manual Mode
+Fixed weights specified in configuration:
+```yaml
+portfolio:
+  mode: "manual"
+  manual_weights:
+    BTCUSDT: 0.6
+    ETHUSDT: 0.4
+```
+
+#### Inverse Volatility Mode
+Weights inversely proportional to volatility (higher vol → lower weight):
+```yaml
+portfolio:
+  mode: "inverse_vol"
+  min_weight: 0.05
+  max_weight: 0.4
+```
+
+#### Risk Parity Mode
+Equal risk contribution per symbol (w_i * vol_i ≈ constant):
+```yaml
+portfolio:
+  mode: "risk_parity"
+  min_weight: 0.1
+  max_weight: 0.3
+```
+
+### Preview CLI
+
+Test portfolio allocation before deployment:
+
+```bash
+# Inverse volatility mode
+python -m src.portfolio.preview --mode inverse_vol --budget-usd 10000
+
+# Risk parity mode with custom parameters
+python -m src.portfolio.preview --mode risk_parity --budget-usd 50000 --alpha 0.2
+
+# Manual mode with custom weight constraints
+python -m src.portfolio.preview --mode manual --min-weight 0.05 --max-weight 0.4
+```
+
+Example output:
+```
+Portfolio Allocation Preview
+Mode: inverse_vol
+Budget: $10,000
+EMA Alpha: 0.3
+Weight Range: 2.0% - 50.0%
+
+Symbol       Vol      Weight   Target USD  Max Levels
+--------------------------------------------------------
+BTCUSDT      0.0250   0.4000   $4,000      8
+ETHUSDT      0.0350   0.2857   $2,857      6
+SOLUSDT      0.0450   0.2222   $2,222      5
+ADAUSDT      0.0550   0.1818   $1,818      4
+DOTUSDT      0.0650   0.1538   $1,538      3
+--------------------------------------------------------
+TOTAL                1.0000   $12,435
+```
+
+### Metrics
+
+Portfolio metrics are exported to Prometheus:
+
+- **`portfolio_weight{symbol}`**: Current weight allocation
+- **`portfolio_target_usd{symbol}`**: Target USD allocation
+- **`portfolio_active_usd{symbol}`**: Active USD from open orders
+- **`allocator_last_update_ts`**: Last allocation update timestamp
+- **`vola_ewma{symbol}`**: EWMA volatility estimates
+
+### Portfolio allocator – invariants & observability
+
+- Weights invariants (all modes): sum(weights) == 1.0 (±1e-9), each weight clamped to [min_weight, max_weight]
+- Manual mode: input weights are normalized; new/missing symbols get min_weight (never 0)
+- Inverse-vol: uses 1/max(eps, vol) with eps=1e-9; missing vol falls back to last value or 1.0
+- Risk parity: iteratively equalizes risk contributions w_i*vol_i with div-by-zero guards
+- Targets: target_usd = max(0, w_i * budget_usd), max_levels >= 1; optional EMA smoothing without budget drift
+- EWMA volatility: updates only on valid ticks (mid>0) and monotonic timestamps; gauge vola_ewma{symbol} retains last valid value
+- OrderManager caps: enforce both max_levels per side and target_usd budget; partial fills reduce remaining budget and prevent overflow
+- Hot-reload: changes to portfolio mode/budget/min/max force immediate rebalance on the next scheduler tick
+- Metrics low-cardinality: only label {symbol}
+
+### Integration
+
+The portfolio allocator integrates with:
+
+1. **OrderManager**: Caps active levels by `max_levels` per symbol
+2. **VolatilityManager**: Tracks EWMA volatility for allocation decisions
+3. **Periodic Tasks**: Rebalances every `rebalance_minutes`
+4. **Risk Management**: Respects position and drawdown limits
+
+### Testing
+
+Run portfolio tests:
+
+```bash
+# All portfolio tests
+pytest -q tests -k "allocator or targets or enforce_caps"
+
+# Specific test categories
+pytest tests/test_allocator_manual.py
+pytest tests/test_allocator_inverse_vol.py
+pytest tests/test_allocator_risk_parity.py
+pytest tests/test_targets_levels.py
+pytest tests/test_enforce_caps.py
+```
+
+## Monitoring & Alerting
+
+### Prometheus Configuration
+
+The bot exports comprehensive metrics in Prometheus format. Configure Prometheus with:
+
+```yaml
+global:
+  external_labels:
+    service: "mm-bot"
+    env: "prod"  # Set your environment
+
+rule_files:
+  - "alerts/mm_bot.rules.yml"
+```
+
+**Important**: Do NOT use `${ENV:-prod}` in alert rules. Set environment via Prometheus `external_labels`.
+
+### Environment Configuration
+
+Use different config files per environment:
+
+```bash
+# Production
+cp monitoring/prometheus.yml /etc/prometheus/
+
+# Staging  
+cp monitoring/prometheus.staging.yml /etc/prometheus/
+```
+
+### Key Metrics
+
+- **Order Management**: `orders_active`, `creates_total`, `cancels_total`
+- **Performance**: `net_pnl`, `sharpe_ratio`, `hit_rate`
+- **Risk**: `risk_paused`, `drawdown_day`, `position_usd`
+- **Reliability**: `amend_attempts_total`, `reconcile_actions_total`, `circuit_breaker_state`
+
+### Alerts
+
+Critical alerts include:
+- **RiskPaused**: Bot paused by risk management
+- **CircuitBreakerOpen**: Circuit breaker is open
+- **HighLatencyREST**: REST API latency too high
+- **DrawdownDay**: Daily drawdown beyond limits
+
+Warning alerts include:
+- **RejectRateHigh**: High REST error rate
+- **CancelRateNearLimit**: Cancel rate approaching limits
+- **QueuePositionDegraded**: Queue position deteriorating
+
+### Alert Inhibition
+
+The system uses intelligent inhibition to reduce alert noise:
+- **Risk Paused** inhibits related warnings
+- **High Latency** inhibits error rate alerts
+- **Circuit Breaker** inhibits related failure alerts
+
+## Development
+
+### Testing
+
+```bash
+# Run all tests
+python -m pytest
+
+# Run specific test categories
+python -m pytest tests/test_order_manager.py
+python -m pytest tests/test_metrics_presence.py
+python -m pytest tests/test_walkforward_splits.py
+
+# Run with coverage
+python -m pytest --cov=src
+```
+
+### Code Quality
+
+```bash
+# Lint code
+python -m flake8 src/
+
+# Type checking
+python -m mypy src/
+
+# Format code
+python -m black src/
+```
+
+### Backtesting
+
+```bash
+# Run backtest
+python -m src.backtest.run \
+  --data ./data/research \
+  --symbol BTCUSDT \
+  --config config/app.yaml \
+  --start 2024-01-01T00:00:00Z \
+  --end 2024-01-31T23:59:59Z
+
+# Use synthetic data for faster testing
+python -m src.backtest.run \
+  --data ./data/research \
+  --symbol BTCUSDT \
+  --config config/app.yaml \
+  --synthetic
+```
+
+## Architecture
+
+### Core Components
+
+- **OrderManager**: Handles order lifecycle and replacement logic
+- **RiskManager**: Monitors positions and triggers risk controls
+- **Metrics**: Prometheus metrics collection and export
+- **Connectors**: Exchange API integration (Bybit, etc.)
+- **Strategy**: Market making strategy implementation
+
+### Data Flow
+
+1. **Market Data** → OrderBook Aggregator
+2. **Strategy** → Order Manager
+3. **Order Manager** → Exchange Connector
+4. **Fills** → PnL Attribution
+5. **Metrics** → Prometheus Export
+
+### Configuration
+
+The bot uses a hierarchical configuration system:
+- **AppConfig**: Main application configuration
+- **StrategyConfig**: Strategy-specific parameters
+- **TradingConfig**: Trading and fee configuration
+- **RiskConfig**: Risk management settings
+- **LimitsConfig**: Position and order limits
+
+## Deployment
+
+### Docker
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+CMD ["python", "-m", "src.main", "--config", "config/app.yaml"]
+```
+
+### Kubernetes
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mm-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mm-bot
+  template:
+    metadata:
+      labels:
+        app: mm-bot
+    spec:
+      containers:
+      - name: mm-bot
+        image: mm-bot:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: CONFIG_PATH
+          value: "/app/config/app.yaml"
+```
+
+### Environment Variables
+
+- `CONFIG_PATH`: Path to configuration file
+- `LOG_LEVEL`: Logging level (DEBUG, INFO, WARNING, ERROR)
+- `METRICS_PORT`: Port for metrics endpoint (default: 8080)
+- `HEALTH_PORT`: Port for health endpoint (default: 8080)
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Orders not being placed**: Check risk management settings and position limits
+2. **High error rates**: Verify exchange API credentials and rate limits
+3. **Poor performance**: Review strategy parameters and market conditions
+4. **Alerts not firing**: Check Prometheus configuration and rule files
+
+### Debug Mode
+
+Enable debug logging:
+
+```bash
+export LOG_LEVEL=DEBUG
+python -m src.main --config config/app.yaml
+```
+
+### Health Checks
+
+Monitor bot health:
+
+```bash
+# Check overall health
+curl http://localhost:8080/healthz
+
+# Check specific components
+curl http://localhost:8080/healthz/orders
+curl http://localhost:8080/healthz/risk
+curl http://localhost:8080/healthz/connectors
+```
+
+## Walk-forward Tuning
+
+The bot includes a sophisticated walk-forward tuning system for strategy parameter optimization.
+
+### Basic Usage
+
+```bash
+# Enable walk-forward tuning with random search
+python -m src.strategy.tuner --walk-forward \
+  --data ./data \
+  --symbol BTCUSDT \
+  --train-days 7 \
+  --validate-hours 24 \
+  --method random \
+  --trials 100 \
+  --seed 42
+```
+
+### Advanced Options
+
+```bash
+# Grid search with custom step size
+python -m src.strategy.tuner --walk-forward \
+  --data ./data \
+  --symbol BTCUSDT \
+  --train-days 14 \
+  --validate-hours 48 \
+  --step-hours 24 \
+  --method grid \
+  --trials 200 \
+  --seed 123
+
+# With custom gates and CVaR penalty
+python -m src.strategy.tuner --walk-forward \
+  --data ./data \
+  --symbol BTCUSDT \
+  --train-days 7 \
+  --validate-hours 24 \
+  --method random \
+  --trials 150 \
+  --lambda-cvar 0.2 \
+  --gate-min-hit 0.6 \
+  --gate-min-maker 0.7 \
+  --gate-max-cvar 1000 \
+  --gate-min-pnl 200 \
+  --seed 42
+```
+
+### How It Works
+
+1. **Time Splits**: Data is automatically split into training and validation windows
+2. **Rolling Windows**: Training windows slide forward, creating multiple validation periods
+3. **Step Control**: `--step-hours` controls the advancement between splits (defaults to `--validate-hours`)
+4. **Parameter Search**: For each split, optimize parameters using the specified method (random/grid)
+5. **Objective Function**: Maximize `avg(NetPnL) - λ*CVaR95` across all splits
+6. **Gates**: Champion must pass minimum thresholds for hit rate, maker share, CVaR95, and NetPnL
+7. **Deterministic**: Same `--seed` produces identical split sequences, parameters, and artifacts
+8. **Flexible**: Configurable train/validate window sizes, step sizes, and gate thresholds
+
+### Output
+
+The tuner generates:
+- `artifacts/tuning/<symbol>/split_<i>_best.json`: Individual split results with best parameters and metrics
+- `artifacts/tuning/<symbol>/champion.json`: Best overall parameters and aggregated metrics
+- `artifacts/tuning/<symbol>/REPORT.md`: Human-readable summary with:
+  - Time windows table for all splits
+  - Champion parameters and metrics
+  - Gates & Validation section with pass/fail status
+- Logs showing split processing, parameter search, and gate validation progress
+
+### Metadata & Reproducibility
+
+Each artifact includes:
+- **`git_sha`**: Git commit hash for code version tracking
+- **`cfg_hash`**: Sanitized configuration hash (excludes secrets)
+- **`seed`**: Random seed used for reproducible results
+- **`time_bounds`**: UTC ISO8601 timestamps with 'Z' suffix for all windows
+
+**Determinism**: The `--seed` parameter seeds both Python's `random` and `numpy.random` (if available), ensuring identical results across runs with the same seed.
+
+### Gates & Validation
+
+The tuner implements fail-fast gates to ensure only robust strategies are selected:
+
+- **Hit Rate Gate**: Minimum hit rate threshold (default: 0.6)
+- **Maker Share Gate**: Minimum maker share threshold (default: 0.7)  
+- **CVaR95 Gate**: Maximum CVaR95 threshold (default: 1000, interpreted as -1000)
+- **NetPnL Gate**: Minimum NetPnL threshold (default: 100)
+
+**CVaR95 Explanation**: CVaR95 represents negative PnL at 95% confidence level. Gate is 'not worse than -X' → pass if CVaR95 >= -X.
+
+If any gate fails, the process exits with code 1 and reports specific failure reasons. This prevents deployment of weak strategies.
+
+### Reading REPORT.md
+
+The `REPORT.md` file provides a comprehensive view of the tuning results:
+
+1. **Header**: Git SHA, config hash, seed, and total splits count
+2. **Time Windows Table**: All train/validate splits with UTC timestamps
+3. **Champion Parameters**: Best parameter set in JSON format
+4. **Champion Metrics**: Aggregated metrics across all splits
+5. **Gates & Validation**: Pass/fail status and threshold values
+
+**Example Output**:
+```
+✅ All gates passed!
+- Hit Rate: 0.652 >= 0.6 ✓
+- Maker Share: 0.596 >= 0.7 ✗ (FAILED)
+- CVaR95: -788.3 >= -1000 ✓  
+- NetPnL: 948.7 >= 100 ✓
+```
+
+This format makes it easy to quickly assess strategy quality and identify areas for improvement.
+
+## Calibration
+
+The bot supports calibration of queue simulation parameters for more realistic backtesting. This helps bridge the gap between idealized simulations and real trading conditions.
+
+### Calibration Parameters
+
+Create a calibration JSON file with the following parameters:
+
+```json
+{
+  "latency_ms_mean": 15.0,
+  "latency_ms_std": 5.0,
+  "amend_latency_ms": 10.0,
+  "cancel_latency_ms": 8.0,
+  "toxic_sweep_prob": 0.02,
+  "extra_slippage_bps": 0.5
+}
+```
+
+**Parameter Descriptions:**
+- **`latency_ms_mean`**: Average order placement latency in milliseconds
+- **`latency_ms_std`**: Standard deviation of placement latency (creates realistic variation)
+- **`amend_latency_ms`**: Latency for order amendments (future use)
+- **`cancel_latency_ms`**: Latency for order cancellations (future use)
+- **`toxic_sweep_prob`**: Probability (0-1) of being caught in toxic sweeps (becomes taker instead of maker)
+- **`extra_slippage_bps`**: Additional slippage in basis points due to market impact
+
+### Using Calibration
+
+Run backtests with calibration parameters:
+
+```bash
+# Basic backtest with calibration
+python -m src.backtest.run \
+  --data ./data \
+  --symbol BTCUSDT \
+  --calibration calibration.json \
+  --out results.json
+
+# Walk-forward tuning with calibration
+python -m src.strategy.tuner --walk-forward \
+  --data ./data \
+  --symbol BTCUSDT \
+  --train-days 7 \
+  --validate-hours 24 \
+  --method random \
+  --trials 100 \
+  --calibration calibration.json
+```
+
+### Live Summaries
+
+The system automatically generates hourly summaries for calibration analysis:
+
+**Summary Location:** `data/research/summaries/<symbol>/<symbol>_YYYY-mm-dd_HH.json`
+
+**Summary Schema:**
+```json
+{
+  "symbol": "BTCUSDT",
+  "hour_utc": "2025-08-25T14:00:00Z",
+  "counts": {"orders": 1250, "quotes": 3200, "fills": 890},
+  "hit_rate_by_bin": {
+    "5": {"count": 180, "fills": 95},
+    "10": {"count": 320, "fills": 205}
+  },
+  "queue_wait_cdf_ms": [
+    {"p": 0.5, "v": 210.0},
+    {"p": 0.9, "v": 480.0}
+  ],
+  "metadata": {"git_sha": "abc123", "cfg_hash": "def456"}
+}
+```
+
+### Calibration Strategy
+
+1. **Collect Live Data**: Run the bot with recording enabled to generate summaries
+2. **Analyze Patterns**: Examine hit rates by price bins and queue wait distributions
+3. **Extract Parameters**: Convert observed patterns into calibration parameters
+4. **Validate**: Run backtests with and without calibration to measure impact
+5. **Iterate**: Refine parameters based on backtest vs live performance comparison
+
+The calibration system helps ensure that backtested results are representative of real trading conditions.
+
+## Summaries: Versioning & Retention
+
+The bot generates versioned hourly summary files with enhanced reliability and retention management.
+
+### Schema Version E1.0
+
+All hourly summaries include versioning and configuration metadata:
+
+```json
+{
+  "schema_version": "e1.0",
+  "generated_at_utc": "2025-01-15T14:30:45Z",
+  "window_utc": {
+    "hour_start": "2025-01-15T14:00:00Z", 
+    "hour_end": "2025-01-15T15:00:00Z"
+  },
+  "bins_max_bps": 50,
+  "percentiles_used": [0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99],
+  "symbol": "BTCUSDT",
+  "hour_utc": "2025-01-15T14:00:00Z",
+  "counts": {"orders": 45, "quotes": 123, "fills": 38},
+  "hit_rate_by_bin": {"5": {"count": 50, "fills": 12}},
+  "queue_wait_cdf_ms": [{"p": 0.5, "v": 125.3}, {"p": 0.95, "v": 280.1}],
+  "metadata": {"git_sha": "abc123", "cfg_hash": "def456"}
+}
+```
+
+### Idempotency Options
+
+Control how duplicate hour writes are handled:
+
+```python
+# Overwrite existing files (default)
+recorder = ResearchRecorder(
+    config,
+    overwrite_existing_hour=True
+)
+
+# Merge bin counts, keep latest CDF
+recorder = ResearchRecorder(
+    config,
+    overwrite_existing_hour=False,
+    merge_strategy="sum_bins"
+)
+
+# Skip existing hours completely
+recorder = ResearchRecorder(
+    config,
+    overwrite_existing_hour=False,
+    merge_strategy=None
+)
+```
+
+### Retention Management
+
+Automatic file rotation prevents disk space issues:
+
+```python
+# Keep files for 14 days
+recorder = ResearchRecorder(
+    config,
+    retention_days=14
+)
+
+# Keep only last 100 files per symbol
+recorder = ResearchRecorder(
+    config,
+    keep_last=100
+)
+
+# Combined: respect both TTL and count limits
+recorder = ResearchRecorder(
+    config,
+    retention_days=30,
+    keep_last=500  # keep_last takes priority
+)
+```
+
+### Atomic Writes
+
+All files are written atomically to prevent corruption:
+
+- Temporary files use format: `{filename}.tmp.{pid}.{hex}`
+- Write → fsync → atomic replace ensures consistency
+- Failed writes are automatically cleaned up
+- No partial files remain after crashes
+
+### UTC Time Guarantee
+
+All timestamps and filenames use UTC regardless of local timezone:
+
+- Filenames: `SYMBOL_YYYY-mm-dd_HH.json` (HH = UTC hour)
+- `window_utc` boundaries are always UTC
+- `generated_at_utc` has Z suffix indicating UTC
+- Works consistently across different deployment timezones
+
+## Summaries Schema Upgrades & Validation
+
+The bot supports automatic schema migrations and comprehensive validation for research summaries.
+
+### Schema Version Policy
+
+All hourly summaries include a `schema_version` field following the pattern `e1.x`:
+
+- **e1.0**: Initial schema with basic fields
+- **e1.1**: Enhanced schema with `bins_max_bps`, `percentiles_used`, `window_utc`
+
+### Automatic Upgrades
+
+The system automatically upgrades older schemas when loading:
+
+```python
+from src.storage.validators import upgrade_summary, validate_summary_payload
+
+# Load and upgrade any e1.x summary
+upgraded = upgrade_summary(old_summary)
+
+# Validate structure and data integrity  
+is_valid, errors = validate_summary_payload(summary)
+```
+
+### Validation Features
+
+The validator checks:
+
+- **Required fields**: All mandatory top-level keys present
+- **Data types**: Correct types for all values (integers, floats, strings)
+- **Logical constraints**: fills ≤ counts, CDF monotonicity, valid UTC timestamps
+- **Range validation**: Price bins within `[0, bins_max_bps]`, percentiles in `[0, 1]`
+- **Schema compliance**: Valid `e1.x` version format
+
+## Concurrency & Atomicity
+
+Advanced file locking and atomic writes prevent data corruption in multi-instance deployments.
+
+### Lock Modes
+
+Configure concurrent access protection:
+
+```python
+recorder = ResearchRecorder(
+    config,
+    lock_mode="lockfile"  # Options: "none", "lockfile", "o_excl"
+)
+```
+
+**Lock Strategies:**
+
+- **`lockfile`**: Creates `.lock` files for exclusive access (default)
+- **`o_excl`**: Uses `O_EXCL` flag for atomic temporary file creation
+- **`none`**: No locking (for single-instance deployments)
+
+### Atomic Writes
+
+All summary files use atomic write operations:
+
+1. **Temporary file**: Write to `.tmp.{pid}.{hex}` file
+2. **Validation**: Verify data integrity before commit
+3. **Fsync**: Force data to disk
+4. **Atomic replace**: Use `os.replace()` for POSIX/NTFS atomicity
+5. **Cleanup**: Remove temporary artifacts on success/failure
+
+### Idempotency Strategies
+
+Control duplicate hour handling:
+
+```python
+# Overwrite existing files (default)
+recorder = ResearchRecorder(config, overwrite_existing_hour=True)
+
+# Merge bin counts, keep latest CDF
+recorder = ResearchRecorder(
+    config,
+    overwrite_existing_hour=False,
+    merge_strategy="sum_bins"
+)
+
+# Skip existing hours completely
+recorder = ResearchRecorder(
+    config,
+    overwrite_existing_hour=False,
+    merge_strategy=None
+)
+```
+
+## Calibration Preflight
+
+Ensure data readiness before running calibration analysis.
+
+### Usage
+
+```bash
+# Basic preflight check
+python -m src.research.calibrate \
+  --symbol BTCUSDT \
+  --from-utc 2025-01-15T00:00:00Z \
+  --to-utc 2025-01-16T00:00:00Z \
+  --preflight-only
+
+# Custom thresholds
+python -m src.research.calibrate \
+  --symbol BTCUSDT \
+  --from-utc 2025-01-15T00:00:00Z \
+  --to-utc 2025-01-16T00:00:00Z \
+  --min-files 20 \
+  --min-total-count 500 \
+  --preflight-only
+```
+
+### Requirements
+
+Default thresholds (configurable):
+
+- **min-files**: 18 valid summary files
+- **min-total-count**: 100 total activity events (orders + quotes + fills)
+- **Zero invalid files**: All files must pass schema validation
+
+### Common Issues
+
+**❌ Insufficient files**: Not enough hourly summaries
+- *Solution*: Run recorder longer or reduce `--min-files`
+
+**❌ Low activity**: Total events below threshold  
+- *Solution*: Increase trading activity or reduce `--min-total-count`
+
+**❌ Missing hours**: Gaps in coverage
+- *Solution*: Check recorder uptime, extend time window
+
+**❌ Invalid files**: Corrupted or malformed summaries
+- *Solution*: Check logs, remove corrupted files, re-run recorder
+
+### Exit Codes
+
+- **0**: Ready for calibration
+- **1**: Insufficient data or validation errors
+
+## Calibration – Core (E2/Part1)
+
+Advanced calibration engine for analyzing LIVE trading data and computing loss functions against simulated distributions.
+
+### LIVE Distributions
+
+The system builds statistical distributions from hourly summary files:
+
+**Queue Wait CDF**: Cumulative distribution of order queue wait times
+```json
+{
+  "queue_wait_cdf_ms": [
+    {"p": 0.25, "v": 100.5},
+    {"p": 0.50, "v": 145.2},
+    {"p": 0.90, "v": 285.7}
+  ]
+}
+```
+
+**Hit Rate by Price Bins**: Order hit rates segmented by distance from mid price  
+```json
+{
+  "hit_rate_by_bin": {
+    "0":  {"count": 150, "fills": 45},  // 0-1 bps from mid
+    "5":  {"count": 120, "fills": 28},  // 5-6 bps from mid  
+    "15": {"count": 90,  "fills": 12}   // 15-16 bps from mid
+  }
+}
+```
+
+### Loss Functions
+
+**Kolmogorov-Smirnov Distance**: Measures distribution differences
+- `KS_queue`: CDF difference between LIVE and SIM queue wait times
+- `KS_bins`: Distribution difference across price bins
+
+**Hit Rate Metrics**: Direct performance comparisons
+- `L_hit`: Absolute difference in overall hit rates |live_hit - sim_hit|
+- `L_maker`: Absolute difference in maker shares |live_maker - sim_maker|
+
+**Regularization**: L2 penalty for parameter drift from baseline
+- `L_reg`: Weighted sum of squared parameter deviations
+
+### Usage
+
+#### Basic LIVE Analysis
+```bash
+python -m src.research.calibrate \
+  --symbol BTCUSDT \
+  --from-utc 2025-01-15T00:00:00Z \
+  --to-utc 2025-01-16T00:00:00Z \
+  --out artifacts/calibration/BTCUSDT/
+```
+
+#### Custom Configuration
+```bash
+python -m src.research.calibrate \
+  --symbol ETHUSDT \
+  --bins-max-bps 30 \
+  --percentiles "0.1,0.25,0.5,0.75,0.9,0.95,0.99" \
+  --round-dp 4 \
+  --seed 42
+```
+
+#### With SIM Fixture (Loss Analysis)
+```bash
+# Place SIM distributions at artifacts/calibration/SYMBOL/sim_fixture.json
+# CLI will automatically compute loss if fixture exists
+
+python -m src.research.calibrate \
+  --symbol BTCUSDT \
+  --out artifacts/calibration/BTCUSDT/
+```
+
+### Output Files
+
+**live_distributions.json**: Aggregated LIVE data
+- CDF percentiles and bin hit rates  
+- Overall hit rate and maker share
+- Deterministic, sorted, rounded to specified precision
+
+**report_core.json**: Complete analysis (when SIM fixture present)
+- LIVE and SIM distributions
+- Loss component breakdown
+- Metadata and configuration
+
+**REPORT_core.md**: Human-readable report
+- Distribution tables with percentages
+- Loss analysis (if applicable)  
+- Configuration details
+
+### Data Flow
+
+1. **Load**: Scan hourly summaries in time window
+2. **Aggregate**: Combine queue waits and bin data across hours
+3. **Distribute**: Build CDF and hit rate distributions  
+4. **Compare**: Calculate KS distances and hit rate differences (if SIM present)
+5. **Output**: Save JSON (deterministic) and Markdown (readable)
+
+### Units Policy
+
+**JSON (Base Units)**:
+- Wait times: milliseconds (ms)
+- Hit rates: fractions (0.0 - 1.0) 
+- Price bins: basis points (integer)
+
+**Markdown (Display Units)**:
+- Hit rates: percentages (25.3%)
+- Wait times: milliseconds with precision
+
+### Determinism
+
+- Fixed random seed ensures reproducible results
+- JSON keys sorted alphabetically  
+- Float values rounded to specified precision
+- Consistent bin ordering (0 to max_bps)
+
+### KS Distance Normalization
+
+**KS distances are normalized to [0,1]** for consistent comparison across different data scales:
+
+- **CDF KS**: Uses live IQR (q0.9–q0.1) as scale. Formula: `max_p |q_live(p) - q_sim(p)| / max(ε, live_IQR)`
+- **Bins KS**: Hit rates are already in [0,1], so max difference is naturally bounded
+
+**Units Policy**:
+- **JSON (Base Units)**: queue-wait in ms (JSON), hit rates as fractions [0,1], bins in bps
+- **Markdown (Display Units)**: hit rates shown as %; queue-wait in ms with precision
+
+## Go/No-Go Checks (E2 Pre-F1)
+
+Before proceeding to F1, E2 calibration generates **Go/No-Go checks** to validate the optimization results and ensure readiness for production deployment.
+
+### Checks Performed
+
+**KS Normalization**: All KS distances are clamped to [0,1] range
+- `ks_queue_after`, `ks_bins_after` ∈ [0,1]
+- Values >1 are clamped to 1.0, values <0 are clamped to 0.0
+
+**Effective w4**: Adjusts L_maker weight when live_maker data is missing
+- `w4_effective = 0.0` if `live_maker is None`
+- Ensures TotalLoss calculation excludes invalid maker share contribution
+
+**Sim-Live Divergence**: Measures overall distribution alignment
+- `sim_live_divergence = 0.5 * (ks_queue_after + ks_bins_after)`
+- Single metric combining queue and hit rate differences
+- Lower values indicate better calibration quality
+
+**Loss Regression Check**: Detects optimization failures
+- `loss_regressed = (TotalLoss_after > TotalLoss_before + ε)`
+- Uses epsilon (1e-12) to handle floating point precision
+- Prints warning if regression detected (does not affect exit code)
+
+### Output Integration
+
+**report.json**: Contains `go_no_go` block with all metrics:
+```json
+{
+  "go_no_go": {
+    "ks_queue_after": 0.234,
+    "ks_bins_after": 0.156,
+    "w4_effective": 0.0,
+    "sim_live_divergence": 0.195,
+    "loss_before": 0.425,
+    "loss_after": 0.389,
+    "loss_regressed": false
+  }
+}
+```
+
+**REPORT.md**: Human-readable Go/No-Go section:
+```markdown
+## Go/No-Go
+KS (after): queue=0.234, bins=0.156
+sim_live_divergence: 0.195
+w4_effective: 0.0
+loss_before → loss_after: 0.425 → 0.389 (OK)
+```
+
+### Determinism
+
+- **Repeated runs** with same `--seed` produce identical `go_no_go` metrics
+- All values rounded to `--round-dp` precision for consistency
+- Boolean flags (`loss_regressed`) are deterministic based on numerical comparison
+
+### Pre-F1 Usage
+
+Use `sim_live_divergence` as key gate metric:
+- Values closer to 0.0 indicate better calibration
+- Consider maximum acceptable divergence threshold for F1 proceed/no-go decision
+- Monitor `loss_regressed` flag for optimization quality assurance
+
+### Go/No-Go & F1 Integration
+
+**Reading go_no_go from report.json**:
+```python
+import json
+
+# Load E2 calibration report
+with open("artifacts/calibration/BTCUSDT/report.json") as f:
+    report = json.load(f)
+
+go_no_go = report["go_no_go"]
+print(f"Divergence: {go_no_go['sim_live_divergence']:.3f}")
+print(f"w4 effective: {go_no_go['w4_effective']}")
+print(f"Loss improved: {not go_no_go['loss_regressed']}")
+```
+
+**F1 Gate Integration**:
+```python
+# F1 deployment gates
+if go_no_go["sim_live_divergence"] > 0.15:
+    print("REJECT: High sim-live divergence")
+elif go_no_go["loss_regressed"]:
+    print("WARNING: Optimization regressed")
+else:
+    print("PROCEED: Ready for F1 deployment")
+```
+
+**Key Fields Explanation**:
+
+- `sim_live_divergence`: Combined metric (0.0-1.0) measuring distribution alignment
+  - Formula: `0.5 * (ks_queue_after + ks_bins_after)`
+  - Lower values = better calibration quality
+- `w4_effective`: Actual L_maker weight used in optimization
+  - `0.0` when `live_maker` data unavailable
+  - Original weight when `live_maker` present
+- `loss_before/after`: Optimization improvement tracking
+- `loss_regressed`: Boolean flag for optimization quality check
+
+**Example go_no_go Block**:
+```json
+{
+  "go_no_go": {
+    "ks_queue_after": 0.234,
+    "ks_bins_after": 0.156,
+    "w4_effective": 0.0,
+    "sim_live_divergence": 0.195,
+    "loss_before": 0.425,
+    "loss_after": 0.389,
+    "loss_regressed": false
+  }
+}
+```
+
+**Finish Checklist Validation**:
+```bash
+# Validate E2 completion
+python -m src.research.calibrate --finish-check-only --out artifacts/calibration/BTCUSDT
+# Output: "E2 finish: OK" (exit 0) or detailed errors (exit 2)
+```
+
+### Repro & Audit
+
+**params_hash**: SHA256 hash of sorted `calibration.json` content for deterministic parameter tracking:
+```python
+import json, hashlib
+
+# Load calibration parameters
+with open("artifacts/calibration/BTCUSDT/calibration.json") as f:
+    params = json.load(f)
+
+# Compute same hash as system
+params_bytes = json.dumps(params, sort_keys=True, separators=(",", ":")).encode("utf-8")
+params_hash = hashlib.sha256(params_bytes).hexdigest()
+print(f"params_hash: {params_hash}")
+```
+
+**Audit Metadata**: report.json.metadata includes required fields for audit trails:
+- `method`: Search method used (random, grid)
+- `trials`: Total trials configured
+- `workers`: Parallel workers used  
+- `seed`: Random seed for reproducibility
+
+**Repro Command**: REPORT.md contains exact CLI command to reproduce results:
+```markdown
+**Repro**: `python -m src.research.calibrate --symbol BTCUSDT --summaries-dir data/research/summaries --from-utc 2024-01-01T00:00:00.000Z --to-utc 2024-01-02T00:00:00.000Z --method random --trials 60 --workers 2 --seed 42 --bins-max-bps 50 --percentiles "0.1,0.25,0.5,0.75,0.9,0.95,0.99" --weights 1.0 1.0 0.5 0.25 --reg-l2 0.01 --round-dp 6 --out artifacts/calibration/BTCUSDT`
+```
+
+Copy this command to reproduce identical results (same calibration.json and params_hash).
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests for new functionality
+5. Ensure all tests pass
+6. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Support
+
+## F2 Smoke Testing
+
+End-to-end smoke tests for F2 canary deployment scenarios using mock HTTP server with no external dependencies. Tests both **healthy→promote** and **degraded→rollback** flows locally.
+
+### Quick Commands
+
+```bash
+# Test canary→promote scenario (30 seconds)
+make smoke-f2-promote
+
+# Test canary→rollback scenario (30 seconds)  
+make smoke-f2-rollback
+```
+
+### Mock Server Details
+
+The smoke test creates a localhost HTTP server with these endpoints:
+
+- `GET /metrics` - Prometheus-style metrics (text format)
+- `GET /admin/snapshot` - Configuration snapshot
+- `POST /admin/reload` - Configuration reload (accepts patch JSON)
+- `POST /admin/rollback` - Configuration rollback to baseline
+- `POST /admin/force_snapshot` - Force snapshot operation
+
+### Metrics Simulation
+
+**Promote Scenario**: Stable, healthy metrics throughout canary period
+```
+cancel_rate_per_sec: 1.0          # Low, within bounds
+rest_error_rate: 0.001            # Very low error rate  
+net_pnl_total_usd: 100.0 → 130.0  # Growing PnL (+1.0/tick)
+hit_rate_proxy: 0.25              # Stable hit rate
+```
+
+**Rollback Scenario**: Metrics degrade after initial period, triggering auto-rollback
+```
+# Initial 3 ticks (9 seconds): Slight decline
+cancel_rate_per_sec: 2.0
+rest_error_rate: 0.005
+net_pnl_total_usd: 100.0 → 98.5
+
+# After tick 3: Trigger thresholds  
+cancel_rate_per_sec: 999.0        # >> cfg_max_cancel_per_sec (100.0)
+rest_error_rate: 0.02             # High error rate
+net_pnl_total_usd: declining       # Negative PnL slope (-2.0/tick)
+```
+
+### Expected Results
+
+```bash
+# Promote scenario
+$ make smoke-f2-promote
+[SMOKE F2] Starting promote scenario for SMOKE
+[TICK  1] PnL:  101.0, cancel_rate:    1.0, error_rate:  0.001
+[TICK  2] PnL:  102.0, cancel_rate:    1.0, error_rate:  0.001
+...
+[SMOKE F2] Final metrics: cancel_rate=1.0, error_rate=0.001, pnl=130.0
+[SMOKE F2] Simulated outcome: promoted
+SMOKE F2 (promote): PASS
+
+# Rollback scenario
+$ make smoke-f2-rollback  
+[SMOKE F2] Starting rollback scenario for SMOKE
+[TICK  1] PnL:   99.5, cancel_rate:    2.0, error_rate:  0.005
+[TICK  2] PnL:   99.0, cancel_rate:    2.0, error_rate:  0.005
+[TICK  3] PnL:   98.5, cancel_rate:    2.0, error_rate:  0.005
+[TICK  4] PnL:   96.5, cancel_rate:  999.0, error_rate:  0.020
+...
+[SMOKE F2] Final metrics: cancel_rate=999.0, error_rate=0.020, pnl=94.5
+[SMOKE F2] Simulated outcome: rolled_back
+SMOKE F2 (rollback): PASS
+```
+
+### Implementation Notes
+
+- **Pure stdlib**: Uses only `http.server`, `threading`, `json` - no external dependencies
+- **ASCII logs only**: Windows-safe output, no emojis or special characters
+- **Auto-fixtures**: Creates minimal D2/E2 reports in `artifacts/{tuning,calibration}/SMOKE/`
+- **Mock bot state**: Simulates realistic metrics evolution for both scenarios
+- **Background ticker**: Updates metrics every 3 seconds to simulate live monitoring
+
+The smoke tests validate F2 deployment logic end-to-end without requiring a real bot or external services.
+
+---
+
+For questions and support:
+- Create an issue on GitHub
+- Check the documentation
+- Review the monitoring and alerting setup
+- Test with walk-forward tuning for parameter optimization
+
+## F3.6b — Fixed-point averages for determinism
+
+Перевод внутренних усреднений Shadow и промежуточных процентов Allocator на фикс-пойнт (целые bps/permille) с целочисленным усреднением.
+
+### Зачем
+
+- **Shadow агрегатор**: устраняет накопление ошибок округления в `avg_price_diff_bps` и `avg_size_diff_pct`
+- **Allocator**: детерминированные промежуточные вычисления drawdown/soft-factor без дрифта
+- **Внешний API**: метрики и поведение сохраняются (допуск ≤1e-6)
+
+### Что именно стало целочисленным
+
+#### Shadow агрегатор (`src/metrics/exporter.py`)
+```python
+# Было: float накопления
+self._shadow_sum_price_bps: Dict[str, float] = {}
+self._shadow_sum_size_pct: Dict[str, float] = {}
+
+# Стало: int фикс-пойнт
+self._shadow_sum_price_bps_i: Dict[str, int] = {}      # bps как int
+self._shadow_sum_size_permille_i: Dict[str, int] = {}  # pct*10 как int
+```
+
+- `record_shadow_sample(price_diff_bps: float, size_diff_pct: float)`:
+  - `bps_i = int(price_diff_bps)` (округление к 0)
+  - `perml_i = int(size_diff_pct * 10.0)` (permille = pct * 10)
+- Усреднение: `avg = sum_i // count` (целочисленное деление)
+- Экспорт: `avg_size_diff_pct = avg_permille / 10.0`
+
+#### Allocator (`src/portfolio/allocator.py`)
+```python
+# Промежуточные проценты в фикс-пойнте
+drawdown_bps = int(drawdown_pct * 10000.0)           # 0..10000
+soft_cap_bps = int(soft_cap * 10000.0)              # 0..10000  
+pnl_sens_permille = int(pnl_sensitivity * 1000.0)   # 0..1000
+
+# Вычисления без потери точности
+x_permille = min(1000, (drawdown_bps * 1000) // soft_cap_bps)
+soft_permille = 1000 - ((pnl_sens_permille * x_permille) // 1000)
+```
+
+### Детерминизм
+
+- **Shadow**: повторные прогоны дают бит-идентичные `avg_*` значения
+- **Allocator**: финальные `targets` совпадают в допуске ±1e-6, все гарантии (сумма/кламп/min_guard) сохранены
+- **Порядок**: лексикографическая сортировка символов для детерминированного клампа
+
+### Метрики
+
+Внешние имена не изменились:
+- `shadow_price_diff_bps_avg` — детерминированное усреднение через int
+- `shadow_size_diff_pct_avg` — детерминированное усреднение через permille
+- `allocator_soft_factor` — детерминированный soft-factor через permille
+
+### E2.6 — Latency SLO & error budget
+
+Онлайн-контроль SLO по хвостовым задержкам per-color (p95/p99) с расчётом burn-rate и остатка бюджета.
+
+- Конфиг `latency_slo` в AppConfig:
+  - `enabled: bool`
+  - `p95_target_ms: int`, `p99_target_ms: int`
+  - `window_sec: int`
+  - `burn_alert_threshold: float` — порог burn-rate для алерта
+- Метрики:
+  - `latency_slo_burn_rate{color,percentile}`
+  - `latency_slo_budget_remaining{color,percentile}`
+  - `latency_slo_alerts_total{percentile}`
+- Фоновая петля `_latency_slo_loop()` (шаг 50мс) собирает p95/p99 из существующих гистограмм и обновляет метрики; при превышении порога пишет в `alerts.log` событие `{ "kind": "latency_slo_breach", ... }`.
+- Canary payload включает блок:
+  ```json
+  "slo": {
+    "p95": {"blue": {"burn_rate":0.0,"budget":0.0}, "green": {...}},
+    "p99": {"blue": {...}, "green": {...}}
+  }
+  ```
+
+### E2.7 — Orders/Fills recorder & replay
+## CI perf guardrails (E3.2)
+
+Быстрый регресс-детектор производительности в CI на базе `/admin/perf/snapshot`.
+
+- Бейзлайн: `tests/ci/perf_baseline.json` (детерминированный JSON для fast-mode)
+- Тест: `tests/ci/test_perf_guardrails.py`
+- Fast-mode ENV для CI:
+  - `CANARY_EXPORT_INTERVAL_SEC=1`
+  - `PRUNE_INTERVAL_SEC=2`
+  - `ROLLOUT_STEP_INTERVAL_SEC=1`
+
+Семантика:
+- Сравниваются `loop_tick_p95_ms{ramp,export,prune,slo}` — не хуже бейзлайна более чем на 25%
+- По admin-гистограмме вычисляется медиана; допускается деградация не более 25%
+
+Обновление бейзлайна:
+1) Запустить fast-mode локально
+2) Снять `/admin/perf/snapshot`
+3) Обновить `tests/ci/perf_baseline.json` детерминированным JSON (ключи отсортированы)
+
+Offline recorder JSONL и детерминированный реплей без внешних зависимостей.
+
+- ENV: `EXEC_RECORDER_ENABLED=1` включает запись.
+- Путь: `artifacts/exe_YYYYmmdd.jsonl`.
+- События (по одной JSON-строке, ASCII):
+  - `{"ts", "kind":"order|fill|reject", "symbol", "side", "price", "qty", "cid", "color"}`
+- Интеграция: записи происходят при submit/успехе/отказе ордера (учитывается rollout color и chaos‑хуки только в метриках, не в логике записи).
+- Запись: одна строка на событие, `flush+fsync(file)`, best‑effort `fsync(dir)`.
+
+Админка (детерминированные JSON):
+- `GET /admin/execution/recorder/status` → `{enabled,last_write_ts,file}`
+- `POST /admin/execution/recorder/rotate` → `{ok,file}`
+- `POST /admin/execution/replay {"path":"...jsonl", "speed":"1x|10x|max"}`
+  - Лимиты: ASCII, размер ≤ 1MB
+  - Поведение: `fill` → `inc_rollout_fill(color,0)`; `reject` → `inc_rollout_reject(color)`; `order` игнорируется
+  - Ответ: `{events_total,fills,rejects,by_symbol:{SYM:{fills,rejects}}}`
+
+Метрики:
+- `admin_alert_events_total{kind="replay_started|replay_finished"}`
+- `replay_events_total`, `replay_duration_ms`
+
+Тесты:
+```bash
+python -m pytest -q -k "latency_slo_burn_rate_math or latency_slo_alerts_and_payload or latency_slo_loop_respects_running"
+```
+
+### E3 — Perf/Soak наблюдаемость и микро‑профайлер
+
+Добавлено:
+- loop_tick_ms{loop} — длительность последнего тика петли (мс)
+- loop_tick_p95_ms{loop}, loop_tick_p99_ms{loop} — перцентили (nearest‑rank) по фиксированным бакетам
+- event_loop_drift_ms — максимальный дрейф сна: если sleep(50ms) > 100ms, фиксируем максимум
+- admin_endpoint_latency_bucket_total{endpoint,bucket_ms} — бакеты мс: [0,5,10,20,50,100,200,400,800,1600,+Inf]
+- GET /admin/perf/snapshot — детерминированный JSON с полями: {"loops":{...},"event_loop_drift_ms":float,"admin_latency_buckets":{endpoint:{bucket:"count"}}}
+
+Как пользоваться:
+- Мониторьте p95/p99 петель ramp/export/prune/slo — рост сигнализирует о нагрузке.
+- Контролируйте event_loop_drift_ms — длительные всплески указывают на блокирующие операции.
+- По admin buckets видно распределение латентности ручек /admin/*.
+
+### M1 — Markout
+
+Система оценки качества исполнения через измерение markout на горизонтах t+200мс и t+500мс.
+
+#### Метрики
+
+- **Счётчики**: `markout_up_total{horizon_ms,color,symbol}`, `markout_down_total{horizon_ms,color,symbol}`
+- **Гейджи**: `markout_avg_bps{horizon_ms,color,symbol}` — средний markout в базисных пунктах
+
+#### API
+
+- `record_markout(symbol, color, price_exec, mid_t0, mid_t200, mid_t500)` — запись markout метрик
+- Автоматический расчёт markout = (mid_price - exec_price) / exec_price * 10000 (в bps)
+
+#### Интеграция
+
+- **Order Manager**: при fill автоматически планирует измерение mid price на t+200мс и t+500мс
+- **Scheduler**: использует asyncio.sleep для точного тайминга измерений
+- **Color Detection**: автоматически определяет rollout color для каждого ордера
+
+#### Admin Endpoints
+
+- `GET /admin/rollout/markout_snapshot` → детерминированный JSON со сводкой per-color/per-symbol
+- Структура ответа:
+  ```json
+  {
+    "200": {
+      "blue": {"BTCUSDT": {"count": 100, "avg_bps": 0.5, "sum_bps_int": 5000}},
+      "green": {"BTCUSDT": {"count": 95, "avg_bps": 0.3, "sum_bps_int": 2850}}
+    },
+    "500": {
+      "blue": {"BTCUSDT": {"count": 100, "avg_bps": 0.8, "sum_bps_int": 8000}},
+      "green": {"BTCUSDT": {"count": 95, "avg_bps": 0.6, "sum_bps_int": 5700}}
+    }
+  }
+  ```
+
+#### Canary Integration
+
+- **Payload**: добавляет блок `markout` с avg_bps и delta_bps для каждого горизонта
+- **Triage Hints**: автоматически добавляет `markout_green_worse_200ms` и `markout_green_worse_500ms` при превышении капа
+- **Environment**: `MARKOUT_CAP_BPS=0.5` (по умолчанию) — порог для триаж-хинтов
+
+#### Детерминизм
+
+- Фиксированная точка: markout значения хранятся как int (bps * 10000) для точности
+- Сортировка: символы сортируются лексикографически для детерминированного JSON
+- Округление: avg_bps округляется до 6 знаков после запятой
+
+#### Использование
+
+1. **Мониторинг**: отслеживайте avg_bps по горизонтам и цветам
+2. **Качество**: отрицательные markout указывают на плохое исполнение
+3. **Сравнение**: delta_bps показывает разницу между blue и green
+4. **Триаж**: используйте hints для быстрой диагностики проблем
+
+### M1.1 — Markout→Gate
+
+Интеграция markout метрик в Canary Gate (F2) систему для оценки качества rollout.
+
+### Thresholds Configuration
+
+Пороги markout настраиваются в YAML файле thresholds:
+
+```yaml
+# Global canary gate thresholds
+canary_gate:
+  markout_min_sample: 50        # Минимальное количество samples для оценки
+  markout_cap_bps_200: 0.5     # Максимальная дельта 200ms в bps
+  markout_cap_bps_500: 0.5     # Максимальная дельта 500ms в bps
+
+# Per-symbol overrides
+canary_gate_per_symbol:
+  BTCUSDT:
+    markout_cap_bps_200: 1.0   # Более строгий порог для BTC
+    markout_cap_bps_500: 1.0
+```
+
+**YAML Parser Tolerance**: Парсер толерантен к общему левому отступу, пустым строкам и inline комментариям. Автоматически нормализует `\r\n` → `\n`, удаляет BOM и комментарии.
+
+### Gate Evaluation Rules
+
+1. **min_sample guard**: Если `markout_samples_{200,500} < markout_min_sample` для горизонта, markout gate не срабатывает
+2. **Reason order**: `markout_delta_exceeds` появляется после `latency_delta_exceeds` и перед `latency_tail_p95_exceeds`
+3. **Breach condition**: `(delta_200 < -cap_200) ИЛИ (delta_500 < -cap_500)`
+
+### Alerts and Monitoring
+
+- **Alerts**: При breach добавляется запись в `alerts.log`: `{"kind":"markout_regression","horizon_ms":200|500,"delta_bps":...}`
+- **PromQL**: `markout_avg_bps{horizon_ms="200",color="green"} - markout_avg_bps{horizon_ms="200",color="blue"}`
+
+### Grafana Dashboard Panels
+
+- **"Markout 200ms delta (bps)"**: Показывает разность между green и blue markout для 200ms горизонта
+- **"Markout 500ms delta (bps)"**: Аналогично для 500ms горизонта  
+- **"Markout samples"**: Количество samples по горизонтам и цветам
+
+### Payload Reading
+
+В canary payload доступны поля:
+- `markout_samples_200_{blue,green}`: Количество samples для 200ms
+- `markout_samples_500_{blue,green}`: Количество samples для 500ms
+- `markout_green_worse`: Hint при breach по markout порогам
+
+## M0.2 — Order aging/refresh
+
+Anti-stale ордер-гард для автоматического обновления/отмены устаревших лимитных ордеров.
+
+### Configuration
+
+Настройки через переменные окружения или конфигурацию:
+
+```yaml
+strategy:
+  order_ttl_ms: 800              # Order TTL в миллисекундах (по умолчанию: 800ms)
+  price_drift_bps: 2.0           # Порог price drift в bps (по умолчанию: 2.0 bps)
+  enable_anti_stale_guard: true  # Включить/выключить anti-stale guard
+```
+
+**Environment Variables**:
+- `ORDER_TTL_MS`: Order TTL в миллисекундах
+- `PRICE_DRIFT_BPS`: Порог price drift в bps
+- `ENABLE_ANTI_STALE_GUARD`: Включить/выключить guard
+
+### Functionality
+
+1. **TTL-based cancellation**: Ордера отменяются если простояли > `ORDER_TTL_MS`
+2. **Price drift refresh**: Ордера обновляются если mid price ушел > `PRICE_DRIFT_BPS`
+3. **Automatic execution**: Проверка каждую секунду в фоновом режиме
+4. **Manual trigger**: Admin endpoint для ручной проверки
+
+### Metrics
+
+- **`order_age_ms_bucket_total{symbol, bucket}`**: Распределение возраста ордеров по bucket'ам
+- **`stale_cancels_total{symbol, reason}`**: Количество отмененных stale ордеров
+- **`refresh_amends_total{symbol, reason}`**: Количество обновленных ордеров
+
+### Admin Endpoints
+
+- **GET** `/admin/anti-stale-guard`: Получить статус и конфигурацию
+- **POST** `/admin/anti-stale-guard`: Запустить ручную проверку (опционально: `{"symbol": "BTCUSDT"}`)
+
+### Integration Points
+
+- **Order placement**: Проверка stale ордеров после размещения нового
+- **Order updates**: Проверка после amend операций
+- **Order cancellation**: Проверка после отмены
+- **Background loop**: Периодическая проверка каждую секунду
+
+### Fallback Strategy
+
+1. **Primary**: Получение mid price из orderbook
+2. **Fallback**: Среднее значение цен активных ордеров
+3. **Error handling**: Graceful degradation при API ошибках
+
+### No Regression Guarantee
+
+При отключенном anti-stale guard все существующие markout метрики продолжают работать без изменений, обеспечивая обратную совместимость.
+
+## Latency Boost
+We introduce per-symbol replace throttle and tail batch-cancel to reduce order age p95 without hurting fill-rate.
+
+- replace throttle: `max_concurrent` (default 2) and `min_interval_ms` (default 60)
+- tail batch-cancel: `tail_age_ms` (default 800), `max_batch` (default 10), `jitter_ms` (0 for deterministic tests)
+- metrics (low-cardinality): `replace_rate_per_min{symbol}`, `cancel_batch_events_total{symbol}`, `order_age_p95_ms{symbol}`
+
+Goal: keep P95 in 300–350ms range and no degradation of fill-rate in e2e.
+
+Config defaults section `latency_boost` provides safe baseline values.
+
+## CI test selection
+For step-focused pipelines, run only a whitelist:
+  python tools/ci/run_selected.py
+The whitelist lives in tools/ci/test_selection.txt.
+In CI we set CI_QUARANTINE=1 to auto-skip tests marked @pytest.mark.quarantine.
+
+## Live-Sim mode
+Run simulated execution (no money) with deterministic fills:
+  MM_MODE=sim MM_FREEZE_UTC=1 python tools/sim/run_sim.py --events tests/fixtures/sim_events_case1.jsonl
+Render MD report from JSON:
+  python tools/sim/report_sim.py artifacts/SIM_REPORT.json
+
+### Region Canary
+
+### Region Rollout
+
+Dry-run (no side effects):
+
+```bash
+python -m tools.region.rollout_plan --regions config/regions.yaml --compare artifacts/REGION_COMPARE.json --current us-east --window 00:00-02:00 --cooldown-file artifacts/REGION_COOLDOWN.json
+```
+
+Apply (journal+cooldown only, no real switch):
+
+```bash
+python -m tools.region.rollout_plan --regions config/regions.yaml --compare artifacts/REGION_COMPARE.json --current us-east --cooldown-file artifacts/REGION_COOLDOWN.json --apply
+```
+
+Run comparison:
+
+```bash
+python -m tools.region.run_canary_compare --regions config/regions.yaml --in tests/fixtures/region_canary_metrics.jsonl --out artifacts/REGION_COMPARE.json
+```
+
+Switch (dry-run by default):
+
+```bash
+python -m tools.region.switch_region --current eu-west --compare artifacts/REGION_COMPARE.json
+# apply (no-op switch for now):
+python -m tools.region.switch_region --current eu-west --compare artifacts/REGION_COMPARE.json --apply
+```
+
+### Edge Audit
+
+Run one-shot audit:
+
+```bash
+python -m tools.edge_cli --trades tests/fixtures/edge_trades_case1.jsonl --quotes tests/fixtures/edge_quotes_case1.jsonl --out artifacts/EDGE_REPORT.json
+```
+
+Outputs:
+- JSON `EDGE_REPORT.json` (deterministic)
+- Markdown `EDGE_REPORT.md` (fixed columns, TOTAL last)
+
+Grafana: add panel for Edge metrics using the JSON output as data source (dashboard JSON can be maintained out-of-repo).
+
+### Perf Tuning
+
+### Profiles
+
+### Hardening
+
+### Virtual Balance
+
+### Bug Bash
+
+One-button CI sanity:
+
+```bash
+python tools/ci/run_bug_bash.py
+```
+
+Interpretation: lines show per-step status; final `RESULT=OK|FAIL` summarizes outcome.
+
+Run long simulations without real funds:
+
+```bash
+python -m tools.sim.virtual_balance --trades tests/fixtures/ledger/trades_case1.jsonl --prices tests/fixtures/ledger/prices_case1.jsonl
+```
+
+Outputs:
+- `artifacts/LEDGER_DAILY.json` — daily aggregates (pnl, fees, rebates, turnover, equity)
+- `artifacts/LEDGER_EQUITY.json` — equity time-series
+
+Run linters and checks:
+
+```bash
+python -m tools.ci.lint_ascii_logs
+python -m tools.ci.lint_json_writer
+python -m tools.ci.lint_metrics_labels
+```
+
+Error taxonomy: one-line errors with stable codes (E_CFG_*, E_PROFILE_*, ...). Invariants enforce finite/range values in critical paths (allocator, signals, throttle).
+
+Apply runtime profile via environment:
+
+```bash
+MM_PROFILE=econ_moderate python -m cli.preflight
+```
+
+Notes:
+- Profile is applied before validation (E_CFG_*) and before config describe
+- Only whitelisted keys are merged (allocator.smoothing, signals, latency_boost.replace, latency_boost.tail_batch, canary, logging)
+- Picked up by soak/region/finops CLIs if ENV set
+
+Benchmark and compare queue latency distributions:
+
+```bash
+python -m tools.perf.bench_queue --scenario tests/fixtures/perf_scenario_case1.json --profile baseline --out artifacts/PERF_baseline.json
+python -m tools.perf.bench_queue --scenario tests/fixtures/perf_scenario_case1.json --profile tuned --out artifacts/PERF_tuned.json
+```
+
+Targets:
+- order_age_p95_ms ≤ 350, order_age_p99_ms trending lower vs baseline
+- replace_rate_per_min lower or equal vs baseline
+- fill_rate ≥ 0.8 × baseline
+
+## Quickstart Release
+
+Full validation sequence:
+
+```bash
+make test-selected
+make sim
+make backtest  
+make edge
+make finops
+make region
+make go-nogo
+make verify-links
+```
+
+Expected outputs:
+- All tests pass
+- `VERDICT=GO` from go-nogo
+- `[OK] all links valid` from verify-links
+- Reports in `artifacts/` directory
+
+See [docs/INDEX.md](docs/INDEX.md) for complete documentation index.
+
+### Soak Quickstart
+
+See also: [docs/OPS_WEEK1.md](docs/OPS_WEEK1.md) for daily operations checklist.
+
+### Soak Autopilot
+
+### Soak Regression Guard
+
+### Long Soak
+
+Plan and orchestrate nightly→weekly→gate:
+
+```bash
+python -m tools.soak.long_run --weeks 2 --hours-per-night 8 --econ yes --dry-run
+```
+
+Weekly KPI gate:
+
+```bash
+python -m tools.soak.kpi_gate
+```
+
+See `tools/soak/calendar.md` for the 2–4 week schedule and references.
+
+### Postmortem
+
+Build a deterministic postmortem from artifacts:
+
+```bash
+python -m tools.ops.postmortem --scope day --out artifacts/POSTMORTEM_DAY.md
+```
+
+Attach the resulting Markdown to release notes (see `CHANGELOG.md`).
+
+### Baseline Lock
+
+Freeze and record the baseline configuration and toolset versions for future tuning comparisons:
+
+```bash
+python -m tools.tuning.baseline_lock --config config.yaml --out artifacts/BASELINE_LOCK.json
+```
+
+The JSON contains:
+- `cfg.describe` and sha256 of sanitized config
+- Overlays (`overlay_profile.yaml`, `overlay_prev.yaml`) head+hash
+- Tool files list with sha256 and `git_sha`
+- Prometheus alert rules sha256
+
+### Anomaly Radar
+
+Detect 15m bucket anomalies on daily soak metrics (MAD/Z based, stdlib-only):
+
+```bash
+python -m tools.soak.anomaly_radar --edge-report tests/fixtures/anomaly/EDGE_REPORT_DAY.json --bucket-min 15 --out-json artifacts/ANOMALY_RADAR.json
+```
+
+Daily report attaches top anomalies to `diagnostics` if `artifacts/EDGE_REPORT_DAY.json` is present.
+
+### Debug → Minimizer
+
+Build a minimal reproducible case from a failing events JSONL:
+
+```bash
+python -m tools.debug.repro_minimizer --events tests/fixtures/repro/full_case.jsonl --out-jsonl artifacts/REPRO_MIN.jsonl --out-md artifacts/REPRO_MIN.md
+```
+
+Runner API used by minimizer:
+
+```python
+from tools.debug.repro_runner import run_case
+result = run_case('case.jsonl')  # {"fail": bool, "reason": "DRIFT|REG|NONE", "metrics": {...}}
+```
+
+### Security → Secrets Hygiene
+
+Redact and scan for secrets in logs/artifacts/config:
+
+```bash
+python -m tools.ci.scan_secrets
+```
+
+Use `src/common/redact.py` in logging critical paths to mask tokens/keys deterministically as `****`.
+
+### Pre-Live Dry Run
+
+Run the full local dry-run pack and render a compact readiness report:
+
+```bash
+python -m tools.rehearsal.pre_live_pack
+python -m tools.rehearsal.report_pack artifacts/PRE_LIVE_PACK.json
+```
+
+### Readiness
+
+Compute 0–100 readiness score from the last seven soak reports and render a summary:
+
+```bash
+python -m tools.release.readiness_score --dir artifacts --out-json artifacts/READINESS_SCORE.json
+```
+
+Stops the day if current metrics degrade > X% vs 7-day baseline:
+
+- Adds `reg_guard` to daily report with baseline medians and reason
+- Writes `artifacts/REG_GUARD_STOP.{json,md}` on stop
+
+Nightly shadow soak with econ profile:
+
+```bash
+python -m tools.soak.autopilot --hours 8 --mode shadow --econ yes
+```
+
+Cron helper:
+
+```bash
+sh tools/soak/nightly.sh
+```
+
+Reports saved to `artifacts/REPORT_SOAK_*.json/md` and `artifacts/LEDGER_*.json`.
+
+### Weekly Soak
+
+### Drift Guard
+
+### Artifact Rotation
+
+### Chaos Drills
+
+### Edge Sentinel
+
+### Param Sweep
+
+### Tuning Sandbox
+
+Auto rollback:
+
+```bash
+python -m tools.tuning.auto_rollback
+```
+
+Rolls back to `tools/tuning/overlay_prev.yaml` if Drift/Regression Guard caused FAIL; writes `artifacts/AUTO_ROLLBACK.json`.
+
+### Dashboards
+
+Import JSON panels from `monitoring/grafana/*.json` into Grafana. Use `monitoring/promql/queries.md` for PromQL expressions and suggested recording rules.
+
+Apply top3 from sweep and generate a tuning report:
+
+```bash
+python -m tools.sweep.run_sweep --events tests/fixtures/sweep/events_case1.jsonl --grid tools/sweep/grid.yaml --out-json artifacts/PARAM_SWEEP.json
+python -m tools.tuning.apply_from_sweep
+python -m tools.tuning.report_tuning
+```
+
+Outputs:
+- `tools/tuning/overlay_profile.yaml` (deterministic overlay)
+- `artifacts/TUNING_REPORT.{json,md}` (before/after metrics and verdicts)
+
+Offline grid search for safe tuning:
+
+```bash
+python -m tools.sweep.run_sweep --events tests/fixtures/sweep/events_case1.jsonl --grid tools/sweep/grid.yaml --out-json artifacts/PARAM_SWEEP.json
+python -m tools.sweep.render
+```
+
+Outputs:
+- `artifacts/PARAM_SWEEP.json` (grid, results, top3_by_net_bps_safe)
+- `artifacts/PARAM_SWEEP.md` (sorted table with SAFE flags)
+
+Analyze edge degradation by components and suggest remedies:
+
+```bash
+python -m tools.edge_sentinel.analyze --trades tests/fixtures/edge_sentinel/trades.jsonl --quotes tests/fixtures/edge_sentinel/quotes.jsonl --bucket-min 15
+python -m tools.edge_sentinel.report
+```
+
+Outputs:
+- `artifacts/EDGE_SENTINEL.json` (summary/top/advice)
+- `artifacts/EDGE_SENTINEL.md` (tables and advice)
+
+Shadow-mode failover drill (no live effects):
+
+```bash
+python -m tools.chaos.soak_failover --ttl-ms 1500 --renew-ms 500 --kill-at-ms 3000 --window-ms 6000
+```
+
+Expected:
+- takeover ≤ TTL+200ms
+- no dual leadership
+- idempotency hits > 0, no duplicates
+- no alert-storm
+
+Rotate artifacts and dist directories by age and size:
+
+```bash
+python -m tools.ops.rotate_artifacts --roots artifacts dist --keep-days 14 --max-size-gb 2.0 --archive-dir dist/archives --dry-run
+```
+
+Use without `--dry-run` to apply deletions; output is deterministic ASCII with final `ROTATION=OK|DRYRUN`.
+
+During shadow/canary soak, drift guard enforces strict thresholds and stops the day on breach.
+
+Artifacts:
+- `artifacts/DRIFT_STOP.json` and `.md` with reason and snapshot
+- Daily report `REPORT_SOAK_YYYYMMDD.json` includes `drift.reason` on fail
+
+Aggregate last 7 soak reports into a weekly rollup:
+
+```bash
+python -m tools.soak.weekly_rollup --soak-dir artifacts --ledger artifacts/LEDGER_DAILY.json --out-json artifacts/WEEKLY_ROLLUP.json --out-md artifacts/WEEKLY_ROLLUP.md
+```
+
+Cron helper:
+
+```bash
+sh tools/soak/weekly.sh
+```
+
+
+
+Monthly soak on real feed (virtual capital):
+
+```bash
+python -m tools.soak.runner --mode shadow --hours 24
+python -m tools.soak.daily_report --out artifacts/REPORT_SOAK_$(date -u +%Y%m%d).json
+```
+
+Or daily cron (UTC):
+
+```bash
+sh tools/soak/cron.sh
+```
+
+Targets:
+- edge_net_bps in [2.5, 3.0]
+- taker_share_pct ≤ 15
+- order_age_p95_ms ≤ 350
+
+### Releases
+### Fast validation locally
+По умолчанию `bundle-auto` гоняет быстрый валидатор (линтеры + лёгкие тесты):
+```bash
+make bundle-auto
+```
+Полный тяжёлый прогон только по требованию:
+```bash
+VALIDATE=1 make bundle-auto
+```
+Dry-run и создание тега:
+```bash
+make bundle-auto
+make release-dry VER=v0.1.0
+make release VER=v0.1.0
+git push origin v0.1.0
+```
+Подробнее: **[docs/RELEASE.md](docs/RELEASE.md)**
+
+### Git init (если проект ещё не под git)
+```bash
+git init
+git add .
+git commit -m "init"
+git branch -M main
+git remote add origin https://github.com/<USER>/<REPO>.git
+git push -u origin main
+```
+
+### CI: Final Check
+Автопрогон pytest → soak-smoke → morning → bundle-auto → release-dry при push в `main`. См. `.github/workflows/final-check.yml`.
+Локально быстрый dry-run:
+```bash
+make release-dry VER=v0.1.0
+```
+С проверкой READY-gate (медленнее):
+```bash
+VALIDATE=1 make release-dry VER=v0.1.0
+```
+
+### Final check (one command)
+```bash
+make final-check
+```
+Это выполнит: `pytest → soak-smoke → morning → bundle-auto → release-dry`.
+
+### Final checklist
+См. **[docs/FINAL_CHECKLIST.md](docs/FINAL_CHECKLIST.md)** для полного прохода от bootstrap до релиза.
+

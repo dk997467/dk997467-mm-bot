@@ -1,0 +1,5 @@
+{"ts_ms":1,"bid":100.0,"ask":100.1,"bid_qty":1.0,"ask_qty":1.0,"trades":0}
+{"ts_ms":2,"bid":NaN,"ask":Infinity,"bid_qty":1.0,"ask_qty":1.0,"trades":0}
+{not json}
+{"ts_ms":3}
+{"ts_ms":4,"bid":100.0,"ask":100.1,"bid_qty":2.0,"ask_qty":3.0,"trades":1}

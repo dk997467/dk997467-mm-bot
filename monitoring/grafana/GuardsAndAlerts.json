@@ -1,0 +1,3 @@
+{"panels":[{"targets":[{"expr":"pos_skew_abs_p95"}],"title":"pos_skew_abs_p95"},{"targets":[{"expr":"intraday_caps_breach_total"}],"title":"caps_breaches"},{"targets":[{"expr":"effective_fee_jump_alerts_total"}],"title":"EffectiveFeeJump"},{"targets":[{"expr":"drift_guard_stops_total"}],"title":"DriftGuardStops"},{"targets":[{"expr":"reg_guard_stops_total"}],"title":"RegGuardStops"}],"title":"Guards & Alerts"}
+
+

@@ -1,0 +1,1 @@
+{"checks":{"cooldown_ok":true,"enabled":true,"net_bps_min":true,"order_age_p95_ms_max":true,"taker_share_pct_max":true,"window_match":true},"from":"us-east","reason":"better_net_bps_tie_latency","to":"us-east","utc":"1970-01-01T00:00:00Z","window":"00:00-02:00"}

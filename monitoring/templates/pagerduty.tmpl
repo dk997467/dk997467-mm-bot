@@ -1,0 +1,28 @@
+{{ define "pagerduty.description" }}
+{{ .GroupLabels.alertname }}: {{ .CommonAnnotations.summary }}
+{{ end }}
+
+{{ define "pagerduty.firing" }}
+{{ if eq .Status "firing" }}true{{ else }}false{{ end }}
+{{ end }}
+
+{{ define "pagerduty.status" }}
+{{ .Status }}
+{{ end }}
+
+{{ define "pagerduty.details" }}
+Alert: {{ .GroupLabels.alertname }}
+Severity: {{ .GroupLabels.severity }}
+Service: {{ .GroupLabels.service }}
+Instance: {{ .GroupLabels.instance }}
+Description: {{ .CommonAnnotations.description }}
+
+{{ if .CommonAnnotations.runbook_url }}
+Runbook: {{ .CommonAnnotations.runbook_url }}
+{{ end }}
+
+Alerts:
+{{ range .Alerts }}
+- {{ .Annotations.summary }} ({{ .StartsAt | since }})
+{{ end }}
+{{ end }}

@@ -1,0 +1,12 @@
+{"ts_ms":0,"type":"place","cl_id":"A1","symbol":"BTCUSDT"}
+{"ts_ms":50,"type":"replace","cl_id":"A1","symbol":"BTCUSDT"}
+{"ts_ms":70,"type":"replace","cl_id":"A1","symbol":"BTCUSDT"}
+{"ts_ms":120,"type":"replace","cl_id":"A1","symbol":"BTCUSDT"}
+{"ts_ms":500,"type":"place","cl_id":"B1","symbol":"BTCUSDT"}
+{"ts_ms":1400,"type":"place","cl_id":"C1","symbol":"BTCUSDT"}
+{"ts_ms":1650,"type":"tick","symbol":"BTCUSDT"}
+{"ts_ms":2000,"type":"replace","cl_id":"B1","symbol":"BTCUSDT"}
+{"ts_ms":2100,"type":"settle","cl_id":"A1","symbol":"BTCUSDT"}
+{"ts_ms":2200,"type":"settle","cl_id":"B1","symbol":"BTCUSDT"}
+
+

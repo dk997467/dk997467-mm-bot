@@ -1,0 +1,15 @@
+# F1 Deployment Gate Thresholds
+# 
+# Walk-forward tuning gates (D2)
+min_hit_rate: 0.01
+min_maker_share: 0.9
+min_net_pnl_usd: 0.0
+max_cvar95_loss_usd: 10.0
+min_splits_win_ratio: 0.6
+max_param_drift_pct: 50.0
+
+# E2 calibration gates
+max_sim_live_divergence: 0.15
+
+# Report freshness
+max_report_age_hours: 72

@@ -1,0 +1,127 @@
+version: '3.8'
+
+services:
+  market-maker-bot:
+    build: .
+    container_name: market-maker-bot
+    restart: unless-stopped
+    environment:
+      - BYBIT_API_KEY=${BYBIT_API_KEY}
+      - BYBIT_API_SECRET=${BYBIT_API_SECRET}
+      - USE_TESTNET=${USE_TESTNET:-true}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-parquet}
+      - STORAGE_PG_HOST=${STORAGE_PG_HOST:-postgres}
+      - STORAGE_PG_PORT=${STORAGE_PG_PORT:-5432}
+      - STORAGE_PG_DATABASE=${STORAGE_PG_DATABASE:-market_maker}
+      - STORAGE_PG_USERNAME=${STORAGE_PG_USERNAME:-market_maker}
+      - STORAGE_PG_PASSWORD=${STORAGE_PG_PASSWORD:-market_maker_pass}
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml
+    ports:
+      - "8000:8000"  # Metrics
+      - "8001:8001"  # Health
+    networks:
+      - market-maker-network
+    depends_on:
+      - prometheus
+      - redis
+      - md-gateway
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: market-maker-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - market-maker-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: market-maker-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana_dashboard.json:/etc/grafana/provisioning/dashboards/dashboard.json
+      - ./grafana_datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml
+    networks:
+      - market-maker-network
+    depends_on:
+      - prometheus
+
+  # Optional: PostgreSQL for data storage
+  postgres:
+    image: postgres:15
+    container_name: market-maker-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${STORAGE_PG_DATABASE:-market_maker}
+      - POSTGRES_USER=${STORAGE_PG_USERNAME:-market_maker}
+      - POSTGRES_PASSWORD=${STORAGE_PG_PASSWORD:-market_maker_pass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - market-maker-network
+
+  redis:
+    image: redis:7
+    container_name: market-maker-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    networks:
+      - market-maker-network
+
+  md-gateway:
+    build: ./go/ws-gateway
+    container_name: market-maker-md-gateway
+    restart: unless-stopped
+    environment:
+      - WS_URL=${WS_PUBLIC_TESTNET:-wss://stream-testnet.bybit.com/v5/public}
+      - SYMBOLS=${SYMBOLS:-BTCUSDT,ETHUSDT}
+      - REDIS_URL=redis://redis:6379
+      - REDIS_STREAM=md:ticks
+      - ADDR=:8082
+    ports:
+      - "8082:8082"
+    networks:
+      - market-maker-network
+    depends_on:
+      - redis
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  postgres_data:
+  redis_data:
+
+networks:
+  market-maker-network:
+    driver: bridge

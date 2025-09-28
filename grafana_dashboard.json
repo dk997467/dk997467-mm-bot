@@ -1,0 +1,215 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Market Maker Bot Dashboard",
+    "tags": ["market-making", "bybit", "trading"],
+    "style": "dark",
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Bot Status",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "market_maker_uptime_seconds",
+            "legendFormat": "Uptime"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "green", "value": 0}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "P&L Overview",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "market_maker_total_pnl_usd",
+            "legendFormat": "Total P&L"
+          },
+          {
+            "expr": "market_maker_realized_pnl_usd",
+            "legendFormat": "Realized P&L"
+          },
+          {
+            "expr": "market_maker_unrealized_pnl_usd",
+            "legendFormat": "Unrealized P&L"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 18, "x": 6, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Order Statistics",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "market_maker_orders_placed_total",
+            "legendFormat": "Orders Placed"
+          },
+          {
+            "expr": "market_maker_orders_filled_total",
+            "legendFormat": "Orders Filled"
+          },
+          {
+            "expr": "market_maker_orders_cancelled_total",
+            "legendFormat": "Orders Cancelled"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Fill Rate",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "market_maker_fill_rate",
+            "legendFormat": "Fill Rate"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 0.5},
+                {"color": "green", "value": 0.8}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 16}
+      },
+      {
+        "id": 5,
+        "title": "Spread Analysis",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "market_maker_avg_spread_bps",
+            "legendFormat": "Average Spread (bps)"
+          },
+          {
+            "expr": "market_maker_orderbook_spread_bps",
+            "legendFormat": "Current Spread (bps)"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 18, "x": 6, "y": 16}
+      },
+      {
+        "id": 6,
+        "title": "Position Exposure",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "market_maker_total_exposure_usd",
+            "legendFormat": "Total Exposure"
+          },
+          {
+            "expr": "market_maker_position_value_usd",
+            "legendFormat": "Position Value"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24}
+      },
+      {
+        "id": 7,
+        "title": "Risk Metrics",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "market_maker_max_drawdown_usd",
+            "legendFormat": "Max Drawdown"
+          },
+          {
+            "expr": "market_maker_cancel_rate_per_min",
+            "legendFormat": "Cancel Rate/min"
+          },
+          {
+            "expr": "market_maker_risk_alerts_total",
+            "legendFormat": "Risk Alerts"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 32}
+      },
+      {
+        "id": 8,
+        "title": "Latency Analysis",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(market_maker_order_latency_seconds_sum[5m]) / rate(market_maker_order_latency_seconds_count[5m])",
+            "legendFormat": "Order Latency (avg)"
+          },
+          {
+            "expr": "rate(market_maker_websocket_latency_seconds_sum[5m]) / rate(market_maker_websocket_latency_seconds_count[5m])",
+            "legendFormat": "WebSocket Latency (avg)"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 40}
+      },
+      {
+        "id": 9,
+        "title": "WebSocket Status",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "market_maker_websocket_connected",
+            "legendFormat": "WebSocket Connected"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "green", "value": 1}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 48}
+      },
+      {
+        "id": 10,
+        "title": "System Resources",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "market_maker_memory_usage_mb",
+            "legendFormat": "Memory Usage (MB)"
+          },
+          {
+            "expr": "market_maker_cpu_usage_percent",
+            "legendFormat": "CPU Usage (%)"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 18, "x": 6, "y": 48}
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "5s"
+  }
+}

@@ -1,0 +1,62 @@
+global:
+  resolve_timeout: 5m
+  slack_api_url: 'https://hooks.slack.com/services/YOUR_SLACK_WEBHOOK'
+
+route:
+  group_by: ['alertname', 'strategy', 'env']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'slack-notifications'
+
+  # Route critical alerts to PagerDuty (faster group wait, tighter repeat)
+  routes:
+    - matchers:
+        - severity = critical
+      group_wait: 10s
+      repeat_interval: 2h
+      receiver: 'pagerduty-critical'
+      continue: true
+
+    - matchers:
+        - severity = warning
+      receiver: 'slack-notifications'
+      continue: true
+
+receivers:
+  - name: 'slack-notifications'
+    slack_configs:
+      - channel: '#alerts'
+        title: '{{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'
+        send_resolved: true
+        actions:
+          - type: button
+            text: 'View in Grafana'
+            url: '{{ template "slack.grafana" . }}'
+
+  - name: 'pagerduty-critical'
+    pagerduty_configs:
+      - service_key: 'YOUR_PAGERDUTY_SERVICE_KEY'
+        description: '{{ template "pagerduty.description" . }}'
+        severity: '{{ if eq .GroupLabels.severity "critical" }}critical{{ else }}warning{{ end }}'
+        class: '{{ .GroupLabels.alertname }}'
+        group: '{{ .GroupLabels.service }}'
+        details:
+          firing: '{{ template "pagerduty.firing" . }}'
+          status: '{{ template "pagerduty.status" . }}'
+          description: '{{ template "pagerduty.description" . }}'
+
+templates:
+  - '/etc/alertmanager/template/*.tmpl'
+
+## Inhibit rules to prevent alert spam and reduce noise
+## Note: runbook_url lives in Prometheus rules files under labels/annotations
+inhibit_rules:
+  - source_matchers: [ 'alertname = CircuitTripped' ]
+    target_matchers: [ 'alertname = HighErrorRate' ]
+    equal: ['strategy','env']
+
+  - source_matchers: [ 'alertname = FullStackFail' ]
+    target_matchers: [ 'alertname = ComponentWarn' ]
+    equal: ['env']

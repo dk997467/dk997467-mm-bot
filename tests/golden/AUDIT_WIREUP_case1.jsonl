@@ -1,0 +1,7 @@
+{"fields":{"backoff_level":1,"cap":0.5,"delta_capped":0.5,"delta_raw":1.0,"next":100.0},"kind":"ALLOC","prev_sha256":"GENESIS","sha256":"bc1","symbol":"BTCUSDT","ts":"1970-01-01T00:00:00Z"}
+{"fields":{"allowed":0,"reason":"min_interval"},"kind":"REPLACE","prev_sha256":"bc1","sha256":"bc2","symbol":"BTCUSDT","ts":"1970-01-01T00:00:00Z"}
+{"fields":{"batch":2,"tail_age_ms":800},"kind":"CANCEL","prev_sha256":"bc2","sha256":"bc3","symbol":"ETHUSDT","ts":"1970-01-01T00:00:00Z"}
+{"fields":{"regime":"H","weights":"CON:0.200000,AGR:0.800000"},"kind":"MUX","prev_sha256":"bc3","sha256":"bc4","symbol":"-","ts":"1970-01-01T00:00:00Z"}
+{"fields":{"event":"block","name":"intraday_caps"},"kind":"GUARD","prev_sha256":"bc4","sha256":"bc5","symbol":"-","ts":"1970-01-01T00:00:00Z"}
+
+

@@ -1,0 +1,23 @@
+{
+  "venvPath": ".",
+  "venv": "venv",
+  "exclude": [
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/.mypy_cache",
+    "**/.ruff_cache",
+    ".git",
+    "artifacts",
+    "artifacts/**",
+    "dist",
+    "build",
+    "node_modules",
+    "logs",
+    "data",
+    "tmp",
+    ".coverage*",
+    "venv",
+    ".venv"
+  ]
+}
+

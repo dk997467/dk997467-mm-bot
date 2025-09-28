@@ -1,0 +1,77 @@
+{
+  "bins_max_bps": 50,
+  "counts": {
+    "fills": 11,
+    "orders": 29,
+    "quotes": 336
+  },
+  "generated_at_utc": "2025-08-25T12:12:24.655433+00:00Z",
+  "hit_rate_by_bin": {
+    "0": {
+      "count": 82,
+      "fills": 2
+    },
+    "15": {
+      "count": 90,
+      "fills": 3
+    },
+    "40": {
+      "count": 78,
+      "fills": 3
+    },
+    "5": {
+      "count": 86,
+      "fills": 3
+    }
+  },
+  "hour_utc": "2025-08-25T12:00:00+00:00Z",
+  "metadata": {
+    "cfg_hash": "smoke_test_hash",
+    "git_sha": "smoke_test_sha"
+  },
+  "percentiles_used": [
+    0.1,
+    0.25,
+    0.5,
+    0.75,
+    0.9,
+    0.95,
+    0.99
+  ],
+  "queue_wait_cdf_ms": [
+    {
+      "p": 0.1,
+      "v": 157.08
+    },
+    {
+      "p": 0.25,
+      "v": 167.55
+    },
+    {
+      "p": 0.5,
+      "v": 206.36
+    },
+    {
+      "p": 0.75,
+      "v": 270.09
+    },
+    {
+      "p": 0.9,
+      "v": 272.82
+    },
+    {
+      "p": 0.95,
+      "v": 278.31
+    },
+    {
+      "p": 0.99,
+      "v": 278.31
+    }
+  ],
+  "schema_version": "e1.0",
+  "symbol": "HARD",
+  "window_utc": {
+    "hour_end": "2025-08-25T13:00:00+00:00Z",
+    "hour_start": "2025-08-25T12:00:00+00:00Z"
+  }
+}

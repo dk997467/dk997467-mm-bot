@@ -1,0 +1,14 @@
+profiles:
+  overlay_tune:
+    allocator:
+      smoothing:
+        max_delta_ratio: 0.12
+    signals:
+      impact_cap_ratio: 0.08
+    latency_boost:
+      replace:
+        min_interval_ms: 80
+      tail_batch:
+        tail_age_ms: 700
+
+

@@ -1,0 +1,3 @@
+{"panels":[{"targets":[{"expr":"sum by (symbol)(edge_gross_bps)"}],"title":"gross_bps"},{"targets":[{"expr":"sum by (symbol)(edge_fees_eff_bps)"}],"title":"fees_eff_bps"},{"targets":[{"expr":"sum by (symbol)(edge_adverse_bps)"}],"title":"adverse_bps"},{"targets":[{"expr":"sum by (symbol)(edge_slippage_bps)"}],"title":"slippage_bps"},{"targets":[{"expr":"sum by (symbol)(edge_inventory_bps)"}],"title":"inventory_bps"},{"targets":[{"expr":"sum by (symbol)(edge_net_bps)"}],"title":"net_bps"}],"title":"Edge Breakdown"}
+
+

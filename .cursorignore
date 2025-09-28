@@ -1,0 +1,15 @@
+artifacts/
+artifacts/**/*
+venv/
+.venv/
+node_modules/
+dist/
+build/
+logs/
+data/
+tmp/
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+

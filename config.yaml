@@ -1,0 +1,206 @@
+# Market Maker Bot Configuration
+# Bybit V5 USDT Perpetuals
+
+# Trading Configuration
+symbols: ["BTCUSDT", "ETHUSDT"]
+use_testnet: true
+
+# Spread and Laddering
+base_spread_bps: 1.0
+ladder_levels: 3
+ladder_step_bps: 0.5
+quote_refresh_ms: 100
+
+# Risk Management
+max_position_usd: 5000
+target_inventory_usd: 0
+inventory_skew_gamma: 0.1
+daily_max_loss_usd: 300
+max_cancels_per_min: 90
+
+# Order Management
+post_only: true
+min_notional_usd: 10
+maker_fee_bps: 1.0
+taker_fee_bps: 1.0
+
+# Strategy Parameters
+volatility_lookback_sec: 30
+imbalance_weight: 0.4
+microprice_weight: 0.6
+k_vola: 0.5
+k_imb: 0.2
+t_imb: 0.1
+risk_buffer_bps: 2.0
+skew_k: 0.1
+max_skew_bps: 30.0
+
+# Enhanced Strategy Features
+strategy:
+  # Feature flags
+  enable_enhanced_quoting: true  # Enable EnhancedQuoter integration
+  enable_dynamic_spread: true
+  enable_inventory_skew: true
+  enable_adverse_guard: true
+ 
+guards:
+  pos_skew:
+    per_symbol_abs_limit: 0.0   # base units, 0=disabled
+    per_color_abs_limit: 0.0    # base units, 0=disabled
+  intraday_caps:
+    daily_pnl_stop: 0.0      # EUR, 0=disabled
+    daily_turnover_cap: 0.0  # USD, 0=disabled
+    daily_vol_cap: 0.0       # %
+
+allocator:
+  smoothing:
+    bias_cap_ratio: 0.20        # доля, [0.0,1.0]
+
+# Micro signals configuration
+signals:
+  impact_cap_ratio: 0.10
+  weights:
+    imbalance: 0.5
+    micro_tilt: 0.3
+    sigma_regime: 0.2
+  sigma_bands:
+    - [0.00, 0.80, "low"]
+    - [0.80, 1.50, "mid"]
+    - [1.50, 9.99, "high"]
+  regime_bias_map:
+    low: 1
+    mid: 0
+    high: -1
+
+ha_failover:
+  lock_key: "mm:quoter:leader"
+  ttl_ms: 3000
+  renew_ms: 1500
+  idempotency_ttl_ms: 5000
+
+fees:
+  bybit:
+    distance_usd_threshold: 25000.0  # trigger near next tier (USD left)
+    min_improvement_bps: 0.2         # required fee improvement to act
+  
+  # Spread parameters
+  k_vola_spread: 0.95
+  min_spread_bps: 2
+  max_spread_bps: 25
+  
+  # Inventory skew
+  skew_coeff: 0.3
+  imbalance_cutoff: 0.65
+  
+  # Order book levels
+  levels_per_side: 3
+  level_spacing_coeff: 0.4
+  
+  # Volatility parameters
+  vola_half_life_s: 60
+  microprice_drift_bps: 3
+  imbalance_levels: 5
+  guard_pause_ms: 300
+  
+  # Order management
+  min_time_in_book_ms: 500
+  replace_threshold_bps: 3
+  
+  # Research and backtesting parameters
+  slip_bps: 2.0  # Estimated slippage in basis points
+
+# Order Limits and Rate Control
+limits:
+  max_active_per_side: 3
+  max_create_per_sec: 4.0
+  max_cancel_per_sec: 4.0
+
+# Order Management and Efficiency
+max_quote_levels: 3                # levels per side
+max_active_orders_per_symbol: 30   # hard cap (both sides total)
+max_new_orders_per_sec: 5.0        # create rate limiter
+quote_refresh_ms: 800              # do not refresh more often unless price moved
+amend_price_threshold_bps: 1.0     # if price change < threshold → amend in place
+amend_size_threshold: 0.2          # relative size change to amend
+cancel_stale_ms: 60000             # cancel orders older than this if off-market
+backoff_on_reject_ms: 1500         # on "Active order limit exceeded" or rejects
+
+# Order Management and Efficiency
+max_quote_levels: 3                # levels per side
+max_active_orders_per_symbol: 30   # hard cap (both sides total)
+max_new_orders_per_sec: 5          # create rate limiter
+quote_refresh_ms: 800              # do not refresh more often unless price moved
+amend_price_threshold_bps: 1.0     # if price change < threshold → amend in place
+amend_size_threshold: 0.2          # relative size change to amend
+cancel_stale_ms: 60000             # cancel orders older than this if off-market
+backoff_on_reject_ms: 1500         # on "Active order limit exceeded" or rejects
+
+# Performance Tuning
+max_active_orders_per_side: 10
+price_band_tolerance_bps: 2.0
+max_retry_attempts: 3
+
+# Storage Configuration
+storage:
+  backend: "parquet"  # parquet, csv, or sqlite
+  compress: "zstd"     # zstd, gzip, or none
+  batch_size: 1000     # Records per batch
+  flush_ms: 200        # Flush interval in milliseconds
+
+# Monitoring
+metrics_port: 8000
+health_port: 8001
+log_level: "INFO"
+
+# Storage Configuration
+storage:
+  backend: "parquet"  # "parquet", "sqlite", "postgres"
+  parquet_path: "./data"
+  batch_size: 1000
+  flush_ms: 200
+  compress: "zstd"  # "zstd" or null for no compression
+  sqlite_path: "./data/market_maker.db"
+  pg_host: "localhost"
+  pg_port: 5432
+  pg_database: "market_maker"
+  pg_username: "market_maker"
+  pg_password: "market_maker_pass"
+  pg_schema: "public"
+
+# Database Configuration (Legacy - kept for backward compatibility)
+storage_type: "parquet"  # "parquet", "sqlite", "postgres"
+parquet_path: "./data"
+sqlite_path: "./data/market_maker.db"
+postgres_url: "postgresql://user:pass@localhost:5432/market_maker"
+
+# WebSocket Configuration
+ws_reconnect_delay_ms: 1000
+ws_max_reconnect_attempts: 10
+ws_ping_interval_sec: 30
+ws_pong_timeout_sec: 10
+
+# REST API Configuration
+rest_timeout_sec: 10
+rest_max_retries: 3
+rest_retry_delay_ms: 1000
+
+# Live Sim configuration
+sim:
+  mode: "queue_aware"  # conservative | queue_aware
+  queue:
+    initial_qpos_ratio: 0.50
+    queue_penalty_bps: 0.8
+    adverse_fill_prob: 0.0
+  fees:
+    maker_bps: -2.0
+    taker_bps: 5.0
+
+# Latency Boost (Throttle & Batch Cancel)
+latency_boost:
+  replace:
+    max_concurrent: 2
+    min_interval_ms: 60
+  tail_batch:
+    tail_age_ms: 800
+    max_batch: 10
+    jitter_ms: 0
