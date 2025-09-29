@@ -10,13 +10,10 @@ jobs:
     timeout-minutes: 25
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-      PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      PIP_NO_PYTHON_VERSION_WARNING: "1"
       PYTHONPATH: "${{ github.workspace }}"
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -28,14 +25,12 @@ jobs:
           awk '
             BEGIN{IGNORECASE=1}
             /^bybit-connector/ {next}
-            /^mm-orderbook/ {next}
-            /^git\+ssh:/ {next}
+            /^mm-orderbook/    {next}
+            /^git\+ssh:/       {next}
             {print}
           ' requirements.txt > requirements_ci.txt
-          # ????? ??? tests/conftest.py
           echo "pydantic>=2,<3"           >> requirements_ci.txt
           echo "pydantic-settings>=2,<3"  >> requirements_ci.txt
-          # ????? ??? tests/test_cli_tools.py, ??????? ????????? ?? ?????????? FAST-???????
           echo "pandas>=2,<3"             >> requirements_ci.txt
           cat requirements_ci.txt
 
