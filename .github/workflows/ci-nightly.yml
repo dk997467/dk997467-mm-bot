@@ -1,0 +1,57 @@
+name: CI Nightly (fast)
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 2 * * *"  # ????????? ? 02:17 UTC
+
+jobs:
+  fast-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_PYTHON_VERSION_WARNING: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Prepare minimal requirements for CI
+        shell: bash
+        run: |
+          awk '
+            BEGIN{IGNORECASE=1}
+            /^bybit-connector/ {next}
+            /^git\+ssh:/ {next}
+            {print}
+          ' requirements.txt > requirements_ci.txt
+          echo "---- requirements_ci.txt ----"
+          cat requirements_ci.txt
+
+      - name: Install deps (CI subset)
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements_ci.txt
+          pip list
+
+      - name: Run fast e2e (verbose, targeted)
+        run: |
+          pytest -vv -s --maxfail=1 tests/e2e/test_full_stack_validation.py
+
+      - name: Upload artifacts (90 days by default)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-fast-artifacts
+          path: |
+            artifacts/**
+            .pytest_cache/**
+          if-no-files-found: ignore
+          retention-days: 30
