@@ -182,7 +182,9 @@ def test_full_stack_validation_handles_missing_fixtures():
         
         # Reports section should indicate skipped fixtures
         reports_section = next(s for s in data['sections'] if s['name'] == 'reports')
-        assert 'SKIP' in reports_section['details'] or reports_section['ok']
+details = reports_section.get('details', '')
+ok_flag = reports_section.get('ok', False)
+assert ('SKIP' in details) or ok_flag
         
     finally:
         # Restore fixtures directory
@@ -191,3 +193,4 @@ def test_full_stack_validation_handles_missing_fixtures():
                 # Remove the empty directory that might have been created
                 fixtures_dir.rmdir()
             fixtures_backup.rename(fixtures_dir)
+
