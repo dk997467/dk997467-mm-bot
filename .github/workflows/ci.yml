@@ -12,6 +12,7 @@ jobs:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_PYTHON_VERSION_WARNING: "1"
+      PYTHONPATH: "${{ github.workspace }}"
 
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +22,6 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      # (???.) ?????? ?????????? ??????????? ?? CI-?????????
       - name: Prepare minimal requirements for CI
         shell: bash
         run: |
@@ -32,6 +32,9 @@ jobs:
             /^git\+ssh:/ {next}
             {print}
           ' requirements.txt > requirements_ci.txt
+          # ?????????? ??????????? ??? conftest.py
+          echo "pydantic>=2,<3" >> requirements_ci.txt
+          echo "pydantic-settings>=2,<3" >> requirements_ci.txt
           cat requirements_ci.txt
 
       - name: Install deps (CI subset)
