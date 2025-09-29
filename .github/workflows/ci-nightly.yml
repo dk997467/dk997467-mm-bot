@@ -1,11 +1,9 @@
 name: CI Nightly (fast)
 
 on:
-  push:
-  pull_request:
   schedule:
-    - cron: "17 2 * * *"  # ????????? ? 02:17 UTC
-
+    - cron: "0 2 * * *"    # ?????? ???? 02:00 UTC
+  workflow_dispatch:
 jobs:
   fast-tests:
     runs-on: ubuntu-latest
@@ -55,3 +53,4 @@ jobs:
             .pytest_cache/**
           if-no-files-found: ignore
           retention-days: 30
+

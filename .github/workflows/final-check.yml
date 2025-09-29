@@ -1,9 +1,7 @@
 name: Final Check
 
 on:
-  push:
-  pull_request:
-
+  workflow_dispatch:
 jobs:
   final-check:
     runs-on: ubuntu-latest
@@ -63,4 +61,5 @@ jobs:
             .pytest_cache/**
             artifacts/**
           if-no-files-found: ignore
+
 
