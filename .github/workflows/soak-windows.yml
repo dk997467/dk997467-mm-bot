@@ -1,0 +1,130 @@
+name: Soak (Windows self-hosted, 24?72h)
+
+on:
+  workflow_dispatch:
+    inputs:
+      soak_hours:
+        description: "How many hours to run (24..72)"
+        required: false
+        default: "24"
+  schedule:
+    - cron: "0 2 * * 1"   # ?????? ?? 02:00 UTC
+
+concurrency:
+  group: soak-windows
+  cancel-in-progress: false
+
+jobs:
+  soak:
+    runs-on: [self-hosted, windows, soak]
+    timeout-minutes: 4320   # 72 ????
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_PYTHON_VERSION_WARNING: "1"
+      SOAK_HOURS: ${{ inputs.soak_hours || '24' }}
+      # ??????? ?????????? ?? Settings ? Secrets and variables ? Actions
+      API_KEY:             ${{ secrets.API_KEY }}
+      API_SECRET:          ${{ secrets.API_SECRET }}
+      TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+      HTTP_PROXY:          ${{ secrets.HTTP_PROXY }}
+      HTTPS_PROXY:         ${{ secrets.HTTPS_PROXY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Prepare minimal requirements (skip git+/bybit-connector)
+        shell: pwsh
+        run: |
+          Get-Content requirements.txt |
+            Where-Object { $_ -notmatch '^(?i)bybit-connector' -and $_ -notmatch '^(?i)git\+' } |
+            Set-Content requirements_ci.txt -Encoding ASCII
+          python -m pip install -U pip
+          pip install -r requirements_ci.txt
+
+      - name: Start transcript
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts\soak | Out-Null
+          Start-Transcript -Path artifacts\soak\soak_windows.log -Append | Out-Null
+          "SOAK started: $(Get-Date -Format s)Z" | Out-File artifacts\soak\summary.txt -Encoding ascii
+          "Git rev: $(git rev-parse --short HEAD)" | Add-Content artifacts\soak\summary.txt
+          "Python: $(python --version)" | Add-Content artifacts\soak\summary.txt
+
+      # <<< ??? ????????? ???????? ??? ????/????????? >>>
+      - name: Run long soak loop (24?72h)
+        shell: pwsh
+        run: |
+          $durationHours = [int]$env:SOAK_HOURS
+          if ($durationHours -lt 1 -or $durationHours -gt 72) { $durationHours = 24 }
+          $deadline = (Get-Date).AddHours($durationHours)
+          Write-Host "Target duration (hours): $durationHours (deadline: $deadline UTC)"
+
+          while ((Get-Date) -lt $deadline) {
+            try {
+              # ????????? ???????????? ??????:
+              python tools\ci\full_stack_validate.py
+              Write-Host "[INFO] validate ok $(Get-Date -Format s)Z"
+            } catch {
+              Write-Host "[ERROR] $_"
+            }
+
+            # Heartbeat: 3 ???? ?? 5 ?????
+            for ($i=1; $i -le 3; $i++) {
+              Start-Sleep -Seconds 300
+              Write-Host "[HB] alive $(Get-Date -Format s)Z"
+            }
+          }
+
+      # ?????? ????????? + ?????????? ????? ??? ??????????
+      - name: Snapshot environment + hash manifest
+        if: always()
+        shell: pwsh
+        run: |
+          python -m pip freeze | Out-File artifacts\soak\pip-freeze.txt -Encoding ascii
+          git status -sb | Out-File artifacts\soak\git-status.txt -Encoding ascii
+          Get-ChildItem artifacts -Recurse -File | `
+            Get-FileHash -Algorithm SHA256 | `
+            ConvertTo-Json -Depth 5 | `
+            Out-File artifacts\soak\hash_manifest.json -Encoding ascii
+
+      - name: Stop transcript
+        if: always()
+        shell: pwsh
+        run: |
+          Stop-Transcript | Out-Null
+          Get-ChildItem artifacts\soak | Sort-Object Length -Descending | `
+            Select-Object Name,Length,LastWriteTime | `
+            Out-File artifacts\soak\ls.txt -Encoding ascii
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-windows-${{ github.run_id }}
+          path: |
+            artifacts/**
+            .pytest_cache/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Telegram notify on failure
+        if: failure() && env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID
+        shell: pwsh
+        run: |
+          $msg = "? SOAK failed: $env:GITHUB_REPOSITORY run $env:GITHUB_RUN_ID (commit $(git rev-parse --short HEAD))"
+          $uri = "https://api.telegram.org/bot$env:TELEGRAM_BOT_TOKEN/sendMessage"
+          Invoke-RestMethod -Uri $uri -Method POST -Body @{
+            chat_id = "$env:TELEGRAM_CHAT_ID"
+            text    = $msg
+          } | Out-Null
