@@ -1,0 +1,29 @@
+name: Debug Self-Hosted Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: self-hosted
+    steps:
+      - name: Run Diagnostics
+        shell: pwsh
+        run: |
+          echo "--- 1. Running as user: ---"
+          whoami
+          echo ""
+          
+          echo "--- 2. PowerShell Version Table: ---"
+          $PSVersionTable
+          echo ""
+
+          echo "--- 3. Effective Execution Policy: ---"
+          Get-ExecutionPolicy -List
+          echo ""
+
+          echo "--- 4. Applied Group Policy Result: ---"
+          gpresult /r
+          echo ""
+
+
