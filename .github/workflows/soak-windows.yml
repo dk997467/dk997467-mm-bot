@@ -46,7 +46,7 @@ jobs:
         run: |
           Write-Host "--- Installing Rust toolchain ---"
           Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile "rustup-init.exe"
-          # FIX: Explicitly install the self-contained 'gnu' toolchain to avoid MSVC dependency
+          # Using the self-contained 'gnu' toolchain to avoid MSVC dependency
           ./rustup-init.exe -y --no-modify-path --default-toolchain stable-gnu
           
           $cargo_bin_path = "$($env:USERPROFILE)\.cargo\bin"
@@ -100,9 +100,11 @@ jobs:
 
       - name: Install local project package
         id: install-local
+        # FINAL FIX: Set environment variable to enable PyO3 forward compatibility with Python 3.13
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
         run: |
           Write-Host "--- Installing local mm-bot package ---"
-          # No need for -v anymore, but we can leave it
           & $env:PYTHON_EXE -m pip install -e . -v
 
       - name: Start transcript and write summary
