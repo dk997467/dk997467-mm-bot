@@ -1,3 +1,16 @@
+# ==============================================================================
+# Soak Test Workflow for MM-Rebate-Bot
+#
+# Runs on: Self-hosted Windows runner
+# Duration: 24-72 hours (configurable)
+#
+# Principal Architect's Notes:
+# - Added robust caching for pip dependencies to speed up setup.
+# - Centralized environment setup (directory creation) for determinism.
+# - Fixed PowerShell error handling for transcript and file operations.
+# - Standardized paths using ${{ github.workspace }} for reliability.
+# - Added step IDs for clarity and future extensibility.
+# ==============================================================================
 name: Soak (Windows self-hosted, 24-72h)
 
 on:
@@ -8,7 +21,7 @@ on:
         required: false
         default: "24"
   schedule:
-    - cron: "0 2 * * 1" # Понедельник в 02:00 UTC
+    - cron: "0 2 * * 1" # Monday at 02:00 UTC
 
 concurrency:
   group: soak-windows
@@ -20,14 +33,15 @@ jobs:
     defaults:
       run:
         shell: pwsh
-    timeout-minutes: 4380 # 73 часа (с запасом)
+    timeout-minutes: 4380 # 73 hours (72h + 1h buffer)
     env:
-      # Используем системный Python, установленный в Program Files
-      PYTHON_EXE: C:\Program Files\Python313\python.exe
+      # Using system-wide Python. Ensure this path is stable on the runner.
+      PYTHON_EXE: 'C:\Program Files\Python313\python.exe'
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_PYTHON_VERSION_WARNING: "1"
       SOAK_HOURS: ${{ inputs.soak_hours || '24' }}
+      # Secrets are correctly handled via env block
       API_KEY: ${{ secrets.API_KEY }}
       API_SECRET: ${{ secrets.API_SECRET }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -37,34 +51,61 @@ jobs:
 
     steps:
       - name: Checkout
+        id: checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Verify Python installation
+      - name: Setup Environment
+        id: setup_env
+        if: always() # This step must always run to ensure directories exist for artifacts
         run: |
-          echo "Using configured Python:"
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\artifacts\soak" | Out-Null
+          Write-Host "Artifacts directory is ready at ${{ github.workspace }}\artifacts\soak"
+
+      - name: Verify Python installation
+        id: verify_python
+        run: |
+          Write-Host "--- Verifying Python environment ---"
           & $env:PYTHON_EXE --version
           & $env:PYTHON_EXE -m pip --version
+          Write-Host "--- Upgrading pip ---"
           & $env:PYTHON_EXE -m pip install --upgrade pip
 
-      - name: Prepare minimal requirements
+      - name: Prepare CI requirements file
+        id: prep_reqs
         run: |
-          Get-Content requirements.txt |
+          Get-Content "${{ github.workspace }}\requirements.txt" |
             Where-Object { $_ -notmatch '^(?i)bybit-connector' -and $_ -notmatch '^(?i)git\+' } |
-            Set-Content requirements_ci.txt -Encoding ASCII
-          & $env:PYTHON_EXE -m pip install -r requirements_ci.txt
+            Set-Content "${{ github.workspace }}\requirements_ci.txt" -Encoding ASCII
+          Write-Host "requirements_ci.txt has been generated."
 
-      - name: Start transcript
+      - name: Cache pip dependencies
+        id: cache_pip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements_ci.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        id: install_deps
         run: |
-          New-Item -ItemType Directory -Force artifacts\soak | Out-Null
-          Start-Transcript -Path artifacts\soak\soak_windows.log -Append | Out-Null
-          "SOAK started: $(Get-Date -Format s)Z" | Out-File artifacts\soak\summary.txt -Encoding ascii
-          "Git rev: $(git rev-parse --short HEAD)" | Add-Content artifacts\soak\summary.txt
+          Write-Host "Installing dependencies from requirements_ci.txt..."
+          & $env:PYTHON_EXE -m pip install -r "${{ github.workspace }}\requirements_ci.txt"
+
+      - name: Start transcript and write summary
+        id: start_transcript
+        run: |
+          Start-Transcript -Path "${{ github.workspace }}\artifacts\soak\soak_windows.log" -Append | Out-Null
+          "SOAK started: $(Get-Date -Format s)Z" | Out-File "${{ github.workspace }}\artifacts\soak\summary.txt" -Encoding ascii
+          "Git rev: $(git rev-parse --short HEAD)" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt"
           $pythonVersion = (& $env:PYTHON_EXE --version)
-          "Python: $pythonVersion" | Add-Content artifacts\soak\summary.txt
+          "Python: $pythonVersion" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt"
 
       - name: Run long soak loop
+        id: soak_loop
         run: |
           $durationHours = [int]$env:SOAK_HOURS
           if ($durationHours -lt 1 -or $durationHours -gt 72) { $durationHours = 24 }
@@ -73,46 +114,51 @@ jobs:
 
           while ((Get-Date) -lt $deadline) {
             try {
-              & $env:PYTHON_EXE tools\ci\full_stack_validate.py
+              & $env:PYTHON_EXE "${{ github.workspace }}\tools\ci\full_stack_validate.py"
               Write-Host "[INFO] validate ok $(Get-Date -Format s)Z"
             } catch {
-              Write-Host "[ERROR] $_"
+              Write-Host "[ERROR] An error occurred during validation: $_"
             }
-            # Heartbeat: каждые 5 минут
+            # Heartbeat every 5 minutes
             Start-Sleep -Seconds 300
             Write-Host "[HB] alive $(Get-Date -Format s)Z"
           }
+          Write-Host "Soak loop finished."
 
-      - name: Snapshot environment + hash manifest
+      - name: Finalize and snapshot
+        id: snapshot
         if: always()
         run: |
-          & $env:PYTHON_EXE -m pip freeze | Out-File artifacts\soak\pip-freeze.txt -Encoding ascii
-          git status -sb | Out-File artifacts\soak\git-status.txt -Encoding ascii
-          Get-ChildItem artifacts -Recurse -File | `
-            Get-FileHash -Algorithm SHA256 | `
-            ConvertTo-Json -Depth 5 | `
-            Out-File artifacts\soak\hash_manifest.json -Encoding ascii
+          # --- Finalize log files before snapshotting ---
+          "SOAK finished: $(Get-Date -Format s)Z" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt"
+          Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
 
-      - name: Stop transcript
-        if: always()
-        run: |
-          Stop-Transcript | Out-Null
-          Get-ChildItem artifacts\soak | Sort-Object Length -Descending | `
-            Select-Object Name,Length,LastWriteTime | `
-            Out-File artifacts\soak\ls.txt -Encoding ascii
+          # --- Snapshot environment ---
+          Write-Host "Snapshotting environment..."
+          & $env:PYTHON_EXE -m pip freeze | Out-File "${{ github.workspace }}\artifacts\soak\pip-freeze.txt" -Encoding ascii
+          git status -sb | Out-File "${{ github.workspace }}\artifacts\soak\git-status.txt" -Encoding ascii
+          Get-ChildItem "${{ github.workspace }}\artifacts" -Recurse -File |
+            Get-FileHash -Algorithm SHA256 |
+            ConvertTo-Json -Depth 5 |
+            Out-File "${{ github.workspace }}\artifacts\soak\hash_manifest.json" -Encoding ascii
+          Get-ChildItem "${{ github.workspace }}\artifacts\soak" | Sort-Object Length -Descending |
+            Select-Object Name, Length, LastWriteTime |
+            Out-File "${{ github.workspace }}\artifacts\soak\ls.txt" -Encoding ascii
 
       - name: Upload artifacts
+        id: upload_artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: soak-windows-${{ github.run_id }}
           path: |
-            artifacts/**
-            .pytest_cache/**
+            ${{ github.workspace }}/artifacts/**
+            ${{ github.workspace }}/.pytest_cache/**
           if-no-files-found: ignore
           retention-days: 14
 
       - name: Telegram notify on failure
+        id: notify_failure
         if: failure() && env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID
         run: |
           $msg = "❌ SOAK failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} (commit $(git rev-parse --short HEAD))"
