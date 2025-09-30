@@ -1,0 +1,34 @@
+# ==============================================================================
+# Modern Python Project Configuration (PEP 621)
+# Principal Architect's Notes:
+# - This is the corrected and final version.
+# - The conflicting `package-dir` and incorrect `where` have been removed.
+# - A single, unambiguous `[tool.setuptools.packages.find]` block now correctly
+#   identifies the `mm_bot` package from the project root. This is the
+#   industry-standard approach for modern setuptools.
+# ==============================================================================
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mm-bot"
+version = "0.1.0"
+authors = [
+  { name="Your Name", email="you@example.com" }, # Замени на свои данные
+]
+description = "Market maker rebate bot"
+requires-python = ">=3.9"
+dependencies = [
+    # Эта строка говорит: "пакет mm-orderbook находится в папке rust"
+    # Синтаксис `file:rust` корректен для современных pip.
+    "mm-orderbook @ file:rust"
+]
+
+# --- ФИНАЛЬНАЯ ИСПРАВЛЕННАЯ СЕКЦИЯ ---
+[tool.setuptools.packages.find]
+where = ["."]          # Искать пакеты в корневой директории (самый надежный способ)
+include = ["mm_bot*"]  # Находить пакет mm_bot и все его подмодули
+
+
