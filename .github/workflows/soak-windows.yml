@@ -42,15 +42,24 @@ jobs:
         with:
           fetch-depth: 1
 
-      # --- НОВЫЙ ШАГ ---
-      # Устанавливаем Rust, чтобы можно было скомпилировать mm-orderbook
-      - name: Install Rust toolchain
+      # --- ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ ---
+      # Заменяем action 'actions-rs/toolchain' на прямой вызов установщика.
+      # Этот метод более надежен для self-hosted раннеров с их политиками безопасности.
+      - name: Install Rust toolchain via PowerShell
         id: install-rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
+        run: |
+          Write-Host "Downloading rustup-init.exe..."
+          Invoke-WebRequest -Uri https://win.rustup.rs/ -OutFile rustup-init.exe
+          
+          Write-Host "Running rustup installer non-interactively..."
+          & .\rustup-init.exe -y
+          
+          Write-Host "Adding cargo to PATH for subsequent steps..."
+          echo "$HOME\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          
+          Write-Host "Verifying Rust installation..."
+          rustc --version
+          cargo --version
 
       - name: Setup Environment
         id: setup-env
@@ -92,7 +101,6 @@ jobs:
       - name: Install local project package
         id: install-local
         run: |
-          # Эта команда теперь должна работать, т.к. мы установили Rust
           & $env:PYTHON_EXE -m pip install --verbose -e .
 
       - name: Start transcript and write summary
