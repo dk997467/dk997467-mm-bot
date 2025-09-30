@@ -42,9 +42,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      # --- ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ ---
-      # Заменяем action 'actions-rs/toolchain' на прямой вызов установщика.
-      # Этот метод более надежен для self-hosted раннеров с их политиками безопасности.
       - name: Install Rust toolchain via PowerShell
         id: install-rust
         run: |
@@ -54,8 +51,14 @@ jobs:
           Write-Host "Running rustup installer non-interactively..."
           & .\rustup-init.exe -y
           
+          # --- РЕШАЮЩЕЕ ИЗМЕНЕНИЕ ---
+          # Установщик Rust изменил PATH, но текущая сессия об этом не знает.
+          # Обновляем PATH вручную для этой сессии, чтобы следующие команды нашли rustc.
+          Write-Host "Adding cargo to PATH for the current session..."
+          $env:PATH = "$($env:USERPROFILE)\.cargo\bin;" + $env:PATH
+          
           Write-Host "Adding cargo to PATH for subsequent steps..."
-          echo "$HOME\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "$($env:USERPROFILE)\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           
           Write-Host "Verifying Rust installation..."
           rustc --version
@@ -170,4 +173,3 @@ jobs:
             chat_id = "$env:TELEGRAM_CHAT_ID"
             text    = $msg
           } | Out-Null
-
