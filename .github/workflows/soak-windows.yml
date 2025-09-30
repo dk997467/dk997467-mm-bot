@@ -22,7 +22,8 @@ jobs:
         shell: pwsh
     timeout-minutes: 4380 # 73 часа (с запасом)
     env:
-      PYTHON_EXE: C:\Program Files\Python313\python.exe
+      # FINAL FIX: Downgrade to a Python version officially supported by PyO3 v0.20
+      PYTHON_EXE: C:\Program Files\Python312\python.exe
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_PYTHON_VERSION_WARNING: "1"
@@ -100,11 +101,9 @@ jobs:
 
       - name: Install local project package
         id: install-local
-        # FINAL FIX: Set environment variable to enable PyO3 forward compatibility with Python 3.13
-        env:
-          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
         run: |
           Write-Host "--- Installing local mm-bot package ---"
+          # No need for PYO3_USE_ABI3_FORWARD_COMPATIBILITY with Python 3.12
           & $env:PYTHON_EXE -m pip install -e . -v
 
       - name: Start transcript and write summary
@@ -177,4 +176,3 @@ jobs:
             chat_id = "$env:TELEGRAM_CHAT_ID"
             text    = $msg
           } | Out-Null
-
