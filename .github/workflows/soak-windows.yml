@@ -38,19 +38,16 @@ jobs:
           fetch-depth: 1
 
       - name: Setup Python 3.11
-      - name: Allow PowerShell scripts for this runner (CurrentUser)
-        shell: powershell
-        run: |
-          # Включаем скрипты для Windows PowerShell (который дергает setup-python)
-          Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
-          # Явная запись для старого корня политики
-          reg add "HKCU\Software\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell" /v ExecutionPolicy /t REG_SZ /d RemoteSigned /f | Out-Null
-          # И для PowerShell 7 (pwsh)
-          reg add "HKCU\Software\Microsoft\PowerShell\7" /v ExecutionPolicy /t REG_SZ /d RemoteSigned /f | Out-Null
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
+
+      - name: Run Windows Setup Script
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process -Force
+          ./setup.ps1
 
       - name: Prepare minimal requirements (skip git+/bybit-connector)
         shell: pwsh
