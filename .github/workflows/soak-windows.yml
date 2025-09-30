@@ -4,12 +4,10 @@
 # Runs on: Self-hosted Windows runner
 # Duration: 24-72 hours (configurable)
 #
-# Principal Architect's Notes:
-# - Added robust caching for pip dependencies to speed up setup.
-# - Centralized environment setup (directory creation) for determinism.
-# - Fixed PowerShell error handling for transcript and file operations.
-# - Standardized paths using ${{ github.workspace }} for reliability.
-# - Added step IDs for clarity and future extensibility.
+# Principal Architect's Notes (v3):
+# - Added a dedicated step to install the local project package (`mm-orderbook`).
+#   This is the standard way to handle private packages within a CI environment.
+# - Previous fixes for caching, paths, and PowerShell errors remain in place.
 # ==============================================================================
 name: Soak (Windows self-hosted, 24-72h)
 
@@ -35,13 +33,11 @@ jobs:
         shell: pwsh
     timeout-minutes: 4380 # 73 hours (72h + 1h buffer)
     env:
-      # Using system-wide Python. Ensure this path is stable on the runner.
       PYTHON_EXE: 'C:\Program Files\Python313\python.exe'
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_PYTHON_VERSION_WARNING: "1"
       SOAK_HOURS: ${{ inputs.soak_hours || '24' }}
-      # Secrets are correctly handled via env block
       API_KEY: ${{ secrets.API_KEY }}
       API_SECRET: ${{ secrets.API_SECRET }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -58,7 +54,7 @@ jobs:
 
       - name: Setup Environment
         id: setup_env
-        if: always() # This step must always run to ensure directories exist for artifacts
+        if: always()
         run: |
           New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\artifacts\soak" | Out-Null
           Write-Host "Artifacts directory is ready at ${{ github.workspace }}\artifacts\soak"
@@ -76,9 +72,9 @@ jobs:
         id: prep_reqs
         run: |
           Get-Content "${{ github.workspace }}\requirements.txt" |
-            Where-Object { $_ -notmatch '^(?i)bybit-connector' -and $_ -notmatch '^(?i)git\+' } |
+            Where-Object { $_ -notmatch '^(?i)bybit-connector' -and $_ -notmatch '^(?i)git\+' -and $_ -notmatch '^(?i)mm-orderbook' } |
             Set-Content "${{ github.workspace }}\requirements_ci.txt" -Encoding ASCII
-          Write-Host "requirements_ci.txt has been generated."
+          Write-Host "requirements_ci.txt has been generated (without local packages)."
 
       - name: Cache pip dependencies
         id: cache_pip
@@ -94,6 +90,13 @@ jobs:
         run: |
           Write-Host "Installing dependencies from requirements_ci.txt..."
           & $env:PYTHON_EXE -m pip install -r "${{ github.workspace }}\requirements_ci.txt"
+
+      - name: Install local project package
+        id: install_local
+        run: |
+          Write-Host "Installing the mm-bot project package in editable mode..."
+          # This command assumes you have a setup.py or pyproject.toml in your root
+          & $env:PYTHON_EXE -m pip install -e .
 
       - name: Start transcript and write summary
         id: start_transcript
@@ -129,11 +132,8 @@ jobs:
         id: snapshot
         if: always()
         run: |
-          # --- Finalize log files before snapshotting ---
-          "SOAK finished: $(Get-Date -Format s)Z" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt"
+          "SOAK finished: $(Get-Date -Format s)Z" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt" -ErrorAction SilentlyContinue
           Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
-
-          # --- Snapshot environment ---
           Write-Host "Snapshotting environment..."
           & $env:PYTHON_EXE -m pip freeze | Out-File "${{ github.workspace }}\artifacts\soak\pip-freeze.txt" -Encoding ascii
           git status -sb | Out-File "${{ github.workspace }}\artifacts\soak\git-status.txt" -Encoding ascii
