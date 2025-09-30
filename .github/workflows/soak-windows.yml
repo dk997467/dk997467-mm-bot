@@ -22,7 +22,6 @@ jobs:
         shell: pwsh
     timeout-minutes: 4380 # 73 часа (с запасом)
     env:
-      # Используем системный Python, установленный в Program Files
       PYTHON_EXE: C:\Program Files\Python313\python.exe
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -45,20 +44,12 @@ jobs:
       - name: Install Rust toolchain via PowerShell
         id: install-rust
         run: |
-          Write-Host "Downloading rustup-init.exe..."
-          Invoke-WebRequest -Uri https://win.rustup.rs/ -OutFile rustup-init.exe
-          
-          Write-Host "Running rustup installer non-interactively..."
-          & .\rustup-init.exe -y
-          
-          # --- РЕШАЮЩЕЕ ИЗМЕНЕНИЕ ---
-          # Установщик Rust изменил PATH, но текущая сессия об этом не знает.
-          # Обновляем PATH вручную для этой сессии, чтобы следующие команды нашли rustc.
-          Write-Host "Adding cargo to PATH for the current session..."
-          $env:PATH = "$($env:USERPROFILE)\.cargo\bin;" + $env:PATH
+          Write-Host "--- Installing Rust toolchain ---"
+          Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile "rustup-init.exe"
+          ./rustup-init.exe -y --no-modify-path --default-toolchain stable
           
           Write-Host "Adding cargo to PATH for subsequent steps..."
-          echo "$($env:USERPROFILE)\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $env:PATH = "$($env:USERPROFILE)\.cargo\bin;" + $env:PATH
           
           Write-Host "Verifying Rust installation..."
           rustc --version
@@ -68,8 +59,7 @@ jobs:
         id: setup-env
         if: always()
         run: |
-          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\artifacts\soak" | Out-Null
-          Write-Host "Artifacts directory created."
+          New-Item -ItemType Directory -Force "${{ github.workspace }}\artifacts\soak" | Out-Null
 
       - name: Cache pip dependencies
         id: cache-pip
@@ -94,7 +84,6 @@ jobs:
           Get-Content requirements.txt |
             Where-Object { $_ -notmatch '^(?i)bybit-connector' -and $_ -notmatch '^(?i)git\+' -and $_ -notmatch '^(?i)mm-orderbook' } |
             Set-Content requirements_ci.txt -Encoding ASCII
-          Write-Host "requirements_ci.txt created."
 
       - name: Install Python dependencies
         id: install-deps
@@ -104,7 +93,9 @@ jobs:
       - name: Install local project package
         id: install-local
         run: |
-          & $env:PYTHON_EXE -m pip install --verbose -e .
+          Write-Host "--- Installing local mm-bot package with verbose output ---"
+          # DEBUG: Added -v flag to see full compiler errors
+          & $env:PYTHON_EXE -m pip install -e . -v
 
       - name: Start transcript and write summary
         id: start-transcript
@@ -114,10 +105,9 @@ jobs:
           "Git rev: $(git rev-parse --short HEAD)" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt"
           $pythonVersion = (& $env:PYTHON_EXE --version)
           "Python: $pythonVersion" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt"
-          Write-Host "Transcription started."
 
       - name: Run long soak loop
-        id: run-soak
+        id: soak-loop
         run: |
           $durationHours = [int]$env:SOAK_HOURS
           if ($durationHours -lt 1 -or $durationHours -gt 72) { $durationHours = 24 }
@@ -143,13 +133,17 @@ jobs:
           Write-Host "--- Finalize log files before snapshotting ---"
           "SOAK finished: $(Get-Date -Format s)Z" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt" -ErrorAction SilentlyContinue
           Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
-
-          Write-Host "--- Snapshotting environment and artifacts ---"
+          
+          Write-Host "--- Snapshotting environment ---"
           & $env:PYTHON_EXE -m pip freeze | Out-File "${{ github.workspace }}\artifacts\soak\pip-freeze.txt" -Encoding ascii
           git status -sb | Out-File "${{ github.workspace }}\artifacts\soak\git-status.txt" -Encoding ascii
-          Get-ChildItem "${{ github.workspace }}\artifacts" -Recurse -File | Get-FileHash -Algorithm SHA256 | ConvertTo-Json -Depth 5 | Out-File "${{ github.workspace }}\artifacts\soak\hash_manifest.json" -Encoding ascii
-          Get-ChildItem "${{ github.workspace }}\artifacts\soak" | Sort-Object Length -Descending | Select-Object Name,Length,LastWriteTime | Out-File "${{ github.workspace }}\artifacts\soak\ls.txt" -Encoding ascii
-          Write-Host "Snapshot complete."
+          Get-ChildItem "${{ github.workspace }}\artifacts" -Recurse -File |
+            Get-FileHash -Algorithm SHA256 |
+            ConvertTo-Json -Depth 5 |
+            Out-File "${{ github.workspace }}\artifacts\soak\hash_manifest.json" -Encoding ascii
+          Get-ChildItem "${{ github.workspace }}\artifacts\soak" | Sort-Object Length -Descending |
+            Select-Object Name,Length,LastWriteTime |
+            Out-File "${{ github.workspace }}\artifacts\soak\ls.txt" -Encoding ascii
 
       - name: Upload artifacts
         id: upload-artifacts
@@ -164,7 +158,7 @@ jobs:
           retention-days: 14
 
       - name: Telegram notify on failure
-        id: notify-failure
+        id: notify-telegram
         if: failure() && env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID
         run: |
           $msg = "❌ SOAK failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} (commit $(git rev-parse --short HEAD))"
@@ -173,3 +167,4 @@ jobs:
             chat_id = "$env:TELEGRAM_CHAT_ID"
             text    = $msg
           } | Out-Null
+
