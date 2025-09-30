@@ -203,7 +203,28 @@ class MarketMakerBot:
         try:
             print("Initializing Market Maker Bot...")
             
-            # Load configuration using new ConfigLoader
+            # Load YAML -> validate via Pydantic Settings -> build AppConfig
+            try:
+                import yaml as _yaml
+                from pydantic import ValidationError as _PydanticValidationError
+                from src.config_models import Settings as _Settings
+
+                with open(self.config_path, 'r', encoding='utf-8') as _f:
+                    _yaml_data = _yaml.safe_load(_f) or {}
+
+                _validated_config = _Settings(**_yaml_data)
+                setattr(self, "_validated_settings", _validated_config)
+            except FileNotFoundError as _e:
+                print(f"[CRITICAL] config file not found: {self.config_path} :: {_e}")
+                raise SystemExit(1)
+            except _PydanticValidationError as _e:
+                print(f"[CRITICAL] invalid configuration: {_e}")
+                raise SystemExit(1)
+            except Exception as _e:
+                print(f"[CRITICAL] failed to load/validate config: {_e}")
+                raise SystemExit(1)
+
+            # Use legacy converter to AppConfig to keep rest of the app intact
             loader = ConfigLoader(self.config_path)
             self.config = loader.load()
             self.ctx = AppContext(cfg=self.config)

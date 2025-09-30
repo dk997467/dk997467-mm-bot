@@ -1,22 +1,16 @@
+# Этот файл говорит, что для сборки проекта в папке /rust
+# нужно использовать сборщик 'maturin'.
 [build-system]
-requires = ["maturin>=1.4,<2.0"]
+requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
+# Эта секция помогает maturin и pip понять, что это за проект.
 [project]
 name = "mm-orderbook"
-version = "0.1.0"
-description = "Python bindings for a high-performance L2 order book (Rust+pyo3)"
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 classifiers = [
-    "Programming Language :: Python",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
-
-[tool.maturin]
-features = []
-module-name = "mm_orderbook"
-bindings = "pyo3"
-python-source = "python"
 
 

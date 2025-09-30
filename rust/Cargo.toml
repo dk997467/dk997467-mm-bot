@@ -1,0 +1,17 @@
+[package]
+name = "mm-orderbook"
+version = "0.1.0"
+edition = "2021"
+
+# Эта секция КРИТИЧЕСКИ важна.
+# Она говорит компилятору Rust создать динамическую библиотеку (cdylib),
+# которую Python сможет импортировать.
+[lib]
+name = "mm_orderbook" # Имя .so/.pyd файла будет таким
+crate-type = ["cdylib"]
+
+[dependencies]
+# Эта секция подключает PyO3, мост между Rust и Python.
+pyo3 = { version = "0.20.0", features = ["extension-module"] }
+indexmap = "2"
+

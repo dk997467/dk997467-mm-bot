@@ -1,15 +1,13 @@
 # ==============================================================================
 # Modern Python Project Configuration (PEP 621)
 # Principal Architect's Notes:
-# - This is the corrected and final version.
-# - The conflicting `package-dir` and incorrect `where` have been removed.
-# - A single, unambiguous `[tool.setuptools.packages.find]` block now correctly
-#   identifies the `mm_bot` package from the project root. This is the
-#   industry-standard approach for modern setuptools.
+# - Added 'maturin' to the build-system requirements. This tells pip/setuptools
+#   that maturin is needed to correctly build any sub-packages (like our Rust
+#   module) during the installation process. This is the final piece of the puzzle.
 # ==============================================================================
 
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0", "wheel", "maturin>=1.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -30,5 +28,4 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]          # Искать пакеты в корневой директории (самый надежный способ)
 include = ["mm_bot*"]  # Находить пакет mm_bot и все его подмодули
-
 
