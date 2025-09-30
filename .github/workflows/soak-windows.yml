@@ -17,6 +17,9 @@ concurrency:
 jobs:
   soak:
     runs-on: [self-hosted, windows, soak]
+    defaults:
+      run:
+        shell: pwsh
     timeout-minutes: 4320   # 72 ????
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
@@ -44,10 +47,7 @@ jobs:
           cache: "pip"
 
       - name: Run Windows Setup Script
-        shell: pwsh
-        run: |
-          Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process -Force
-          ./setup.ps1
+        run: ./setup.ps1
 
       - name: Prepare minimal requirements (skip git+/bybit-connector)
         shell: pwsh
