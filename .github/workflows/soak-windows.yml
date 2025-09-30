@@ -22,7 +22,6 @@ jobs:
         shell: pwsh
     timeout-minutes: 4320   # 72 ????
     env:
-      PYTHON_EXE: C:\actions-runner\_work\_tool\Python\3.11.9\x64\python.exe
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_PYTHON_VERSION_WARNING: "1"
@@ -43,10 +42,10 @@ jobs:
 
       - name: Verify existing Python installation
         run: |
-          echo "Using absolute Python path:"
-          & $env:PYTHON_EXE --version
-          & $env:PYTHON_EXE -m pip --version
-          & $env:PYTHON_EXE -m pip install --upgrade pip
+          echo "Using system Python:"
+          python --version
+          pip --version
+          pip install --upgrade pip
 
       - name: Run Windows Setup Script
         run: ./setup.ps1
@@ -57,8 +56,8 @@ jobs:
           Get-Content requirements.txt |
             Where-Object { $_ -notmatch '^(?i)bybit-connector' -and $_ -notmatch '^(?i)git\+' } |
             Set-Content requirements_ci.txt -Encoding ASCII
-          & $env:PYTHON_EXE -m pip install -U pip
-          & $env:PYTHON_EXE -m pip install -r requirements_ci.txt
+          pip install -U pip
+          pip install -r requirements_ci.txt
 
       - name: Start transcript
         shell: pwsh
@@ -67,7 +66,7 @@ jobs:
           Start-Transcript -Path artifacts\soak\soak_windows.log -Append | Out-Null
           "SOAK started: $(Get-Date -Format s)Z" | Out-File artifacts\soak\summary.txt -Encoding ascii
           "Git rev: $(git rev-parse --short HEAD)" | Add-Content artifacts\soak\summary.txt
-          "Python: $( & $env:PYTHON_EXE --version)" | Add-Content artifacts\soak\summary.txt
+          "Python: $(python --version)" | Add-Content artifacts\soak\summary.txt
 
       # <<< ??? ????????? ???????? ??? ????/????????? >>>
       - name: Run long soak loop (24?72h)
@@ -81,7 +80,7 @@ jobs:
           while ((Get-Date) -lt $deadline) {
             try {
               # ????????? ???????????? ??????:
-              & $env:PYTHON_EXE tools\ci\full_stack_validate.py
+              python tools\ci\full_stack_validate.py
               Write-Host "[INFO] validate ok $(Get-Date -Format s)Z"
             } catch {
               Write-Host "[ERROR] $_"
@@ -99,7 +98,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          & $env:PYTHON_EXE -m pip freeze | Out-File artifacts\soak\pip-freeze.txt -Encoding ascii
+          pip freeze | Out-File artifacts\soak\pip-freeze.txt -Encoding ascii
           git status -sb | Out-File artifacts\soak\git-status.txt -Encoding ascii
           Get-ChildItem artifacts -Recurse -File | `
             Get-FileHash -Algorithm SHA256 | `
