@@ -22,7 +22,7 @@ jobs:
         shell: pwsh
     timeout-minutes: 4320   # 72 ????
     env:
-      PYTHON_EXE: C:\Users\dimak\AppData\Local\Programs\Python\Python313\python.exe
+      PYTHON_EXE: C:\Program Files\Python313\python.exe
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_PYTHON_VERSION_WARNING: "1"
