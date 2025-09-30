@@ -48,9 +48,15 @@ jobs:
           Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile "rustup-init.exe"
           ./rustup-init.exe -y --no-modify-path --default-toolchain stable
           
+          $cargo_bin_path = "$($env:USERPROFILE)\.cargo\bin"
+          
+          # FIX 1: Update PATH for the CURRENT step to make verification commands work
+          Write-Host "Adding cargo to PATH for the current step..."
+          $env:PATH = "$cargo_bin_path;" + $env:PATH
+          
+          # FIX 2: Update PATH for ALL SUBSEQUENT steps
           Write-Host "Adding cargo to PATH for all subsequent steps..."
-          # FIX: Use GITHUB_PATH to permanently add cargo to the PATH for this job
-          echo "$($env:USERPROFILE)\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo $cargo_bin_path | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           
           Write-Host "Verifying Rust installation..."
           rustc --version
@@ -95,7 +101,7 @@ jobs:
         id: install-local
         run: |
           Write-Host "--- Installing local mm-bot package with verbose output ---"
-          # DEBUG: Added -v flag to see full compiler errors
+          # DEBUG: Using -v flag to see full compiler errors if any
           & $env:PYTHON_EXE -m pip install -e . -v
 
       - name: Start transcript and write summary
