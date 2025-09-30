@@ -48,9 +48,6 @@ jobs:
           & $env:PYTHON_EXE -m pip --version
           & $env:PYTHON_EXE -m pip install --upgrade pip
 
-      - name: Run Windows Setup Script
-        run: ./setup.ps1
-
       - name: Prepare minimal requirements (skip git+/bybit-connector)
         shell: pwsh
         run: |
