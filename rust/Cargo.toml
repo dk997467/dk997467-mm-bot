@@ -2,16 +2,17 @@
 name = "mm-orderbook"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+authors = ["Market Maker Team"]
+description = "High-performance L2 order book for Python via pyo3"
 
-# Эта секция КРИТИЧЕСКИ важна.
-# Она говорит компилятору Rust создать динамическую библиотеку (cdylib),
-# которую Python сможет импортировать.
 [lib]
-name = "mm_orderbook" # Имя .so/.pyd файла будет таким
+name = "mm_orderbook"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Эта секция подключает PyO3, мост между Rust и Python.
-pyo3 = { version = "0.20.0", features = ["extension-module"] }
+pyo3 = { version = "0.20", features = ["extension-module", "abi3-py311"] }
 indexmap = "2"
+# FINAL FIX: Add the library that allows using floats as hash keys
+ordered-float = "4.2.0"
 

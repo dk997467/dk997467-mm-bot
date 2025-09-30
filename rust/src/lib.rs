@@ -1,20 +1,23 @@
 use indexmap::IndexMap;
-use pyo3::exceptions::PyValueError;
+use ordered_float::OrderedFloat;
 use pyo3::prelude::*;
 
 #[pyclass]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct L2Book {
-    // price -> size, bids descending, asks ascending
-    bids: IndexMap<f64, f64>,
-    asks: IndexMap<f64, f64>,
+    // Используем OrderedFloat<f64> в качестве ключа, чтобы разрешить хеширование
+    bids: IndexMap<OrderedFloat<f64>, f64>,
+    asks: IndexMap<OrderedFloat<f64>, f64>,
 }
 
 #[pymethods]
 impl L2Book {
     #[new]
     pub fn new() -> Self {
-        Self { bids: IndexMap::new(), asks: IndexMap::new() }
+        Self {
+            bids: IndexMap::new(),
+            asks: IndexMap::new(),
+        }
     }
 
     pub fn clear(&mut self) {
@@ -29,7 +32,8 @@ impl L2Book {
         bb.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
         for (p, s) in bb.into_iter() {
             if s > 0.0 {
-                self.bids.insert(p, s);
+                // Оборачиваем ключ p в OrderedFloat
+                self.bids.insert(OrderedFloat(p), s);
             }
         }
         // Insert asks (ascending order)
@@ -37,7 +41,8 @@ impl L2Book {
         aa.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         for (p, s) in aa.into_iter() {
             if s > 0.0 {
-                self.asks.insert(p, s);
+                // Оборачиваем ключ p в OrderedFloat
+                self.asks.insert(OrderedFloat(p), s);
             }
         }
         Ok(())
@@ -47,16 +52,20 @@ impl L2Book {
     pub fn apply_delta(&mut self, bids: Vec<(f64, f64)>, asks: Vec<(f64, f64)>) -> PyResult<()> {
         for (p, s) in bids.into_iter() {
             if s > 0.0 {
-                self.bids.insert(p, s);
+                // Оборачиваем ключ p в OrderedFloat
+                self.bids.insert(OrderedFloat(p), s);
             } else {
-                self.bids.swap_remove(&p);
+                // Оборачиваем ключ p в OrderedFloat для поиска и удаления
+                self.bids.swap_remove(&OrderedFloat(p));
             }
         }
         for (p, s) in asks.into_iter() {
             if s > 0.0 {
-                self.asks.insert(p, s);
+                // Оборачиваем ключ p в OrderedFloat
+                self.asks.insert(OrderedFloat(p), s);
             } else {
-                self.asks.swap_remove(&p);
+                // Оборачиваем ключ p в OrderedFloat для поиска и удаления
+                self.asks.swap_remove(&OrderedFloat(p));
             }
         }
         // Re-sort to ensure order
@@ -66,12 +75,14 @@ impl L2Book {
 
     #[getter]
     pub fn best_bid(&self) -> Option<(f64, f64)> {
-        self.bids.iter().next().map(|(p, s)| (*p, *s))
+        // Разыменовываем ключ p, чтобы вернуть f64
+        self.bids.iter().next().map(|(p, s)| (p.0, *s))
     }
 
     #[getter]
     pub fn best_ask(&self) -> Option<(f64, f64)> {
-        self.asks.iter().next().map(|(p, s)| (*p, *s))
+        // Разыменовываем ключ p, чтобы вернуть f64
+        self.asks.iter().next().map(|(p, s)| (p.0, *s))
     }
 
     pub fn mid(&self) -> Option<f64> {
@@ -95,18 +106,8 @@ impl L2Book {
     }
 
     pub fn imbalance(&self, depth: usize) -> f64 {
-        let bid_vol: f64 = self
-            .bids
-            .iter()
-            .take(depth)
-            .map(|(_, s)| *s)
-            .sum();
-        let ask_vol: f64 = self
-            .asks
-            .iter()
-            .take(depth)
-            .map(|(_, s)| *s)
-            .sum();
+        let bid_vol: f64 = self.bids.iter().take(depth).map(|(_, s)| *s).sum();
+        let ask_vol: f64 = self.asks.iter().take(depth).map(|(_, s)| *s).sum();
         let tot = bid_vol + ask_vol;
         if tot == 0.0 {
             0.0
@@ -117,17 +118,18 @@ impl L2Book {
 
     fn reorder(&mut self) {
         // Rebuild keeping order: bids desc, asks asc
-        let mut bb: Vec<(f64, f64)> = self.bids.iter().map(|(p, s)| (*p, *s)).collect();
-        let mut aa: Vec<(f64, f64)> = self.asks.iter().map(|(p, s)| (*p, *s)).collect();
+        let mut bb: Vec<(f64, f64)> = self.bids.iter().map(|(p, s)| (p.0, *s)).collect();
+        let mut aa: Vec<(f64, f64)> = self.asks.iter().map(|(p, s)| (p.0, *s)).collect();
         bb.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        // FIX: Asks should be ascending
         aa.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         self.bids.clear();
         self.asks.clear();
         for (p, s) in bb.into_iter() {
-            self.bids.insert(p, s);
+            self.bids.insert(OrderedFloat(p), s);
         }
         for (p, s) in aa.into_iter() {
-            self.asks.insert(p, s);
+            self.asks.insert(OrderedFloat(p), s);
         }
     }
 }
@@ -137,5 +139,3 @@ fn mm_orderbook(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<L2Book>()?;
     Ok(())
 }
-
-
