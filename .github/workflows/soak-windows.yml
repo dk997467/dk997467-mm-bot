@@ -48,8 +48,9 @@ jobs:
           Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile "rustup-init.exe"
           ./rustup-init.exe -y --no-modify-path --default-toolchain stable
           
-          Write-Host "Adding cargo to PATH for subsequent steps..."
-          $env:PATH = "$($env:USERPROFILE)\.cargo\bin;" + $env:PATH
+          Write-Host "Adding cargo to PATH for all subsequent steps..."
+          # FIX: Use GITHUB_PATH to permanently add cargo to the PATH for this job
+          echo "$($env:USERPROFILE)\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           
           Write-Host "Verifying Rust installation..."
           rustc --version
