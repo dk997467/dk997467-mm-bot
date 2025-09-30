@@ -23,7 +23,6 @@ jobs:
     timeout-minutes: 4320   # 72 ????
     env:
       PYTHON_EXE: C:\actions-runner\_work\_tool\Python\3.11.9\x64\python.exe
-      PIP_EXE: C:\actions-runner\_work\_tool\Python\3.11.9\x64\Scripts\pip.exe
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_PYTHON_VERSION_WARNING: "1"
@@ -46,8 +45,8 @@ jobs:
         run: |
           echo "Using absolute Python path:"
           & $env:PYTHON_EXE --version
-          & $env:PIP_EXE --version
-          & $env:PIP_EXE install --upgrade pip
+          & $env:PYTHON_EXE -m pip --version
+          & $env:PYTHON_EXE -m pip install --upgrade pip
 
       - name: Run Windows Setup Script
         run: ./setup.ps1
@@ -59,7 +58,7 @@ jobs:
             Where-Object { $_ -notmatch '^(?i)bybit-connector' -and $_ -notmatch '^(?i)git\+' } |
             Set-Content requirements_ci.txt -Encoding ASCII
           & $env:PYTHON_EXE -m pip install -U pip
-          & $env:PIP_EXE install -r requirements_ci.txt
+          & $env:PYTHON_EXE -m pip install -r requirements_ci.txt
 
       - name: Start transcript
         shell: pwsh
