@@ -40,11 +40,12 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
+      - name: Verify existing Python installation
+        run: |
+          echo "Using existing Python found in PATH:"
+          python --version
+          pip --version
+          pip install --upgrade pip
 
       - name: Run Windows Setup Script
         run: ./setup.ps1
