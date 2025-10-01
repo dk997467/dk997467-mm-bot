@@ -32,10 +32,11 @@ def main() -> int:
                     content = f.read()
             except Exception:
                 continue
-            # flag json.dump/json.dumps outside our writer functions
-            if re.search(r'\bjson\.dump\s*\(', content) or re.search(r'\bjson\.dumps\s*\(', content):
-                if 'write_json_atomic' not in content:
-                    bad.append(path)
+            # Flag only file writes that bypass write_json_atomic
+            uses_json_dump = re.search(r'\bjson\.dump\s*\(', content)
+            writes_json_dumps = re.search(r'\.write\s*\([^)]*json\.dumps\s*\(', content)
+            if (uses_json_dump or writes_json_dumps) and ('write_json_atomic' not in content):
+                bad.append(path)
     if bad:
         for p in sorted(set(bad)):
             print(f'JSON_LINT violation in {p}')

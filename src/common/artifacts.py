@@ -4,13 +4,13 @@ Artifacts helpers (stdlib-only).
 Provides atomic JSON export for metrics/registry snapshots.
 """
 
-from typing import Dict, Any
+from typing import Any
 import json
 import os
 from pathlib import Path
 
 
-def export_registry_snapshot(path: str, payload: Dict[str, Any]) -> None:
+def export_registry_snapshot(path: str, payload: Any) -> None:
     """Atomically write a deterministic JSON snapshot to path.
 
     Rules:
@@ -26,7 +26,7 @@ def export_registry_snapshot(path: str, payload: Dict[str, Any]) -> None:
         # Best-effort; continue to attempt write
         pass
 
-    data = json.dumps(payload or {}, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"
+    data = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"
     tmp = sp + ".tmp"
 
     # Write to temporary file with fsync
@@ -55,7 +55,7 @@ def export_registry_snapshot(path: str, payload: Dict[str, Any]) -> None:
         pass
 
 
-def write_json_atomic(path: str, payload: Dict[str, Any]) -> None:
+def write_json_atomic(path: str, payload: Any) -> None:
     """Write deterministic JSON to path atomically with fsync.
 
     - ASCII only, sort_keys, compact separators, trailing \n
@@ -68,7 +68,7 @@ def write_json_atomic(path: str, payload: Dict[str, Any]) -> None:
         p.parent.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
-    data = json.dumps(payload or {}, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"
+    data = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"
     tmp = sp + ".tmp"
     with open(tmp, 'w', encoding='ascii', newline='\n') as f:
         f.write(data)

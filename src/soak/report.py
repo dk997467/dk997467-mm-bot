@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+from src.common.artifacts import write_json_atomic
 from dataclasses import dataclass, asdict
 from typing import Dict, Any
 
@@ -27,7 +27,5 @@ class SoakReport:
         return d
 
     def dump_json(self, path: str) -> None:
-        data = json.dumps(self.to_dict(), ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"
-        with open(path, "w", encoding="ascii", newline="\n") as f:
-            f.write(data)
+        write_json_atomic(path, self.to_dict())
 
