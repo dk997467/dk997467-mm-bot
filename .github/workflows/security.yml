@@ -1,0 +1,238 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Run weekly on Monday at 00:00 UTC
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+jobs:
+  python-security:
+    name: Python Dependencies Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+      
+      - name: Run pip-audit (strict mode)
+        id: pip-audit-strict
+        continue-on-error: true
+        run: |
+          echo "=== Running pip-audit in strict mode ==="
+          pip-audit --requirement requirements.txt \
+            --format json \
+            --output pip-audit-report.json \
+            --vulnerability-service osv \
+            --strict
+          
+          # Also generate human-readable output
+          pip-audit --requirement requirements.txt \
+            --format markdown \
+            --output pip-audit-report.md \
+            --vulnerability-service osv
+      
+      - name: Run pip-audit (informational - all severities)
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "=== Running pip-audit for all severities (informational) ==="
+          pip-audit --requirement requirements.txt \
+            --format markdown \
+            --output pip-audit-full-report.md \
+            --vulnerability-service osv || true
+      
+      - name: Parse audit results
+        if: always()
+        id: parse-results
+        run: |
+          if [ -f pip-audit-report.json ]; then
+            # Count vulnerabilities by severity
+            CRITICAL=$(jq '[.vulnerabilities[] | select(.aliases[] | contains("CRITICAL"))] | length' pip-audit-report.json 2>/dev/null || echo "0")
+            HIGH=$(jq '[.vulnerabilities[] | select(.aliases[] | contains("HIGH"))] | length' pip-audit-report.json 2>/dev/null || echo "0")
+            MEDIUM=$(jq '[.vulnerabilities[] | select(.aliases[] | contains("MEDIUM"))] | length' pip-audit-report.json 2>/dev/null || echo "0")
+            LOW=$(jq '[.vulnerabilities[] | select(.aliases[] | contains("LOW"))] | length' pip-audit-report.json 2>/dev/null || echo "0")
+            
+            echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+            echo "high=$HIGH" >> $GITHUB_OUTPUT
+            echo "medium=$MEDIUM" >> $GITHUB_OUTPUT
+            echo "low=$LOW" >> $GITHUB_OUTPUT
+            
+            echo "### Python Security Audit Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔴 CRITICAL | $CRITICAL |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟠 HIGH | $HIGH |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟡 MEDIUM | $MEDIUM |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟢 LOW | $LOW |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No audit report generated"
+            echo "critical=0" >> $GITHUB_OUTPUT
+            echo "high=0" >> $GITHUB_OUTPUT
+            echo "medium=0" >> $GITHUB_OUTPUT
+            echo "low=0" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Upload audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-security-audit
+          path: |
+            pip-audit-report.json
+            pip-audit-report.md
+            pip-audit-full-report.md
+          if-no-files-found: ignore
+          retention-days: 90
+      
+      - name: Check for critical/high vulnerabilities
+        if: always()
+        run: |
+          CRITICAL="${{ steps.parse-results.outputs.critical }}"
+          HIGH="${{ steps.parse-results.outputs.high }}"
+          
+          if [ "$CRITICAL" != "0" ] || [ "$HIGH" != "0" ]; then
+            echo "❌ CRITICAL or HIGH severity vulnerabilities found!"
+            echo "   Critical: $CRITICAL"
+            echo "   High: $HIGH"
+            echo ""
+            echo "Please review pip-audit-report.md for details."
+            exit 1
+          else
+            echo "✅ No critical or high severity vulnerabilities found."
+          fi
+  
+  rust-security:
+    name: Rust Dependencies Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - name: Install cargo-audit
+        run: |
+          cargo install cargo-audit --locked
+      
+      - name: Run cargo audit (strict mode)
+        id: cargo-audit-strict
+        continue-on-error: true
+        working-directory: rust
+        run: |
+          echo "=== Running cargo audit in strict mode ==="
+          cargo audit --json > ../cargo-audit-report.json || true
+          
+          # Also generate human-readable output
+          cargo audit > ../cargo-audit-report.txt || true
+      
+      - name: Parse Rust audit results
+        if: always()
+        id: parse-rust-results
+        run: |
+          if [ -f cargo-audit-report.json ]; then
+            # Count vulnerabilities
+            VULN_COUNT=$(jq '.vulnerabilities.count' cargo-audit-report.json 2>/dev/null || echo "0")
+            WARNINGS=$(jq '.warnings | length' cargo-audit-report.json 2>/dev/null || echo "0")
+            
+            echo "vulnerabilities=$VULN_COUNT" >> $GITHUB_OUTPUT
+            echo "warnings=$WARNINGS" >> $GITHUB_OUTPUT
+            
+            echo "### Rust Security Audit Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Category | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔴 Vulnerabilities | $VULN_COUNT |" >> $GITHUB_STEP_SUMMARY
+            echo "| ⚠️ Warnings | $WARNINGS |" >> $GITHUB_STEP_SUMMARY
+            
+            # Show details if vulnerabilities found
+            if [ "$VULN_COUNT" != "0" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "#### Vulnerability Details:" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              cat cargo-audit-report.txt >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "No Rust audit report generated"
+            echo "vulnerabilities=0" >> $GITHUB_OUTPUT
+            echo "warnings=0" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Upload Rust audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-security-audit
+          path: |
+            cargo-audit-report.json
+            cargo-audit-report.txt
+          if-no-files-found: ignore
+          retention-days: 90
+      
+      - name: Check for Rust vulnerabilities
+        if: always()
+        run: |
+          VULN_COUNT="${{ steps.parse-rust-results.outputs.vulnerabilities }}"
+          
+          if [ "$VULN_COUNT" != "0" ]; then
+            echo "❌ Rust vulnerabilities found: $VULN_COUNT"
+            echo "Please review cargo-audit-report.txt for details."
+            exit 1
+          else
+            echo "✅ No Rust vulnerabilities found."
+          fi
+  
+  security-summary:
+    name: Security Audit Summary
+    runs-on: ubuntu-latest
+    needs: [python-security, rust-security]
+    if: always()
+    
+    steps:
+      - name: Generate summary
+        run: |
+          echo "### 🔒 Security Audit Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Both Python and Rust dependency audits have been completed." >> $GITHUB_STEP_SUMMARY
+          echo "Review individual job outputs for detailed results." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Note:** This workflow fails if CRITICAL or HIGH severity vulnerabilities are found." >> $GITHUB_STEP_SUMMARY
+      
+      - name: Check overall status
+        run: |
+          PYTHON_STATUS="${{ needs.python-security.result }}"
+          RUST_STATUS="${{ needs.rust-security.result }}"
+          
+          echo "Python audit: $PYTHON_STATUS"
+          echo "Rust audit: $RUST_STATUS"
+          
+          if [ "$PYTHON_STATUS" != "success" ] || [ "$RUST_STATUS" != "success" ]; then
+            echo "❌ Security audit failed. Please review vulnerabilities."
+            exit 1
+          else
+            echo "✅ All security audits passed."
+          fi
+

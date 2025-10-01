@@ -246,14 +246,32 @@ def run_step(label: str, cmd: List[str]) -> Dict[str, Any]:
                 'logs': {'stdout': str(out_path), 'stderr': str(err_path)}
             }
         except subprocess.TimeoutExpired:
-            # Kill whole process tree
+            # Kill whole process tree using robust psutil-based approach
+            # This prevents zombie processes that simple taskkill/killpg may miss
             try:
-                if is_windows:
-                    subprocess.run(["taskkill", "/PID", str(p.pid), "/F", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # Import process_manager (only when needed to avoid dependency issues)
+                sys.path.insert(0, str(ROOT_DIR))
+                from src.common.process_manager import kill_process_tree, PSUTIL_AVAILABLE
+                
+                if PSUTIL_AVAILABLE:
+                    # Use psutil for robust cleanup
+                    success = kill_process_tree(p.pid, timeout=3.0, include_parent=True)
+                    if success:
+                        print(f"[INFO] Process tree {p.pid} killed successfully via psutil", file=sys.stderr)
+                    else:
+                        print(f"[WARN] Some processes in tree {p.pid} may still be alive", file=sys.stderr)
                 else:
-                    import os as _os, signal as _sig
-                    _os.killpg(_os.getpgid(p.pid), _sig.SIGKILL)
-            except Exception:
+                    # Fallback to OS-specific commands (less robust)
+                    if is_windows:
+                        subprocess.run(["taskkill", "/PID", str(p.pid), "/F", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    else:
+                        import os as _os, signal as _sig
+                        try:
+                            _os.killpg(_os.getpgid(p.pid), _sig.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+            except Exception as e:
+                print(f"[WARN] Error killing process tree: {e}, trying direct kill...", file=sys.stderr)
                 try:
                     p.kill()
                 except Exception:

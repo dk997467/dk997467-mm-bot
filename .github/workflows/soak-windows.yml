@@ -139,6 +139,22 @@ jobs:
           $pythonVersion = (& $env:PYTHON_EXE --version)
           "Python: $pythonVersion" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt"
 
+      - name: Start resource monitoring (background)
+        id: start-monitoring
+        run: |
+          Write-Host "--- Starting resource monitor in background ---"
+          $monitorScript = "${{ github.workspace }}\tools\soak\resource_monitor.py"
+          $outputFile = "${{ github.workspace }}\artifacts\soak\resources.jsonl"
+          
+          # Start monitor as background job (samples every 60s)
+          $monitorJob = Start-Job -ScriptBlock {
+            param($pythonExe, $script, $output, $interval)
+            & $pythonExe $script --interval $interval --output $output
+          } -ArgumentList $env:PYTHON_EXE, $monitorScript, $outputFile, 60
+          
+          Write-Host "[MONITOR] Background job started (ID: $($monitorJob.Id))"
+          "monitor_job_id=$($monitorJob.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Run long soak loop
         id: soak-loop
         run: |
@@ -172,6 +188,43 @@ jobs:
             # Heartbeat: каждые 5 минут
             Start-Sleep -Seconds 300
             Write-Host "[HB] alive $(Get-Date -Format s)Z"
+          }
+
+      - name: Stop resource monitoring and analyze
+        id: stop-monitoring
+        if: always()
+        run: |
+          Write-Host "--- Stopping resource monitor ---"
+          
+          # Stop background job if it exists
+          if ($env:monitor_job_id) {
+            try {
+              $job = Get-Job -Id $env:monitor_job_id -ErrorAction SilentlyContinue
+              if ($job) {
+                Write-Host "[MONITOR] Stopping job ID: $($job.Id)"
+                Stop-Job -Id $job.Id -ErrorAction SilentlyContinue
+                Remove-Job -Id $job.Id -Force -ErrorAction SilentlyContinue
+              }
+            } catch {
+              Write-Host "[MONITOR] Job already stopped"
+            }
+          }
+          
+          # Analyze collected data
+          $resourceFile = "${{ github.workspace }}\artifacts\soak\resources.jsonl"
+          if (Test-Path $resourceFile) {
+            Write-Host "--- Analyzing resource data ---"
+            & $env:PYTHON_EXE "${{ github.workspace }}\tools\soak\resource_monitor.py" --analyze $resourceFile
+            
+            # Add resource summary to main summary
+            $analysisFile = "${{ github.workspace }}\artifacts\soak\resources.analysis.json"
+            if (Test-Path $analysisFile) {
+              "" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt"
+              "=== RESOURCE ANALYSIS ===" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt"
+              Get-Content $analysisFile | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt"
+            }
+          } else {
+            Write-Host "[MONITOR] No resource data collected"
           }
 
       - name: Finalize and snapshot

@@ -19,7 +19,7 @@ def audit_event(kind, symbol, fields):
             pass
         if isinstance(v, str):
             try:
-                v = redact(v, DEFAULT_PATTERNS)
+                v = redact(v)  # Uses DEFAULT_PATTERNS by default
             except Exception:
                 pass
         safe_fields[key] = v

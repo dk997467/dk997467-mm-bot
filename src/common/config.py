@@ -221,6 +221,48 @@ class StrategyConfig:
 
 
 @dataclass
+class ConnectionPoolConfig:
+    """HTTP connection pooling configuration for REST API connector.
+    
+    Optimizes connection reuse to reduce latency and resource usage.
+    Configured based on Bybit API best practices and high-frequency trading requirements.
+    """
+    # Connection limits
+    limit: int = 100  # Total connection pool limit
+    limit_per_host: int = 30  # Max connections per host (Bybit API)
+    
+    # Timeouts (in seconds)
+    connect_timeout: float = 10.0  # TCP connection timeout
+    sock_read_timeout: float = 30.0  # Socket read timeout
+    total_timeout: float = 60.0  # Total request timeout
+    
+    # DNS and keepalive
+    ttl_dns_cache: int = 300  # DNS cache TTL (5 minutes)
+    keepalive_timeout: float = 30.0  # TCP keepalive timeout
+    
+    # Connection management
+    enable_cleanup_closed: bool = True  # Cleanup closed connections
+    force_close: bool = False  # Close connections after each request (disable pooling if True)
+    
+    def __post_init__(self):
+        """Validate configuration values."""
+        if self.limit < 1:
+            raise ValueError("ConnectionPoolConfig.limit must be >= 1")
+        if self.limit_per_host < 1 or self.limit_per_host > self.limit:
+            raise ValueError("ConnectionPoolConfig.limit_per_host must be between 1 and limit")
+        if self.connect_timeout <= 0 or self.connect_timeout > self.total_timeout:
+            raise ValueError("ConnectionPoolConfig.connect_timeout must be > 0 and <= total_timeout")
+        if self.sock_read_timeout <= 0 or self.sock_read_timeout > self.total_timeout:
+            raise ValueError("ConnectionPoolConfig.sock_read_timeout must be > 0 and <= total_timeout")
+        if self.total_timeout <= 0:
+            raise ValueError("ConnectionPoolConfig.total_timeout must be > 0")
+        if self.ttl_dns_cache < 0:
+            raise ValueError("ConnectionPoolConfig.ttl_dns_cache must be >= 0")
+        if self.keepalive_timeout <= 0:
+            raise ValueError("ConnectionPoolConfig.keepalive_timeout must be > 0")
+
+
+@dataclass
 class PosSkewConfig:
     per_symbol_abs_limit: float = 0.0
     per_color_abs_limit: float = 0.0
@@ -1068,6 +1110,7 @@ class Config:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     websocket: WebSocketConfig = field(default_factory=WebSocketConfig)
     rest: RESTConfig = field(default_factory=RESTConfig)
+    connection_pool: ConnectionPoolConfig = field(default_factory=ConnectionPoolConfig)
     trading: TradingConfig = field(default_factory=TradingConfig)
     bybit: BybitConfig = field(default_factory=BybitConfig)
     

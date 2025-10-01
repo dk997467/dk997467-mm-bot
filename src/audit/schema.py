@@ -14,7 +14,7 @@ def _redact_in_obj(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_redact_in_obj(x) for x in obj]
     if isinstance(obj, str):
-        return redact(obj, DEFAULT_PATTERNS)
+        return redact(obj)  # Uses DEFAULT_PATTERNS by default
     return obj
 
 
