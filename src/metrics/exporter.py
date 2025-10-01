@@ -97,6 +97,11 @@ class Metrics:
         self.ws_reconnects_total = Gauge('ws_reconnects_total', 'WebSocket reconnections', ['exchange'])
         self.rest_error_rate = Gauge('rest_error_rate', 'REST API error rate', ['exchange'])
         
+        # WebSocket reconnect backoff metrics (Task #4: exponential backoff)
+        self.ws_reconnect_attempts_total = Counter('ws_reconnect_attempts_total', 'Total WebSocket reconnect attempts', ['exchange', 'ws_type'])
+        self.ws_reconnect_delay_seconds = Histogram('ws_reconnect_delay_seconds', 'WebSocket reconnect delay in seconds', ['exchange', 'ws_type'], buckets=(1, 2, 5, 10, 20, 30, 60, 120))
+        self.ws_max_reconnect_reached_total = Counter('ws_max_reconnect_reached_total', 'Times max reconnect attempts reached', ['exchange', 'ws_type'])
+        
         # Risk metrics
         self.risk_paused = Gauge('risk_paused', 'Risk management paused (0/1)')
         self.drawdown_day = Gauge('drawdown_day', 'Daily drawdown percentage')

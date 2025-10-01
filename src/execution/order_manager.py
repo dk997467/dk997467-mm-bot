@@ -1133,13 +1133,12 @@ class OrderManager:
 
     def save_orders_snapshot(self, path: str) -> bool:
         try:
-            import json
+            from src.common.artifacts import write_json_atomic
             # ensure directory exists
             try:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
             except Exception:
                 pass
-            tmp = path + '.tmp'
             data = []
             for cid, o in self.active_orders.items():
                 data.append({
@@ -1155,9 +1154,8 @@ class OrderManager:
                     'created_time': o.created_time,
                     'last_update_time': o.last_update_time,
                 })
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(sorted(data, key=lambda x: x['client_order_id']), f, sort_keys=True, ensure_ascii=False, indent=2)
-            os.replace(tmp, path)
+            # Deterministic atomic JSON snapshot (ascii, sorted keys)
+            write_json_atomic(path, sorted(data, key=lambda x: x['client_order_id']))
             return True
         except Exception as e:
             print(f"save_orders_snapshot failed: {e}")

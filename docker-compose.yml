@@ -5,15 +5,25 @@ services:
     build: .
     container_name: market-maker-bot
     restart: unless-stopped
+    secrets:
+      - bybit_api_key
+      - bybit_api_secret
+      - postgres_password
     environment:
-      - BYBIT_API_KEY=${BYBIT_API_KEY}
-      - BYBIT_API_SECRET=${BYBIT_API_SECRET}
+      # Security: API keys loaded from Docker Secrets
+      - BYBIT_API_KEY_FILE=/run/secrets/bybit_api_key
+      - BYBIT_API_SECRET_FILE=/run/secrets/bybit_api_secret
+      # Fallback to env vars for dev/test (not recommended for production)
+      - BYBIT_API_KEY=${BYBIT_API_KEY:-}
+      - BYBIT_API_SECRET=${BYBIT_API_SECRET:-}
+      # Other config
       - USE_TESTNET=${USE_TESTNET:-true}
       - STORAGE_BACKEND=${STORAGE_BACKEND:-parquet}
       - STORAGE_PG_HOST=${STORAGE_PG_HOST:-postgres}
       - STORAGE_PG_PORT=${STORAGE_PG_PORT:-5432}
       - STORAGE_PG_DATABASE=${STORAGE_PG_DATABASE:-market_maker}
       - STORAGE_PG_USERNAME=${STORAGE_PG_USERNAME:-market_maker}
+      - STORAGE_PG_PASSWORD_FILE=/run/secrets/postgres_password
       - STORAGE_PG_PASSWORD=${STORAGE_PG_PASSWORD:-market_maker_pass}
     volumes:
       - ./data:/app/data
@@ -76,9 +86,12 @@ services:
     image: postgres:15
     container_name: market-maker-postgres
     restart: unless-stopped
+    secrets:
+      - postgres_password
     environment:
       - POSTGRES_DB=${STORAGE_PG_DATABASE:-market_maker}
       - POSTGRES_USER=${STORAGE_PG_USERNAME:-market_maker}
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
       - POSTGRES_PASSWORD=${STORAGE_PG_PASSWORD:-market_maker_pass}
     ports:
       - "5432:5432"
@@ -125,3 +138,12 @@ volumes:
 networks:
   market-maker-network:
     driver: bridge
+
+# Docker Secrets for sensitive data
+secrets:
+  bybit_api_key:
+    external: true
+  bybit_api_secret:
+    external: true
+  postgres_password:
+    external: true

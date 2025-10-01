@@ -1,0 +1,57 @@
+# =============================================================================
+# Docker Compose Override for Local Development
+# =============================================================================
+#
+# This file demonstrates how to use file-based secrets for local development.
+# 
+# SETUP:
+# ------
+# 1. Copy this file: cp docker-compose.override.yml.example docker-compose.override.yml
+# 2. Create secrets directory: mkdir -p ./secrets
+# 3. Create secret files:
+#    echo "your_test_api_key" > ./secrets/bybit_api_key
+#    echo "your_test_api_secret" > ./secrets/bybit_api_secret
+#    echo "your_test_password" > ./secrets/postgres_password
+# 4. Run: docker-compose up
+#
+# SECURITY:
+# ---------
+# - docker-compose.override.yml is in .gitignore (never committed)
+# - secrets/ directory is in .gitignore (never committed)
+# - For production, use Docker Swarm secrets (see docs/DOCKER_SECRETS_SETUP.md)
+#
+# =============================================================================
+
+version: '3.8'
+
+services:
+  market-maker-bot:
+    # Override secrets to use local files instead of Docker Swarm secrets
+    secrets:
+      - bybit_api_key
+      - bybit_api_secret
+      - postgres_password
+    
+    # Development-specific environment
+    environment:
+      # Use testnet for development
+      - USE_TESTNET=true
+      # Enable debug logging
+      - LOG_LEVEL=DEBUG
+      # Development mode markers
+      - ENVIRONMENT=development
+  
+  postgres:
+    # Override secrets for postgres
+    secrets:
+      - postgres_password
+
+# File-based secrets for local development
+secrets:
+  bybit_api_key:
+    file: ./secrets/bybit_api_key
+  bybit_api_secret:
+    file: ./secrets/bybit_api_secret
+  postgres_password:
+    file: ./secrets/postgres_password
+

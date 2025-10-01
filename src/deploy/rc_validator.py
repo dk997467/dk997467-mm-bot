@@ -13,26 +13,13 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Any
+from src.common.artifacts import write_json_atomic
 
 
 def _atomic_json_write(path: str, data: Dict[str, Any]) -> None:
-    """Atomic JSON write with fsync."""
+    """Atomic JSON write delegated to shared helper."""
     try:
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        content = json.dumps(data, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-        tmp_path = str(p) + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, str(p))
-        # Best-effort fsync parent dir
-        try:
-            with open(str(p.parent), "rb") as d:
-                os.fsync(d.fileno())
-        except Exception:
-            pass
+        write_json_atomic(path, data)
     except Exception:
         # Best-effort; don't fail validation on write issues
         pass

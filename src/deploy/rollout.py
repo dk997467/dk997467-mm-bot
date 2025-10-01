@@ -10,6 +10,7 @@ auto-rollback on degradation, and comprehensive audit logging.
 
 import argparse
 import json
+from src.common.artifacts import write_json_atomic
 import sys
 import time
 import urllib.request
@@ -627,9 +628,8 @@ def write_audit_log(symbol: str, audit_data: Dict[str, Any]) -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     audit_path = audit_dir / f"{timestamp}.json"
     
-    # Write audit data with deterministic formatting
-    with open(audit_path, 'w', encoding='utf-8') as f:
-        json.dump(audit_data, f, sort_keys=True, ensure_ascii=False, indent=2)
+    # Write audit data with deterministic atomic formatting
+    write_json_atomic(str(audit_path), audit_data)
     
     print(f"[F2] Audit log written: {audit_path}")
     return str(audit_path)

@@ -1,6 +1,7 @@
 # venv / IDE / cache
 venv/
 .env/
+.env
 .pytest_cache/
 __pycache__/
 *.pyc
@@ -8,6 +9,15 @@ __pycache__/
 # build & local outputs
 artifacts/
 artifacts/**
+
+# Secrets (NEVER commit!)
+secrets/
+*.secret
+*.key
+*.pem
+
+# Docker overrides (may contain sensitive config)
+docker-compose.override.yml
 
 # OS junk
 .DS_Store

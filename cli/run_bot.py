@@ -3048,63 +3048,16 @@ class MarketMakerBot:
             pass
 
     def _atomic_snapshot_write(self, path: str, payload_obj: dict, *, version: int) -> None:
-        import os as _os, json as _json, hashlib as _hl
-        from pathlib import Path as _P
-        sp = str(path)
-        tmp = sp + ".tmp"
-        try:
-            _P(sp).parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        payload_json = _json.dumps(payload_obj or {}, sort_keys=True, separators=(",", ":"))
-        sha = _hl.sha256(payload_json.encode('utf-8')).hexdigest()
-        wrapper = {"version": int(version), "sha256": str(sha), "payload": payload_obj or {}}
-        data = _json.dumps(wrapper, sort_keys=True, separators=(",", ":"))
-        with open(tmp, 'w', encoding='utf-8') as f:
-            f.write(data)
-            f.flush()
-            try:
-                _os.fsync(f.fileno())
-            except Exception:
-                pass
-        try:
-            _os.replace(tmp, sp)
-        except Exception:
-            _os.rename(tmp, sp)
-        # best-effort fsync on dir
-        try:
-            d = _P(sp).parent
-            if d and d.exists():
-                dirfd = _os.open(str(d), _os.O_DIRECTORY)
-                try:
-                    _os.fsync(dirfd)
-                finally:
-                    _os.close(dirfd)
-        except Exception:
-            pass
-        payload = _json.dumps(obj, sort_keys=True, separators=(",", ":"))
-        with open(tmp, 'w', encoding='utf-8') as f:
-            f.write(payload)
-            f.flush()
-            try:
-                _os.fsync(f.fileno())
-            except Exception:
-                pass
-        try:
-            _os.replace(tmp, sp)
-        except Exception:
-            _os.rename(tmp, sp)
-        # best-effort fsync on directory
-        try:
-            d = _P(sp).parent
-            if d and d.exists():
-                dirfd = _os.open(str(d), _os.O_DIRECTORY)
-                try:
-                    _os.fsync(dirfd)
-                finally:
-                    _os.close(dirfd)
-        except Exception:
-            pass
+        # Use shared atomic writer; preserve versioned wrapper
+        import hashlib as _hl
+        from src.common.artifacts import write_json_atomic
+        payload_obj = payload_obj or {}
+        wrapper = {
+            "version": int(version),
+            "sha256": _hl.sha256(json.dumps(payload_obj, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
+            "payload": payload_obj,
+        }
+        write_json_atomic(str(path), wrapper)
 
     # ---- L6.2: Cost calibration admin ----
     async def _admin_cost_calibration(self, request):

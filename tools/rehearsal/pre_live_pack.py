@@ -4,6 +4,8 @@ import subprocess
 import sys
 from typing import Any, Dict, List
 
+from src.common.artifacts import write_json_atomic
+
 
 def _run(cmd: List[str]) -> Dict[str, Any]:
     try:
@@ -24,16 +26,8 @@ def _run(cmd: List[str]) -> Dict[str, Any]:
 
 
 def _write_json_atomic(path: str, data: Dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='ascii', newline='') as f:
-        json.dump(data, f, ensure_ascii=True, sort_keys=True, separators=(',', ':'))
-        f.write('\n')
-        f.flush(); os.fsync(f.fileno())
-    if os.path.exists(path):
-        os.replace(tmp, path)
-    else:
-        os.rename(tmp, path)
+    # Delegate to shared, battle-tested implementation
+    write_json_atomic(path, data)
 
 
 def main(argv=None) -> int:

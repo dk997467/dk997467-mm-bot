@@ -142,6 +142,9 @@ class BybitWebSocketConnector:
                 async with self._session.ws_connect(self.public_ws_url) as ws:
                     self._ws_public = ws
                     
+                    # CRITICAL: Reset reconnect attempts on successful connection
+                    self._reconnect_attempts = 0
+                    
                     # Resubscribe to topics
                     for topic in self._public_subscriptions:
                         await self._subscribe_public(topic)
@@ -169,7 +172,11 @@ class BybitWebSocketConnector:
             
             # Reconnection logic
             if not self._stop_requested:
-                await self._wait_before_reconnect()
+                should_stop = await self._wait_before_reconnect("public")
+                if should_stop:
+                    print("[CRITICAL] Public WebSocket: max reconnect attempts reached, stopping...")
+                    self._stop_requested = True
+                    break
     
     async def _connect_private_websocket(self):
         """Connect to private WebSocket with reconnection logic."""
@@ -183,6 +190,9 @@ class BybitWebSocketConnector:
                 
                 async with self._session.ws_connect(self.private_ws_url, headers=headers) as ws:
                     self._ws_private = ws
+                    
+                    # CRITICAL: Reset reconnect attempts on successful connection
+                    self._reconnect_attempts = 0
                     
                     # Resubscribe to topics
                     for topic in self._private_subscriptions:
@@ -211,7 +221,11 @@ class BybitWebSocketConnector:
             
             # Reconnection logic
             if not self._stop_requested:
-                await self._wait_before_reconnect()
+                should_stop = await self._wait_before_reconnect("private")
+                if should_stop:
+                    print("[CRITICAL] Private WebSocket: max reconnect attempts reached, stopping...")
+                    self._stop_requested = True
+                    break
     
     def _get_auth_headers(self) -> Dict[str, str]:
         """Get authentication headers for private WebSocket."""
@@ -222,20 +236,79 @@ class BybitWebSocketConnector:
             "recv_window": str(self.config.get("recv_window", 5000))
         }
     
-    async def _wait_before_reconnect(self):
-        """Wait before attempting reconnection with exponential backoff."""
-        if self._reconnect_attempts >= self.max_reconnect_attempts:
-            print("Max reconnection attempts reached")
-            return
+    async def _wait_before_reconnect(self, ws_type: str = "unknown") -> bool:
+        """
+        Wait before attempting reconnection with exponential backoff and jitter.
         
-        delay = min(
-            self.base_reconnect_delay * (2 ** self._reconnect_attempts) + random.uniform(0, 1),
-            self.max_reconnect_delay
-        )
+        Implements industry-standard exponential backoff:
+        - Base delay doubles with each attempt (exponential growth)
+        - Jitter adds randomness to prevent synchronized reconnects (thundering herd)
+        - Max delay cap prevents excessive wait times
+        - Max attempts prevents infinite retry loops
+        
+        Formula: delay = min(base * 2^attempt + jitter, max_delay)
+        where jitter = random(0, delay * 0.3) to add 30% variance
+        
+        Args:
+            ws_type: WebSocket type for logging ("public" or "private")
+        
+        Returns:
+            True if max attempts reached (caller should stop), False otherwise
+        
+        Example backoff sequence (base=1s, max=60s):
+        - Attempt 1: ~1s  (1 * 2^0 + jitter)
+        - Attempt 2: ~2s  (1 * 2^1 + jitter)
+        - Attempt 3: ~4s  (1 * 2^2 + jitter)
+        - Attempt 4: ~8s  (1 * 2^3 + jitter)
+        - Attempt 5: ~16s (1 * 2^4 + jitter)
+        - Attempt 6: ~32s (1 * 2^5 + jitter)
+        - Attempt 7+: ~60s (capped at max_delay)
+        """
+        # Check if max attempts reached
+        if self._reconnect_attempts >= self.max_reconnect_attempts:
+            print(f"[CRITICAL] {ws_type.upper()} WebSocket: max reconnect attempts ({self.max_reconnect_attempts}) reached")
+            if self.metrics:
+                self.metrics.ws_max_reconnect_reached_total.labels(
+                    exchange="bybit",
+                    ws_type=ws_type
+                ).inc()
+            return True  # Signal caller to stop
+        
+        # Calculate exponential backoff
+        exponential_delay = self.base_reconnect_delay * (2 ** self._reconnect_attempts)
+        
+        # Add jitter (30% of delay) to prevent thundering herd
+        # This spreads out reconnects from multiple instances
+        jitter_range = exponential_delay * 0.3
+        jitter = random.uniform(0, jitter_range)
+        
+        # Apply max cap
+        delay = min(exponential_delay + jitter, self.max_reconnect_delay)
         
         self._reconnect_attempts += 1
-        print(f"Reconnecting in {delay:.2f} seconds (attempt {self._reconnect_attempts})")
+        
+        # Log with full context
+        print(
+            f"[BACKOFF] {ws_type.upper()} WebSocket reconnect: "
+            f"attempt={self._reconnect_attempts}/{self.max_reconnect_attempts}, "
+            f"delay={delay:.2f}s (exp={exponential_delay:.2f}s, jitter={jitter:.2f}s)"
+        )
+        
+        # Record metrics
+        if self.metrics:
+            self.metrics.ws_reconnect_delay_seconds.observe(
+                {"exchange": "bybit", "ws_type": ws_type},
+                delay
+            )
+            self.metrics.ws_reconnect_attempts_total.labels(
+                exchange="bybit",
+                ws_type=ws_type
+            ).inc()
+        
+        # Wait before reconnecting
         await asyncio.sleep(delay)
+        
+        return False  # Continue retrying
     
     async def _heartbeat_public(self):
         """Send heartbeat to public WebSocket."""

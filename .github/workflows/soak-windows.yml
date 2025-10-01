@@ -64,6 +64,28 @@ jobs:
           rustc --version
           cargo --version
 
+      - name: Cache cargo registry and git
+        id: cache-cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\.cargo\registry
+            ~\AppData\Local\.cargo\git
+            ~\.cargo\registry
+            ~\.cargo\git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache Rust target
+        id: cache-rust-target
+        uses: actions/cache@v4
+        with:
+          path: rust\target
+          key: ${{ runner.os }}-rust-target-${{ hashFiles('rust/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-target-
+
       - name: Setup Environment
         id: setup-env
         if: always()
@@ -124,11 +146,26 @@ jobs:
           if ($durationHours -lt 1 -or $durationHours -gt 72) { $durationHours = 24 }
           $deadline = (Get-Date).AddHours($durationHours)
           Write-Host "Target duration (hours): $durationHours (deadline: $deadline UTC)"
+          $failCount = 0
 
           while ((Get-Date) -lt $deadline) {
             try {
+              $iterStart = Get-Date
               & $env:PYTHON_EXE tools\ci\full_stack_validate.py
-              Write-Host "[INFO] validate ok $(Get-Date -Format s)Z"
+              $rc = $LASTEXITCODE
+              $iterSec = ((Get-Date) - $iterStart).TotalSeconds
+              $msg = "ITER rc=$rc duration_s=$([math]::Round($iterSec,2)) at $(Get-Date -Format s)Z"
+              Write-Host "[INFO] $msg"
+              $summaryFile = "${{ github.workspace }}\artifacts\soak\summary.txt"
+              $msg | Add-Content $summaryFile -Encoding ascii
+              if ($rc -ne 0) {
+                $failCount = [int]$failCount + 1
+                $backoff = [math]::Min(900, [math]::Pow(2, [int]$failCount) * 60)
+                Write-Host "[WARN] validation failed rc=$rc, backing off $backoff seconds (failCount=$failCount)"
+                Start-Sleep -Seconds $backoff
+              } else {
+                $failCount = 0
+              }
             } catch {
               Write-Host "[ERROR] $_"
             }
