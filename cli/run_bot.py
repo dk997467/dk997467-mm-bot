@@ -693,6 +693,8 @@ class MarketMakerBot:
             # Start periodic portfolio rebalance loop
             if not self._rebalance_task:
                 self._rebalance_task = asyncio.create_task(self._rebalance_loop())
+            if not hasattr(self, '_background_tasks'):
+                self._background_tasks = []
             # Start allocator snapshot loop
             async def _allocator_snapshot_loop():
                 import time as _t, os as _os, json as _json
@@ -741,7 +743,7 @@ class MarketMakerBot:
                     frac = (j / 10000.0) * (2 * self._allocator_jitter_frac)
                     delay = max(1.0, base * (1.0 + frac))
                     await asyncio.sleep(delay)
-            asyncio.create_task(_allocator_snapshot_loop())
+            self._background_tasks.append(asyncio.create_task(_allocator_snapshot_loop()))
             # Start throttle snapshot loop
             async def _throttle_snapshot_loop():
                 import time as _t, os as _os, json as _json, hmac as _hmac
@@ -795,11 +797,11 @@ class MarketMakerBot:
                     frac = (j / 10000.0) * (2 * self._throttle_jitter_frac)
                     delay = max(1.0, base * (1.0 + frac))
                     await asyncio.sleep(delay)
-            asyncio.create_task(_throttle_snapshot_loop())
+            self._background_tasks.append(asyncio.create_task(_throttle_snapshot_loop()))
             # Start rollout ramp loop if enabled
-            asyncio.create_task(self._rollout_ramp_loop())
+            self._background_tasks.append(asyncio.create_task(self._rollout_ramp_loop()))
             # Start ramp snapshot loop
-            asyncio.create_task(self._ramp_snapshot_loop())
+            self._background_tasks.append(asyncio.create_task(self._ramp_snapshot_loop()))
             # Start scheduler watcher loop
             if not self._scheduler_watcher_task:
                 self._scheduler_watcher_task = asyncio.create_task(self._scheduler_watcher_loop())
@@ -850,6 +852,17 @@ class MarketMakerBot:
                 except Exception:
                     pass
                 self._scheduler_watcher_task = None
+            # Cancel and await background tasks
+            try:
+                for t in getattr(self, '_background_tasks', []):
+                    try:
+                        t.cancel()
+                    except Exception:
+                        pass
+                await asyncio.gather(*[t for t in getattr(self, '_background_tasks', []) if t], return_exceptions=True)
+            except Exception:
+                pass
+            self._background_tasks = []
             if getattr(self, '_canary_export_task', None):
                 try:
                     self._canary_export_task.cancel()

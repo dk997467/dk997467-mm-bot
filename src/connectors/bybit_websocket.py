@@ -67,6 +67,9 @@ class BybitWebSocketConnector:
         self._reconnect_attempts = 0
         self._last_heartbeat = 0
         self._stop_requested = False
+        # Heartbeat task handles
+        self._hb_pub_task: Optional[asyncio.Task] = None
+        self._hb_prv_task: Optional[asyncio.Task] = None
         
         # Subscriptions
         self._public_subscriptions: List[str] = []
@@ -78,10 +81,7 @@ class BybitWebSocketConnector:
         self._session = aiohttp.ClientSession()
         
         # Start both connections
-        await asyncio.gather(
-            self._connect_public_websocket(),
-            self._connect_private_websocket()
-        )
+        await asyncio.gather(self._connect_public_websocket(), self._connect_private_websocket())
         
         self.connected = True
     
@@ -90,12 +90,34 @@ class BybitWebSocketConnector:
         self._stop_requested = True
         self.connected = False
         
-        if self._ws_public:
-            await self._ws_public.close()
-        if self._ws_private:
-            await self._ws_private.close()
-        if self._session:
-            await self._session.close()
+        # cancel heartbeats first
+        try:
+            if self._hb_pub_task:
+                self._hb_pub_task.cancel()
+            if self._hb_prv_task:
+                self._hb_prv_task.cancel()
+            await asyncio.gather(*[t for t in (self._hb_pub_task, self._hb_prv_task) if t], return_exceptions=True)
+        except Exception:
+            pass
+        # close sockets & session
+        try:
+            if self._ws_public:
+                await self._ws_public.close()
+        except Exception:
+            pass
+        try:
+            if self._ws_private:
+                await self._ws_private.close()
+        except Exception:
+            pass
+        try:
+            if self._session:
+                await self._session.close()
+        except Exception:
+            pass
+        self._ws_public = None
+        self._ws_private = None
+        self._session = None
     
     def is_connected(self) -> bool:
         """Check if connector is connected."""
@@ -125,7 +147,7 @@ class BybitWebSocketConnector:
                         await self._subscribe_public(topic)
                     
                     # Start heartbeat
-                    asyncio.create_task(self._heartbeat_public())
+                    self._hb_pub_task = asyncio.create_task(self._heartbeat_public())
                     
                     # Process messages
                     async for msg in ws:
@@ -167,7 +189,7 @@ class BybitWebSocketConnector:
                         await self._subscribe_private(topic)
                     
                     # Start heartbeat
-                    asyncio.create_task(self._heartbeat_private())
+                    self._hb_prv_task = asyncio.create_task(self._heartbeat_private())
                     
                     # Process messages
                     async for msg in ws:

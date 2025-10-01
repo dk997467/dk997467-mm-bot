@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import subprocess
+import platform
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,41 +21,51 @@ ARTIFACTS_DIR = ROOT_DIR / "artifacts"
 
 
 def run_command(cmd: List[str]) -> Dict[str, Any]:
-    """
-    Runs a command in a subprocess with a timeout and returns a structured result.
-    """
+    """Run command with 5m timeout; on timeout kill the whole process tree (Windows/Posix)."""
+    CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+    is_windows = platform.system().lower().startswith("win")
+    popen_kwargs: Dict[str, Any] = {}
+    if is_windows:
+        popen_kwargs["creationflags"] = CREATE_NEW_PROCESS_GROUP
+    else:
+        import os as _os, signal as _sig
+        popen_kwargs["preexec_fn"] = _os.setsid
+
     try:
-        # CRITICAL FIX: Added a 5-minute timeout to prevent zombie processes.
-        result = subprocess.run(
+        p = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding='ascii',
             errors='replace',
-            check=False,
-            timeout=300
+            **popen_kwargs,
         )
-        output = (result.stdout or '') + '\n' + (result.stderr or '')
-        details = ''
-        for line in reversed(output.strip().splitlines()):
-            if line.strip():
-                details = line.strip()
-                break
-
-        return {
-            'ok': result.returncode == 0,
-            'details': details[:200]
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            'ok': False,
-            'details': 'Execution failed: TimeoutExpired (5 minutes)'
-        }
+        try:
+            stdout, stderr = p.communicate(timeout=300)
+            output = (stdout or '') + '\n' + (stderr or '')
+            details = ''
+            for line in reversed(output.strip().splitlines()):
+                if line.strip():
+                    details = line.strip()
+                    break
+            return {'ok': p.returncode == 0, 'details': details[:200]}
+        except subprocess.TimeoutExpired:
+            # Kill whole process tree
+            try:
+                if is_windows:
+                    subprocess.run(["taskkill", "/PID", str(p.pid), "/F", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    import os as _os, signal as _sig
+                    _os.killpg(_os.getpgid(p.pid), _sig.SIGKILL)
+            except Exception:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+            return {'ok': False, 'details': 'Execution failed: TimeoutExpired (5 minutes)'}
     except Exception as e:
-        return {
-            'ok': False,
-            'details': f'Execution failed: {e.__class__.__name__}'
-        }
+        return {'ok': False, 'details': f'Execution failed: {e.__class__.__name__}'}
 
 
 # --- Validation Section Runners (unchanged from previous version) ---
