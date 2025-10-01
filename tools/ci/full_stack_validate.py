@@ -188,7 +188,8 @@ def main() -> int:
     print(f"FULL STACK VALIDATION COMPLETE: {final_result}", file=sys.stderr)
     print(f"RESULT={final_result}")
 
-    return 0
+    # ИСПРАВЛЕНИЕ: Возвращаем 1 в случае ошибки, чтобы CI/CD система увидела сбой.
+    return 0 if overall_ok else 1
 
 
 if __name__ == '__main__':
