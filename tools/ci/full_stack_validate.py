@@ -20,17 +20,20 @@ ARTIFACTS_DIR = ROOT_DIR / "artifacts"
 
 
 def run_command(cmd: List[str]) -> Dict[str, Any]:
-    """Runs a command in a subprocess and returns a structured result."""
+    """
+    Runs a command in a subprocess with a timeout and returns a structured result.
+    """
     try:
+        # CRITICAL FIX: Added a 5-minute timeout to prevent zombie processes.
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             encoding='ascii',
             errors='replace',
-            check=False  # We handle the return code manually
+            check=False,
+            timeout=300
         )
-        # Combine stdout and stderr to find the last meaningful line for details
         output = (result.stdout or '') + '\n' + (result.stderr or '')
         details = ''
         for line in reversed(output.strip().splitlines()):
@@ -40,7 +43,12 @@ def run_command(cmd: List[str]) -> Dict[str, Any]:
 
         return {
             'ok': result.returncode == 0,
-            'details': details[:200]  # Truncate details for concise reports
+            'details': details[:200]
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            'ok': False,
+            'details': 'Execution failed: TimeoutExpired (5 minutes)'
         }
     except Exception as e:
         return {
@@ -49,7 +57,7 @@ def run_command(cmd: List[str]) -> Dict[str, Any]:
         }
 
 
-# --- Validation Section Runners ---
+# --- Validation Section Runners (unchanged from previous version) ---
 
 def run_linters() -> Dict[str, Any]:
     """Runs all linter checks."""
@@ -87,7 +95,6 @@ def run_dry_runs() -> Dict[str, Any]:
 def run_reports() -> Dict[str, Any]:
     """Run report generation on fixtures."""
     print("Running reports...", file=sys.stderr)
-    # This check now lives where it belongs.
     if not (ROOT_DIR / "tests" / "fixtures").exists():
         return {'name': 'reports', 'ok': True, 'details': 'SKIP: missing fixtures'}
 
@@ -128,7 +135,6 @@ def main() -> int:
     os.environ["TZ"] = "UTC"
     print("FULL STACK VALIDATION START", file=sys.stderr)
 
-    # A clear, sequential list of all validation sections to run.
     validation_pipeline = [
         run_linters,
         run_tests_whitelist,
@@ -141,11 +147,9 @@ def main() -> int:
 
     sections = [step() for step in validation_pipeline]
 
-    # Determine overall result based on the outcome of all sections.
     overall_ok = all(section['ok'] for section in sections)
     final_result = 'OK' if overall_ok else 'FAIL'
 
-    # Prepare the final, detailed report data.
     utc_timestamp = datetime.now(timezone.utc).isoformat()
     report_data = {
         'result': final_result,
@@ -156,7 +160,6 @@ def main() -> int:
         'sections': sections,
     }
 
-    # Atomically write the JSON report. This is our single source of truth.
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     json_report_path = ARTIFACTS_DIR / "FULL_STACK_VALIDATION.json"
     tmp_path = json_report_path.with_suffix(".json.tmp")
@@ -166,21 +169,16 @@ def main() -> int:
     )
     os.replace(tmp_path, json_report_path)
 
-    # Generate the human-readable Markdown report from the JSON source of truth.
     reporter_script = ROOT_DIR / 'tools/ci/report_full_stack.py'
     if reporter_script.exists():
         print("Generating Markdown report...", file=sys.stderr)
         run_command([sys.executable, str(reporter_script), str(json_report_path)])
 
-    # Print the final status to stdout for the CI log.
     print(f"FULL STACK VALIDATION COMPLETE: {final_result}", file=sys.stderr)
     print(f"RESULT={final_result}")
 
-    # The script itself always exits 0; the pass/fail status is in the artifacts.
     return 0
 
 
 if __name__ == '__main__':
     sys.exit(main())
-
-
