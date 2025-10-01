@@ -5,12 +5,9 @@ Provides atomic JSON export for metrics/registry snapshots.
 """
 
 from typing import Any
-import logging
 import json
 import os
 from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 
 def export_registry_snapshot(path: str, payload: Any) -> None:
@@ -65,16 +62,6 @@ def write_json_atomic(path: str, payload: Any) -> None:
     - Create parent directories as needed
     - Write to tmp then os.replace; fsync file and directory
     """
-    if payload is None:
-        try:
-            logger.warning(
-                "write_json_atomic received a None payload for path %s. Defaulting to empty dict; investigate caller.",
-                path,
-            )
-        except Exception:
-            # Logging should not break write path
-            pass
-        payload = {}
     sp = str(path)
     p = Path(sp)
     try:
