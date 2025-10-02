@@ -1,3 +1,0 @@
-{"allocator":{"smoothing":{"backoff_steps":[1.0,0.7,0.5],"bias_cap_ratio":0.3,"fee_bias_cap_ratio":0.05,"max_delta_abs_base_units":0.0,"max_delta_ratio":0.12}},"canary":{"fraction":0.05},"latency_boost":{"replace":{"max_concurrent":2,"min_interval_ms":80},"tail_batch":{"max_batch":8,"tail_age_ms":700}},"logging":{"level":"INFO","trace_alloc_micro":false},"signals":{"impact_cap_ratio":0.08}}
-
-

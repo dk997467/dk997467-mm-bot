@@ -1,7 +1,0 @@
-{"ts_ms":0,"type":"quote","symbol":"BTCUSDT","bid":100.0,"ask":100.5}
-{"ts_ms":1000,"type":"trade","symbol":"BTCUSDT","price":100.2,"qty":1}
-{"ts_ms":2000,"type":"guard","reason":"DRIFT_EDGE"}
-{"ts_ms":3000,"type":"trade","symbol":"ETHUSDT","price":200.1,"qty":2}
-{"ts_ms":4000,"type":"cancel","symbol":"ETHUSDT","order_id":"x"}
-
-

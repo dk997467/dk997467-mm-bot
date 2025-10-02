@@ -1,3 +1,0 @@
-{"fields":{"x":1},"kind":"ALLOC","prev_sha256":"GENESIS","sha256":"c3ca44ccd8d8b4f9f3088a6b7e765fb42081dbefef9062988f96f9e5066cbffc","symbol":"BTCUSDT","ts":"1970-01-01T00:00:00Z"}
-{"fields":{"y":2},"kind":"REPLACE","prev_sha256":"c3ca44ccd8d8b4f9f3088a6b7e765fb42081dbefef9062988f96f9e5066cbffc","sha256":"03f4a25b9077beeff3933e0520f3e230ba933b71f3533cd5f5c4ee8bf20bd6fb","symbol":"BTCUSDT","ts":"1970-01-01T00:01:00Z"}
-

@@ -1,7 +1,0 @@
-{"ts_ms":0,"type":"book","bid":100.0,"ask":101.0}
-{"ts_ms":10,"type":"place","cl_id":"A","symbol":"BTCUSDT","side":"buy","price":100.0,"size":1.0}
-{"ts_ms":20,"type":"place","cl_id":"B","symbol":"BTCUSDT","side":"sell","price":101.0,"size":1.5}
-{"ts_ms":30,"type":"book","bid":100.0,"ask":101.0}
-{"ts_ms":40,"type":"book","bid":100.0,"ask":101.0}
-
-
