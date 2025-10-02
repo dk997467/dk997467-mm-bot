@@ -15,7 +15,8 @@ if not sel.exists():
 paths = [p.strip() for p in sel.read_text(encoding="ascii").splitlines() if p.strip() and not p.strip().startswith("#")]
 # Enable parallel execution for 4-5x speedup (5min → 1min)
 # Requires: pytest-xdist (see requirements.txt)
-cmd = [sys.executable, "-m", "pytest", "-q", "-n", "auto", *paths]
+# Note: With PYTEST_DISABLE_PLUGIN_AUTOLOAD=1, we must explicitly load xdist via -p
+cmd = [sys.executable, "-m", "pytest", "-q", "-p", "xdist", "-n", "auto", *paths]
 r = subprocess.run(cmd, check=False)
 sys.exit(r.returncode)
 

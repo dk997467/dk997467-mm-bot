@@ -1,12 +1,50 @@
 name: Soak (Windows self-hosted, 24-72h)
 
+# ==============================================================================
+# SOAK TEST WORKFLOW
+# ==============================================================================
+# 
+# Purpose: Long-running stability test (24-72h) to detect memory leaks,
+#          resource exhaustion, and intermittent failures
+#
+# Triggers:
+#   - Manual: workflow_dispatch with configurable parameters
+#   - Scheduled: Every Monday at 02:00 UTC
+#
+# Runner Requirements:
+#   - Self-hosted Windows runner with 'soak' label
+#   - Python 3.11+ in PATH
+#   - Min 10 GB free disk space, 8 GB RAM
+#
+# ==============================================================================
+
 on:
   workflow_dispatch:
     inputs:
       soak_hours:
-        description: "How many hours to run (24..72)"
+        description: "Duration in hours (24-72)"
         required: false
         default: "24"
+      iteration_timeout_seconds:
+        description: "Timeout per iteration (seconds)"
+        required: false
+        default: "1200"
+      heartbeat_interval_seconds:
+        description: "Sleep between iterations (seconds)"
+        required: false
+        default: "300"
+      validation_timeout_seconds:
+        description: "Timeout for validation steps (seconds)"
+        required: false
+        default: "900"
+      artifact_retention_days:
+        description: "Artifact retention (days)"
+        required: false
+        default: "14"
+      python_path:
+        description: "Python executable path (default: auto-detect)"
+        required: false
+        default: "python"
   schedule:
     - cron: "0 2 * * 1" # Понедельник в 02:00 UTC
 
@@ -20,49 +58,96 @@ jobs:
     defaults:
       run:
         shell: pwsh
-    timeout-minutes: 4380 # 73 часа (с запасом)
+    timeout-minutes: 4380 # 73 hours (max: 72h + 1h buffer)
     env:
-      # Python configuration
-      PYTHON_EXE: C:\Program Files\Python313\python.exe
+      # ========================================================================
+      # RUNTIME CONFIGURATION
+      # ========================================================================
+      
+      # Python: Auto-detect from PATH or use custom path from input
+      # Note: Removed hardcoded path for portability across runners
+      PYTHON_EXE: ${{ inputs.python_path || 'python' }}
+      
+      # Pytest: Disable plugin autoload for predictability
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_PYTHON_VERSION_WARNING: "1"
       
-      # Soak test configuration
+      # ========================================================================
+      # SOAK TEST PARAMETERS (configurable via workflow_dispatch)
+      # ========================================================================
+      
+      # Duration: How long to run the soak test
       SOAK_HOURS: ${{ inputs.soak_hours || '24' }}
-      SOAK_ITERATION_TIMEOUT_SECONDS: "1200"  # 20 minutes per iteration
-      SOAK_HEARTBEAT_INTERVAL_SECONDS: "300"  # 5 minutes between iterations
       
-      # Validation timeouts (adjust for cold start)
-      FSV_TIMEOUT_SEC: "900"            # 15 minutes for steps (was 5 min)
-      FSV_RETRIES: "1"                  # Allow 1 retry for flaky tests
+      # Timeout: Max time per iteration (prevents hanging)
+      SOAK_ITERATION_TIMEOUT_SECONDS: ${{ inputs.iteration_timeout_seconds || '1200' }}
       
-      # Log rotation (prevent disk bloat)
-      FSV_MAX_LOGS_PER_STEP: "5"        # Keep only 5 newest logs per step
-      FSV_MAX_LOG_SIZE_MB: "500"        # Warn at 500MB
-      FSV_AGGRESSIVE_CLEANUP_MB: "750"  # Force cleanup at 750MB
+      # Heartbeat: Sleep between iterations (allows system cooldown)
+      SOAK_HEARTBEAT_INTERVAL_SECONDS: ${{ inputs.heartbeat_interval_seconds || '300' }}
       
-      # API credentials
+      # ========================================================================
+      # VALIDATION TIMEOUTS (for full_stack_validate.py)
+      # ========================================================================
+      
+      # Step timeout: Max time per validation step
+      FSV_TIMEOUT_SEC: ${{ inputs.validation_timeout_seconds || '900' }}
+      
+      # Retries: Allow flaky tests to retry once
+      FSV_RETRIES: "1"
+      
+      # ========================================================================
+      # LOG ROTATION (prevent disk bloat in 72h runs)
+      # ========================================================================
+      
+      # Keep only N newest log files per step
+      FSV_MAX_LOGS_PER_STEP: "5"
+      
+      # Warning threshold for total log size
+      FSV_MAX_LOG_SIZE_MB: "500"
+      
+      # Force cleanup threshold
+      FSV_AGGRESSIVE_CLEANUP_MB: "750"
+      
+      # ========================================================================
+      # SECRETS & CREDENTIALS
+      # ========================================================================
+      
+      # API credentials (from repository secrets)
       API_KEY: ${{ secrets.API_KEY }}
       API_SECRET: ${{ secrets.API_SECRET }}
       
-      # Notifications
+      # Telegram notifications (optional - for failure alerts)
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       
-      # Proxy configuration
+      # Proxy configuration (optional - for restricted networks)
       HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
       HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
+      
+      # ========================================================================
+      # ARTIFACT PATHS (centralized configuration)
+      # ========================================================================
+      
+      ARTIFACTS_ROOT: "${{ github.workspace }}/artifacts"
+      SOAK_ARTIFACTS_DIR: "${{ github.workspace }}/artifacts/soak"
+      CI_ARTIFACTS_DIR: "${{ github.workspace }}/artifacts/ci"
 
     steps:
-      - name: Checkout
+      # ======================================================================
+      # SETUP: Prepare environment and dependencies
+      # ======================================================================
+      
+      - name: "[1/12] Checkout code"
         id: checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Install Rust toolchain via PowerShell
+      - name: "[2/12] Install Rust toolchain"
         id: install-rust
+        # Purpose: Install Rust for mm-orderbook bindings (PyO3)
+        # Uses: 'stable-gnu' to avoid MSVC dependency on Windows
         run: |
           Write-Host "--- Installing Rust toolchain ---"
           Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile "rustup-init.exe"
@@ -83,8 +168,10 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Cache cargo registry and git
+      - name: "[3/12] Cache Cargo registry"
         id: cache-cargo
+        # Purpose: Cache Cargo dependencies to speed up Rust builds
+        # Key: Based on Cargo.lock for stable hashing
         uses: actions/cache@v4
         with:
           path: |
@@ -95,8 +182,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Cache Rust target
+      - name: "[4/12] Cache Rust build artifacts"
         id: cache-rust-target
+        # Purpose: Cache compiled Rust artifacts for faster rebuilds
         uses: actions/cache@v4
         with:
           path: rust\target
@@ -104,14 +192,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-rust-target-
 
-      - name: Setup Environment
+      - name: "[5/12] Setup artifacts directory"
         id: setup-env
         if: always()
+        # Purpose: Create artifacts directory structure for test outputs
+        # - artifacts/soak/: Test results, metrics, summaries
+        # - artifacts/ci/: Validation logs (managed by full_stack_validate.py)
+        # Note: Uses 'if: always()' to ensure cleanup can access these dirs
         run: |
-          New-Item -ItemType Directory -Force "${{ github.workspace }}\artifacts\soak" | Out-Null
+          New-Item -ItemType Directory -Force "$env:SOAK_ARTIFACTS_DIR" | Out-Null
 
-      - name: Cache pip dependencies
+      - name: "[6/12] Cache pip dependencies"
         id: cache-pip
+        # Purpose: Cache Python packages to speed up installation
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\pip\Cache
@@ -119,28 +212,35 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Verify Python installation
+      - name: "[7/12] Verify Python installation"
         id: verify-python
+        # Purpose: Verify Python is accessible and upgrade pip
+        # Note: Uses $env:PYTHON_EXE (auto-detected or from input)
         run: |
           Write-Host "Using configured Python:"
           & $env:PYTHON_EXE --version
           & $env:PYTHON_EXE -m pip --version
           & $env:PYTHON_EXE -m pip install --upgrade pip
 
-      - name: Prepare CI requirements file
+      - name: "[8/12] Prepare CI requirements"
         id: prepare-reqs
+        # Purpose: Filter out private packages (bybit-connector, mm-orderbook)
+        # These are not available in public PyPI
         run: |
           Get-Content requirements.txt |
             Where-Object { $_ -notmatch '^(?i)bybit-connector' -and $_ -notmatch '^(?i)git\+' -and $_ -notmatch '^(?i)mm-orderbook' } |
             Set-Content requirements_ci.txt -Encoding ASCII
 
-      - name: Install Python dependencies
+      - name: "[9/12] Install Python dependencies"
         id: install-deps
+        # Purpose: Install all dependencies from filtered requirements
         run: |
           & $env:PYTHON_EXE -m pip install -r requirements_ci.txt
 
-      - name: Install local project package
+      - name: "[10/12] Install local project package"
         id: install-local
+        # Purpose: Install mm-bot package in editable mode (-e .)
+        # Note: Uses PYO3_USE_ABI3_FORWARD_COMPATIBILITY for Python 3.13
         # FINAL FIX: Use the env var solution for PyO3 vs Python 3.13 incompatibility
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
@@ -289,7 +389,7 @@ jobs:
             
             # Wait for job with timeout
             $completed = Wait-Job -Job $validationJob -Timeout $iterationTimeoutSeconds
-            $iterSec = ((Get-Date) - $iterStart).TotalSeconds
+              $iterSec = ((Get-Date) - $iterStart).TotalSeconds
             
             if ($null -eq $completed) {
               # Timeout occurred
@@ -338,7 +438,7 @@ jobs:
             $msg = "ITER #$iterationCount rc=$rc duration_s=$([math]::Round($iterSec,2)) at ${timestamp}Z"
             Write-Host ""
             Write-Host "[SUMMARY] $msg"
-            $msg | Add-Content $summaryFile -Encoding ascii
+              $msg | Add-Content $summaryFile -Encoding ascii
             
             # Write structured metrics (JSONL for easy parsing)
             $metricJson = @{
@@ -351,7 +451,7 @@ jobs:
             $metricJson | Add-Content $metricsFile -Encoding ascii
             
             # CRITICAL: Fail fast on error (no retries in soak test)
-            if ($rc -ne 0) {
+              if ($rc -ne 0) {
               Write-Host ""
               Write-Host "###############################################"
               Write-Host "# ❌ SOAK TEST FAILED"
@@ -529,26 +629,31 @@ jobs:
             Sort-Object Length -Descending |
             Select-Object Name,Length,LastWriteTime |
             Out-File "${{ github.workspace }}\artifacts\soak\ls.txt" -Encoding ascii
-          
+
           Write-Host "================================================"
           Write-Host "FINALIZATION COMPLETE"
           Write-Host "================================================"
 
-      - name: Upload artifacts
+      - name: "[11/12] Upload artifacts"
         id: upload-artifacts
         if: always()
+        # Purpose: Upload all test artifacts (logs, metrics, summaries)
+        # Note: Always runs (if: always()) to capture logs even on failure
+        # Retention: Configurable via workflow_dispatch input (default: 14 days)
         uses: actions/upload-artifact@v4
         with:
           name: soak-windows-${{ github.run_id }}
           path: |
-            ${{ github.workspace }}/artifacts/**
+            ${{ env.ARTIFACTS_ROOT }}/**
             ${{ github.workspace }}/.pytest_cache/**
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: ${{ inputs.artifact_retention_days || 14 }}
 
-      - name: Telegram notify on failure
+      - name: "[12/12] Telegram failure notification"
         id: notify-telegram
         if: failure() && env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID
+        # Purpose: Send alert to Telegram on soak test failure
+        # Condition: Only if secrets are configured AND test failed
         run: |
           $msg = "❌ SOAK failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} (commit $(git rev-parse --short HEAD))"
           $uri = "https://api.telegram.org/bot$env:TELEGRAM_BOT_TOKEN/sendMessage"
