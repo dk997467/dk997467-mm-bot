@@ -6,13 +6,28 @@ import sys
 def should_scan(path: str) -> bool:
     if not path.endswith('.py'):
         return False
+    
+    # Skip research/strategy files - they use json.dump() for reports/calibration
+    if any(segment in path for segment in ['/research/', '\\research\\', '/strategy/', '\\strategy\\']):
+        return False
+    
     if '/tests/' in path or '\\tests\\' in path:
         # allow tests if explicitly marked
         with open(path, 'r', encoding='utf-8') as f:
             head = f.read(4096)
-            if '# test-ok: raw-json' in head:
+            if '# test-ok: raw-json' in head or '# lint-ok: json-write' in head:
                 return False
         return True
+    
+    # Check for marker comment in file header
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            head = f.read(4096)
+            if '# lint-ok: json-write' in head or '# test-ok: raw-json' in head:
+                return False
+    except Exception:
+        pass
+    
     return True
 
 

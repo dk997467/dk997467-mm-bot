@@ -397,7 +397,7 @@ def main() -> int:
         """Immediately report failure details to stderr for CI debugging."""
         if not result.get('ok', True):
             print(f"\n{'='*70}", file=sys.stderr)
-            print(f"❌ [STEP FAILED] {result.get('name', 'unknown')}", file=sys.stderr)
+            print(f"[X] [STEP FAILED] {result.get('name', 'unknown')}", file=sys.stderr)
             print(f"{'='*70}", file=sys.stderr)
             details = result.get('details', 'No details available')
             print(f"Error details:\n{details}", file=sys.stderr)
