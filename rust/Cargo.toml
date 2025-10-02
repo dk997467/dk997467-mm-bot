@@ -11,7 +11,7 @@ name = "mm_orderbook"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.20", features = ["extension-module", "abi3-py311"] }
+pyo3 = { version = "0.24.1", features = ["extension-module", "abi3-py311"] }
 indexmap = "2"
 # FINAL FIX: Add the library that allows using floats as hash keys
 ordered-float = "4.2.0"
