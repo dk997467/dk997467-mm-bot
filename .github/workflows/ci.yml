@@ -23,6 +23,34 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
+      - name: "[DEBUG] Environment Snapshot (Pre-Install)"
+        shell: bash
+        run: |
+          echo "=============================================="
+          echo "ENVIRONMENT DIAGNOSTIC SNAPSHOT"
+          echo "=============================================="
+          echo ""
+          echo "--- Working Directory ---"
+          pwd
+          echo ""
+          echo "--- Directory Listing ---"
+          ls -la
+          echo ""
+          echo "--- Python Version ---"
+          python --version
+          python -c "import sys; print('Executable:', sys.executable); print('Path:', sys.path)"
+          echo ""
+          echo "--- Pip Version ---"
+          pip --version
+          echo ""
+          echo "--- Environment Variables (sorted) ---"
+          env | sort
+          echo ""
+          echo "--- Disk Space ---"
+          df -h .
+          echo ""
+          echo "=============================================="
+
       - name: Prepare minimal requirements for CI
         shell: bash
         run: |
@@ -42,6 +70,33 @@ jobs:
         run: |
           python -m pip install -U pip
           pip install -r requirements_ci.txt
+
+      - name: "[DEBUG] Environment Snapshot (Post-Install)"
+        shell: bash
+        run: |
+          echo "=============================================="
+          echo "POST-INSTALL DIAGNOSTIC SNAPSHOT"
+          echo "=============================================="
+          echo ""
+          echo "--- Installed Packages (pip freeze) ---"
+          pip freeze
+          echo ""
+          echo "--- Pytest Version ---"
+          pip show pytest pytest-xdist pytest-timeout || echo "pytest not installed"
+          echo ""
+          echo "--- PYTHONPATH ---"
+          echo "PYTHONPATH=${PYTHONPATH:-<not set>}"
+          echo ""
+          echo "=============================================="
+
+      - name: "[DEBUG] Run Isolated Whitelist Test"
+        continue-on-error: true
+        run: |
+          echo "=============================================="
+          echo "ISOLATED WHITELIST TEST DIAGNOSTIC"
+          echo "=============================================="
+          python tools/ci/debug_whitelist_test.py
+          echo "=============================================="
 
       - name: Run fast tests (verbose)
         run: |

@@ -208,6 +208,16 @@ def run_step(label: str, cmd: List[str]) -> Dict[str, Any]:
         env = os.environ.copy()
         env["PYTHONFAULTHANDLER"] = "1"
         safe_cmd = _prepare_python_cmd(cmd)
+        
+        # ===== ENHANCED DIAGNOSTIC LOGGING =====
+        print("=" * 80, file=sys.stderr)
+        print(f"[DEBUG] STARTING STEP: {label}", file=sys.stderr)
+        print(f"[DEBUG] Working directory: {os.getcwd()}", file=sys.stderr)
+        print(f"[DEBUG] Command: {' '.join(safe_cmd)}", file=sys.stderr)
+        print(f"[DEBUG] Timeout: {TIMEOUT_SECONDS}s", file=sys.stderr)
+        print(f"[DEBUG] Python executable: {sys.executable}", file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+        
         # Run and capture
         start_ts = time.time()
         p = subprocess.Popen(
@@ -237,6 +247,21 @@ def run_step(label: str, cmd: List[str]) -> Dict[str, Any]:
             if stderr:
                 err_path.write_text(stderr, encoding="ascii", errors="replace")
             duration_ms = int((time.time() - start_ts) * 1000)
+            
+            # ===== ENHANCED DIAGNOSTIC LOGGING (POST-EXECUTION) =====
+            print("=" * 80, file=sys.stderr)
+            print(f"[DEBUG] FINISHED STEP: {label}", file=sys.stderr)
+            print(f"[DEBUG] Return code: {p.returncode}", file=sys.stderr)
+            print(f"[DEBUG] Duration: {duration_ms}ms", file=sys.stderr)
+            print(f"[DEBUG] Status: {'✓ OK' if p.returncode == 0 else '✗ FAIL'}", file=sys.stderr)
+            print("-" * 80, file=sys.stderr)
+            print(f"[DEBUG] STDOUT (full output):", file=sys.stderr)
+            print(stdout if stdout else "(empty)", file=sys.stderr)
+            print("-" * 80, file=sys.stderr)
+            print(f"[DEBUG] STDERR (full output):", file=sys.stderr)
+            print(stderr if stderr else "(empty)", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            
             return {
                 'name': label,
                 'ok': p.returncode == 0,
