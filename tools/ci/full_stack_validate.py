@@ -436,7 +436,8 @@ def main() -> int:
     overall_ok = all(section['ok'] for section in sections)
     final_result = 'OK' if overall_ok else 'FAIL'
 
-    utc_timestamp = datetime.now(timezone.utc).isoformat()
+    # Support frozen time for deterministic testing (e.g., in CI)
+    utc_timestamp = os.environ.get('MM_FREEZE_UTC_ISO', datetime.now(timezone.utc).isoformat())
     report_data = {
         'result': final_result,
         'runtime': {
