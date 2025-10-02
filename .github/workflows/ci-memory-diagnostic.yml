@@ -1,0 +1,183 @@
+name: CI Memory Diagnostic
+
+# This workflow is for DEEP DIAGNOSTICS ONLY
+# It profiles memory usage to identify which tests cause OOM (exit 143)
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_file:
+        description: "Test file to analyze (test_selection_unit.txt or test_selection_e2e.txt)"
+        required: true
+        default: "test_selection_unit.txt"
+      batch_size:
+        description: "Batch size (smaller = more isolated, slower)"
+        required: false
+        default: "3"
+
+jobs:
+  memory-diagnostic:
+    name: Memory Profiling & Diagnosis
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTHONPATH: "${{ github.workspace }}"
+      BYBIT_API_KEY: "test_api_key_for_ci_only"
+      BYBIT_API_SECRET: "test_api_secret_for_ci_only"
+      STORAGE_PG_PASSWORD: "test_pg_password_for_ci_only"
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: "[1/6] Install dependencies + memory profiler"
+        shell: bash
+        run: |
+          echo "=============================================="
+          echo "Installing dependencies + pytest-memray"
+          echo "=============================================="
+          
+          # Prepare CI requirements
+          awk '
+            BEGIN{IGNORECASE=1}
+            /^bybit-connector/ {next}
+            /^mm-orderbook/    {next}
+            /^git\+ssh:/       {next}
+            {print}
+          ' requirements.txt > requirements_ci.txt
+          echo "pydantic>=2,<3"           >> requirements_ci.txt
+          echo "pydantic-settings>=2,<3"  >> requirements_ci.txt
+          echo "pandas>=2,<3"             >> requirements_ci.txt
+          
+          # Install
+          python -m pip install -U pip
+          pip install -r requirements_ci.txt
+          
+          # Install memory profiler
+          pip install pytest-memray
+          
+          echo ""
+          echo "Installed packages:"
+          pip list | grep -E "(pytest|memray)"
+
+      - name: "[2/6] System resource snapshot (before tests)"
+        run: |
+          echo "=============================================="
+          echo "SYSTEM RESOURCES (BEFORE TESTS)"
+          echo "=============================================="
+          echo ""
+          echo "--- Memory (free -m) ---"
+          free -m
+          echo ""
+          echo "--- Disk (df -h) ---"
+          df -h
+          echo ""
+          echo "--- CPU Info ---"
+          lscpu | grep -E "Model name|CPU\(s\)|Thread"
+          echo ""
+          echo "=============================================="
+
+      - name: "[3/6] Run tests in batches with memory profiling"
+        id: batch_tests
+        continue-on-error: true
+        run: |
+          echo "=============================================="
+          echo "BATCH TEST EXECUTION"
+          echo "=============================================="
+          echo "Test file: ${{ inputs.test_file }}"
+          echo "Batch size: ${{ inputs.batch_size }}"
+          echo ""
+          
+          # Run batch runner
+          python tools/ci/test_batch_runner.py \
+            --test-file "${{ inputs.test_file }}" \
+            --batch-size "${{ inputs.batch_size }}" \
+            --verbose
+          
+          echo "EXIT_CODE=$?" >> $GITHUB_OUTPUT
+
+      - name: "[4/6] System resource snapshot (after tests)"
+        if: always()
+        run: |
+          echo "=============================================="
+          echo "SYSTEM RESOURCES (AFTER TESTS)"
+          echo "=============================================="
+          echo ""
+          echo "--- Memory (free -m) ---"
+          free -m
+          echo ""
+          echo "--- Disk (df -h) ---"
+          df -h
+          echo ""
+          echo "--- Top processes by memory ---"
+          ps aux --sort=-%mem | head -20
+          echo ""
+          echo "=============================================="
+
+      - name: "[5/6] Analyze memory profiles"
+        if: always()
+        run: |
+          echo "=============================================="
+          echo "MEMORY PROFILE ANALYSIS"
+          echo "=============================================="
+          echo ""
+          
+          # Find any .bin files created by memray
+          if ls *.bin 1> /dev/null 2>&1; then
+            echo "Found memory profiles:"
+            ls -lh *.bin
+            echo ""
+            
+            # Analyze each profile
+            for profile in *.bin; do
+              echo "--- Analysis: $profile ---"
+              python -m memray stats "$profile" || echo "Failed to analyze $profile"
+              echo ""
+            done
+          else
+            echo "No memory profiles found (.bin files)"
+          fi
+
+      - name: "[6/6] Upload diagnostic artifacts"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-diagnostic-${{ github.run_id }}
+          path: |
+            *.bin
+            .pytest_cache/**
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: "Summary: Check if diagnostic revealed failures"
+        if: always()
+        run: |
+          echo "=============================================="
+          echo "DIAGNOSTIC SUMMARY"
+          echo "=============================================="
+          
+          exit_code="${{ steps.batch_tests.outputs.EXIT_CODE }}"
+          
+          if [ "$exit_code" = "0" ]; then
+            echo "✅ All batches passed - no OOM detected"
+            echo "This suggests the issue is with batch size or test combinations"
+          elif [ "$exit_code" = "143" ]; then
+            echo "❌ Exit 143 detected - OOM confirmed"
+            echo "Check batch runner output above to see which batch failed"
+          else
+            echo "⚠️ Exit code: $exit_code"
+            echo "Check batch runner output for details"
+          fi
+          
+          echo ""
+          echo "Next steps:"
+          echo "1. Review batch runner output above"
+          echo "2. Identify failing batch"
+          echo "3. Run smaller batches on that subset"
+          echo "4. Optimize identified problematic tests"
+
