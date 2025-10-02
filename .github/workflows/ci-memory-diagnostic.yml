@@ -10,10 +10,12 @@ on:
         description: "Test file to analyze (test_selection_unit.txt or test_selection_e2e.txt)"
         required: true
         default: "test_selection_unit.txt"
+        type: string
       batch_size:
         description: "Batch size (smaller = more isolated, slower)"
         required: false
         default: "3"
+        type: string
 
 jobs:
   memory-diagnostic:
