@@ -7,6 +7,7 @@ Adds:
 - Invariants validation
 - Runtime mutability whitelist and helpers
 - Sanitized hashing helpers and git SHA helper
+- Secure secret loading from Docker Secrets or env vars
 """
 
 import os
@@ -23,6 +24,75 @@ from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings
 
 logger = logging.getLogger(__name__)
+
+
+def _load_secret(env_var: str, default: str = '') -> str:
+    """
+    Load secret from Docker Secret file if available, otherwise from environment variable.
+    
+    Priority order:
+    1. /run/secrets/<secret_name> (Docker Swarm secrets)
+    2. {ENV_VAR}_FILE environment variable pointing to a file
+    3. {ENV_VAR} environment variable
+    4. default value
+    
+    This provides security for production (Docker Secrets) while maintaining
+    dev/test compatibility (environment variables).
+    
+    Args:
+        env_var: Name of environment variable (e.g., 'BYBIT_API_KEY')
+        default: Default value if secret not found
+    
+    Returns:
+        Secret value as string
+    
+    Examples:
+        >>> _load_secret('BYBIT_API_KEY')  # Production with Docker Secrets
+        'real_api_key_from_file'
+        >>> _load_secret('BYBIT_API_KEY')  # Dev with env vars
+        'test_api_key_from_env'
+    """
+    # Priority 1: Check for _FILE suffix env var (Docker Secrets pattern)
+    file_var = f"{env_var}_FILE"
+    secret_path = os.getenv(file_var)
+    
+    if secret_path:
+        try:
+            with open(secret_path, 'r', encoding='utf-8') as f:
+                secret = f.read().strip()
+            if secret:
+                logger.debug(f"Loaded {env_var} from file: {secret_path}")
+                return secret
+        except FileNotFoundError:
+            logger.warning(f"Secret file not found: {secret_path} (from {file_var})")
+        except Exception as e:
+            logger.error(f"Failed to read secret from {secret_path}: {e}")
+    
+    # Priority 2: Try standard Docker Swarm secrets location
+    docker_secret_path = f"/run/secrets/{env_var.lower()}"
+    if os.path.exists(docker_secret_path):
+        try:
+            with open(docker_secret_path, 'r', encoding='utf-8') as f:
+                secret = f.read().strip()
+            if secret:
+                logger.debug(f"Loaded {env_var} from Docker secret: {docker_secret_path}")
+                return secret
+        except Exception as e:
+            logger.error(f"Failed to read Docker secret from {docker_secret_path}: {e}")
+    
+    # Priority 3: Fall back to environment variable (dev/test mode)
+    env_value = os.getenv(env_var)
+    if env_value:
+        logger.debug(f"Loaded {env_var} from environment variable")
+        return env_value
+    
+    # Priority 4: Return default
+    if default:
+        logger.debug(f"Using default value for {env_var}")
+    else:
+        logger.warning(f"No value found for {env_var} (not in secrets or env)")
+    
+    return default
 
 def _normalize_fees_section(yaml_config: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize fees section in-place and return updated dict.
@@ -148,6 +218,48 @@ class StrategyConfig:
             raise ValueError("imbalance_levels must be between 3 and 10")
         if self.guard_pause_ms < 100 or self.guard_pause_ms > 1000:
             raise ValueError("guard_pause_ms must be between 100 and 1000")
+
+
+@dataclass
+class ConnectionPoolConfig:
+    """HTTP connection pooling configuration for REST API connector.
+    
+    Optimizes connection reuse to reduce latency and resource usage.
+    Configured based on Bybit API best practices and high-frequency trading requirements.
+    """
+    # Connection limits
+    limit: int = 100  # Total connection pool limit
+    limit_per_host: int = 30  # Max connections per host (Bybit API)
+    
+    # Timeouts (in seconds)
+    connect_timeout: float = 10.0  # TCP connection timeout
+    sock_read_timeout: float = 30.0  # Socket read timeout
+    total_timeout: float = 60.0  # Total request timeout
+    
+    # DNS and keepalive
+    ttl_dns_cache: int = 300  # DNS cache TTL (5 minutes)
+    keepalive_timeout: float = 30.0  # TCP keepalive timeout
+    
+    # Connection management
+    enable_cleanup_closed: bool = True  # Cleanup closed connections
+    force_close: bool = False  # Close connections after each request (disable pooling if True)
+    
+    def __post_init__(self):
+        """Validate configuration values."""
+        if self.limit < 1:
+            raise ValueError("ConnectionPoolConfig.limit must be >= 1")
+        if self.limit_per_host < 1 or self.limit_per_host > self.limit:
+            raise ValueError("ConnectionPoolConfig.limit_per_host must be between 1 and limit")
+        if self.connect_timeout <= 0 or self.connect_timeout > self.total_timeout:
+            raise ValueError("ConnectionPoolConfig.connect_timeout must be > 0 and <= total_timeout")
+        if self.sock_read_timeout <= 0 or self.sock_read_timeout > self.total_timeout:
+            raise ValueError("ConnectionPoolConfig.sock_read_timeout must be > 0 and <= total_timeout")
+        if self.total_timeout <= 0:
+            raise ValueError("ConnectionPoolConfig.total_timeout must be > 0")
+        if self.ttl_dns_cache < 0:
+            raise ValueError("ConnectionPoolConfig.ttl_dns_cache must be >= 0")
+        if self.keepalive_timeout <= 0:
+            raise ValueError("ConnectionPoolConfig.keepalive_timeout must be > 0")
 
 
 @dataclass
@@ -998,6 +1110,7 @@ class Config:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     websocket: WebSocketConfig = field(default_factory=WebSocketConfig)
     rest: RESTConfig = field(default_factory=RESTConfig)
+    connection_pool: ConnectionPoolConfig = field(default_factory=ConnectionPoolConfig)
     trading: TradingConfig = field(default_factory=TradingConfig)
     bybit: BybitConfig = field(default_factory=BybitConfig)
     
@@ -1255,11 +1368,15 @@ class ConfigLoader:
         if os.getenv('MONITORING_HEALTH_PORT'):
             config.monitoring.health_port = int(os.getenv('MONITORING_HEALTH_PORT'))
         
-        # Bybit overrides
-        if os.getenv('BYBIT_API_KEY'):
-            config.bybit.api_key = os.getenv('BYBIT_API_KEY')
-        if os.getenv('BYBIT_API_SECRET'):
-            config.bybit.api_secret = os.getenv('BYBIT_API_SECRET')
+        # Bybit overrides - SECURE: Use _load_secret to read from Docker Secrets or env
+        api_key = _load_secret('BYBIT_API_KEY')
+        if api_key:
+            config.bybit.api_key = api_key
+        
+        api_secret = _load_secret('BYBIT_API_SECRET')
+        if api_secret:
+            config.bybit.api_secret = api_secret
+        
         if os.getenv('BYBIT_USE_TESTNET'):
             use_testnet = os.getenv('BYBIT_USE_TESTNET').lower() == 'true'
             if use_testnet:
@@ -1268,6 +1385,11 @@ class ConfigLoader:
             else:
                 config.bybit.rest_url = "https://api.bybit.com"
                 config.bybit.ws_url = "wss://stream.bybit.com"
+        
+        # Storage overrides - SECURE: Use _load_secret for passwords
+        pg_password = _load_secret('STORAGE_PG_PASSWORD')
+        if pg_password:
+            config.storage.pg_password = pg_password
         
         return config
     

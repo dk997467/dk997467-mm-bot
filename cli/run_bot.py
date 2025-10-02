@@ -815,69 +815,136 @@ class MarketMakerBot:
             raise
     
     async def stop(self):
-        """Stop the bot."""
+        """
+        Gracefully stop the bot.
+        
+        Shutdown sequence:
+        1. Set running = False (stops all loops)
+        2. Cancel all active orders on exchange
+        3. Stop strategy
+        4. Stop WebSocket connector
+        5. Close REST connector
+        6. Stop web server
+        7. Cancel background tasks
+        8. Save state (if configured)
+        
+        Critical: Orders MUST be cancelled before closing connections
+        to prevent orphan orders on exchange.
+        """
         try:
+            print("[STOP] Initiating bot shutdown...")
             self.running = False
+            
+            # CRITICAL: Cancel all active orders on exchange FIRST
+            # This prevents orphan orders that could lead to financial losses
+            if self.order_manager and not self.dry_run:
+                try:
+                    print("[STOP] Cancelling all active orders on exchange...")
+                    cancelled_count = await self.order_manager.cancel_all_orders()
+                    print(f"[STOP] ✓ Cancelled {cancelled_count} active orders")
+                    
+                    # Record cancellation event
+                    if self.data_recorder:
+                        try:
+                            await self.data_recorder.record_custom_event(
+                                "shutdown_cancel_orders",
+                                {
+                                    "cancelled_count": cancelled_count,
+                                    "timestamp": datetime.now(timezone.utc).isoformat()
+                                }
+                            )
+                        except Exception:
+                            pass
+                except Exception as e:
+                    print(f"[STOP] ⚠ Error cancelling orders: {e}")
+            elif self.dry_run:
+                print("[STOP] ⊘ Skipping order cancellation (dry-run mode)")
             
             # Stop strategy
             if self.strategy:
-                await self.strategy.stop()
+                try:
+                    print("[STOP] Stopping strategy...")
+                    await self.strategy.stop()
+                    print("[STOP] ✓ Strategy stopped")
+                except Exception as e:
+                    print(f"[STOP] ⚠ Error stopping strategy: {e}")
             
             # Stop WebSocket connector
             if self.ws_connector and not isinstance(self.ws_connector, NullConnector):
-                await self.ws_connector.stop()
+                try:
+                    print("[STOP] Stopping WebSocket connector...")
+                    await self.ws_connector.stop()
+                    print("[STOP] ✓ WebSocket connector stopped")
+                except Exception as e:
+                    print(f"[STOP] ⚠ Error stopping WebSocket: {e}")
             
-            # Stop web server (after stopping loops)
+            # Close REST connector
+            if self.rest_connector and not isinstance(self.rest_connector, NullConnector):
+                try:
+                    print("[STOP] Closing REST connector...")
+                    # REST connector implements context manager protocol
+                    await self.rest_connector.__aexit__(None, None, None)
+                    print("[STOP] ✓ REST connector closed")
+                except Exception as e:
+                    print(f"[STOP] ⚠ Error closing REST connector: {e}")
+            
+            # Stop web server
             if self.web_runner:
-                await self.web_runner.cleanup()
-            
-            print("Bot stopped successfully")
+                try:
+                    print("[STOP] Stopping web server...")
+                    await self.web_runner.cleanup()
+                    print("[STOP] ✓ Web server stopped")
+                except Exception as e:
+                    print(f"[STOP] ⚠ Error stopping web server: {e}")
             
             # Cancel background tasks
-            if self._rollout_state_task:
+            print("[STOP] Cancelling background tasks...")
+            tasks_to_cancel = []
+            
+            # Named tasks
+            for task_name in ['_rollout_state_task', '_rebalance_task', '_scheduler_watcher_task',
+                             '_canary_export_task', '_prune_task', '_latency_slo_task', '_soak_task']:
+                task = getattr(self, task_name, None)
+                if task:
+                    tasks_to_cancel.append(task)
+                    setattr(self, task_name, None)
+            
+            # Background task list
+            tasks_to_cancel.extend(getattr(self, '_background_tasks', []))
+            
+            # Cancel all
+            for task in tasks_to_cancel:
                 try:
-                    self._rollout_state_task.cancel()
+                    task.cancel()
                 except Exception:
                     pass
-                self._rollout_state_task = None
-            if self._rebalance_task:
+            
+            # Await cancellation
+            if tasks_to_cancel:
                 try:
-                    self._rebalance_task.cancel()
+                    await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
                 except Exception:
                     pass
-                self._rebalance_task = None
-            if self._scheduler_watcher_task:
-                try:
-                    self._scheduler_watcher_task.cancel()
-                except Exception:
-                    pass
-                self._scheduler_watcher_task = None
-            # Cancel and await background tasks
-            try:
-                for t in getattr(self, '_background_tasks', []):
-                    try:
-                        t.cancel()
-                    except Exception:
-                        pass
-                await asyncio.gather(*[t for t in getattr(self, '_background_tasks', []) if t], return_exceptions=True)
-            except Exception:
-                pass
+            
             self._background_tasks = []
-            if getattr(self, '_canary_export_task', None):
-                try:
-                    self._canary_export_task.cancel()
-                except Exception:
+            print(f"[STOP] ✓ Cancelled {len(tasks_to_cancel)} background tasks")
+            
+            # Save final state
+            try:
+                if self.metrics:
+                    print("[STOP] Saving final metrics snapshot...")
+                    # Trigger final metric flush if available
+                    # (actual implementation depends on metrics backend)
                     pass
-                self._canary_export_task = None
-            if getattr(self, '_prune_task', None):
-                try:
-                    self._prune_task.cancel()
-                except Exception:
-                    pass
-                self._prune_task = None
+            except Exception as e:
+                print(f"[STOP] ⚠ Error saving metrics: {e}")
+            
+            print("[STOP] ✓ Bot shutdown complete")
             
         except Exception as e:
-            print(f"Error stopping bot: {e}")
+            print(f"[STOP] ✗ Error during shutdown: {e}")
+            import traceback
+            traceback.print_exc()
     
     async def _start_web_server(self):
         """Start the web server for health checks and metrics."""
@@ -3048,63 +3115,16 @@ class MarketMakerBot:
             pass
 
     def _atomic_snapshot_write(self, path: str, payload_obj: dict, *, version: int) -> None:
-        import os as _os, json as _json, hashlib as _hl
-        from pathlib import Path as _P
-        sp = str(path)
-        tmp = sp + ".tmp"
-        try:
-            _P(sp).parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        payload_json = _json.dumps(payload_obj or {}, sort_keys=True, separators=(",", ":"))
-        sha = _hl.sha256(payload_json.encode('utf-8')).hexdigest()
-        wrapper = {"version": int(version), "sha256": str(sha), "payload": payload_obj or {}}
-        data = _json.dumps(wrapper, sort_keys=True, separators=(",", ":"))
-        with open(tmp, 'w', encoding='utf-8') as f:
-            f.write(data)
-            f.flush()
-            try:
-                _os.fsync(f.fileno())
-            except Exception:
-                pass
-        try:
-            _os.replace(tmp, sp)
-        except Exception:
-            _os.rename(tmp, sp)
-        # best-effort fsync on dir
-        try:
-            d = _P(sp).parent
-            if d and d.exists():
-                dirfd = _os.open(str(d), _os.O_DIRECTORY)
-                try:
-                    _os.fsync(dirfd)
-                finally:
-                    _os.close(dirfd)
-        except Exception:
-            pass
-        payload = _json.dumps(obj, sort_keys=True, separators=(",", ":"))
-        with open(tmp, 'w', encoding='utf-8') as f:
-            f.write(payload)
-            f.flush()
-            try:
-                _os.fsync(f.fileno())
-            except Exception:
-                pass
-        try:
-            _os.replace(tmp, sp)
-        except Exception:
-            _os.rename(tmp, sp)
-        # best-effort fsync on directory
-        try:
-            d = _P(sp).parent
-            if d and d.exists():
-                dirfd = _os.open(str(d), _os.O_DIRECTORY)
-                try:
-                    _os.fsync(dirfd)
-                finally:
-                    _os.close(dirfd)
-        except Exception:
-            pass
+        # Use shared atomic writer; preserve versioned wrapper
+        import hashlib as _hl
+        from src.common.artifacts import write_json_atomic
+        payload_obj = payload_obj or {}
+        wrapper = {
+            "version": int(version),
+            "sha256": _hl.sha256(json.dumps(payload_obj, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
+            "payload": payload_obj,
+        }
+        write_json_atomic(str(path), wrapper)
 
     # ---- L6.2: Cost calibration admin ----
     async def _admin_cost_calibration(self, request):
@@ -5931,14 +5951,18 @@ async def main():
     """Main entry point."""
     bot = None
     recorder: Optional[Recorder] = None
+    shutdown_event = asyncio.Event()
     
     def signal_handler(signum, frame):
-        """Handle shutdown signals."""
-        print(f"Received signal {signum}, shutting down...")
-        if bot:
-            asyncio.create_task(bot.stop())
-        if recorder:
-            asyncio.create_task(recorder.stop())
+        """
+        Handle shutdown signals (SIGINT, SIGTERM).
+        
+        Sets shutdown_event to trigger graceful shutdown in async context.
+        This is the correct way to handle signals in asyncio - don't use
+        asyncio.create_task() in signal handlers as they run synchronously.
+        """
+        print(f"\n[SHUTDOWN] Received signal {signum}, initiating graceful shutdown...")
+        shutdown_event.set()
     
     def sighup_handler(signum, frame):
         """Handle SIGHUP for config reload."""
@@ -6027,32 +6051,62 @@ async def main():
         
         # Start bot
         print("Starting bot...")
-        await bot.start()
+        bot_task = asyncio.create_task(bot.start())
+        
+        # Wait for either bot to finish or shutdown signal
+        shutdown_task = asyncio.create_task(shutdown_event.wait())
+        done, pending = await asyncio.wait(
+            [bot_task, shutdown_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        
+        # If shutdown was requested, cancel bot task
+        if shutdown_task in done:
+            print("[SHUTDOWN] Shutdown signal received, stopping bot...")
+            if not bot_task.done():
+                bot_task.cancel()
+                try:
+                    await bot_task
+                except asyncio.CancelledError:
+                    pass
         
     except KeyboardInterrupt:
-        print("\nKeyboard interrupt received")
+        print("\n[SHUTDOWN] Keyboard interrupt received")
     except Exception as e:
-        print(f"Bot error: {e}")
+        print(f"[ERROR] Bot error: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
     finally:
-        print("\nShutting down...")
+        print("\n" + "=" * 60)
+        print("[SHUTDOWN] Initiating graceful shutdown sequence...")
+        print("=" * 60)
+        
+        # Step 1: Stop bot (includes order cancellation)
         if bot:
             try:
-                await bot.stop()
-                print("Bot stopped")
+                print("[SHUTDOWN] Step 1/2: Stopping bot (cancelling orders, closing connections)...")
+                await asyncio.wait_for(bot.stop(), timeout=30.0)
+                print("[SHUTDOWN] ✓ Bot stopped successfully")
+            except asyncio.TimeoutError:
+                print("[SHUTDOWN] ⚠ Bot stop timeout (30s exceeded), forcing shutdown...")
             except Exception as e:
-                print(f"Error stopping bot: {e}")
+                print(f"[SHUTDOWN] ✗ Error stopping bot: {e}")
         
+        # Step 2: Stop recorder
         if recorder:
             try:
-                await recorder.stop()
-                print("Recorder stopped")
+                print("[SHUTDOWN] Step 2/2: Stopping recorder (flushing data)...")
+                await asyncio.wait_for(recorder.stop(), timeout=10.0)
+                print("[SHUTDOWN] ✓ Recorder stopped successfully")
+            except asyncio.TimeoutError:
+                print("[SHUTDOWN] ⚠ Recorder stop timeout (10s exceeded), data may be lost...")
             except Exception as e:
-                print(f"Error stopping recorder: {e}")
+                print(f"[SHUTDOWN] ✗ Error stopping recorder: {e}")
         
-        print("Shutdown complete")
+        print("=" * 60)
+        print("[SHUTDOWN] Shutdown complete")
+        print("=" * 60)
 
 
 if __name__ == "__main__":

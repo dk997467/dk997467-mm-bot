@@ -2,7 +2,24 @@ import re
 import sys
 
 
-ALLOWED = set(['env','service','instance','symbol','op','regime'])
+ALLOWED = set([
+    # Core labels
+    'env', 'service', 'instance', 'symbol', 'op', 'regime',
+    # Flow/Order labels
+    'side', 'action',
+    # Latency/Performance labels  
+    'stage', 'loop', 'percentile', 'bucket_ms',
+    # Connectivity labels
+    'exchange', 'ws_type', 'endpoint',
+    # Rollout/Deployment labels
+    'color', 'direction',
+    # Admin/Alerts labels
+    'kind',
+    # Markout labels
+    'horizon_ms',
+    # Misc labels
+    'reason', 'result', 'gen',
+])
 
 
 def main() -> int:

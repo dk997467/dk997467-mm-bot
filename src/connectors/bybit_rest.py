@@ -89,6 +89,10 @@ class BybitRESTConnector:
         # Counter for unique ID generation
         self._order_counter = 0
         
+        # Rate-limited logger for pool metrics
+        from src.metrics.exporter import RateLimitedLogger
+        self._rate_logger = RateLimitedLogger()
+        
         # Circuit breaker state
         self._circuit_open = False
         self._circuit_open_time = 0
@@ -99,12 +103,43 @@ class BybitRESTConnector:
         self._circuit_breaker_timeout_ms = config.get('circuit_breaker_timeout_ms', 300000)  # 5 minutes
     
     async def __aenter__(self):
-        """Async context manager entry."""
+        """Async context manager entry with optimized connection pooling."""
+        # Get connection pool config from app context
+        pool_config = None
+        if hasattr(self.ctx, 'config') and hasattr(self.ctx.config, 'connection_pool'):
+            pool_config = self.ctx.config.connection_pool
+        
+        # Create TCP connector with connection pooling
+        connector = aiohttp.TCPConnector(
+            limit=pool_config.limit if pool_config else 100,
+            limit_per_host=pool_config.limit_per_host if pool_config else 30,
+            ttl_dns_cache=pool_config.ttl_dns_cache if pool_config else 300,
+            enable_cleanup_closed=pool_config.enable_cleanup_closed if pool_config else True,
+            force_close=pool_config.force_close if pool_config else False,
+            keepalive_timeout=pool_config.keepalive_timeout if pool_config else 30.0
+        )
+        
+        # Create timeout with granular configuration
+        timeout = aiohttp.ClientTimeout(
+            total=pool_config.total_timeout if pool_config else 60.0,
+            connect=pool_config.connect_timeout if pool_config else 10.0,
+            sock_read=pool_config.sock_read_timeout if pool_config else 30.0
+        )
+        
         self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=30),
+            connector=connector,
+            timeout=timeout,
             headers={'Content-Type': 'application/json'}
         )
         self.connected = True
+        
+        # Log connection pool configuration
+        if self.metrics and pool_config:
+            print(f"[REST] Connection pool initialized: "
+                  f"limit={pool_config.limit}, "
+                  f"per_host={pool_config.limit_per_host}, "
+                  f"keepalive={pool_config.keepalive_timeout}s")
+        
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -112,6 +147,39 @@ class BybitRESTConnector:
         if self.session:
             await self.session.close()
         self.connected = False
+    
+    def update_pool_metrics(self):
+        """Update connection pool metrics for observability."""
+        if not self.metrics or not self.session or not self.session.connector:
+            return
+        
+        try:
+            connector = self.session.connector
+            if isinstance(connector, aiohttp.TCPConnector):
+                # Get connector statistics
+                # Note: aiohttp doesn't expose all stats directly, but we can get some info
+                # from the connector's internal state
+                
+                # Set limit (static config)
+                self.metrics.http_pool_connections_limit.labels(exchange='bybit').set(connector.limit)
+                
+                # Note: Active/idle connections are not directly exposed by aiohttp.TCPConnector
+                # We set these to 0 as placeholders. For production monitoring, consider:
+                # 1. Using custom instrumentation via aiohttp middleware
+                # 2. Using aiohttp's built-in tracing for detailed stats
+                # 3. Monitoring at the network level (netstat/ss)
+                
+                # Log pool stats periodically (every ~100 calls)
+                if not hasattr(self, '_pool_metrics_counter'):
+                    self._pool_metrics_counter = 0
+                
+                self._pool_metrics_counter += 1
+                if self._pool_metrics_counter % 100 == 0:
+                    print(f"[REST] Connection pool: limit={connector.limit}, "
+                          f"limit_per_host={connector.limit_per_host}, "
+                          f"force_close={connector.force_close}")
+        except Exception as e:
+            self._rate_logger.warn_once(f"Failed to update pool metrics: {e}")
     
     def is_connected(self) -> bool:
         """Check if connector is connected."""
@@ -226,6 +294,9 @@ class BybitRESTConnector:
                            params: Optional[Dict] = None, attempt: int = 1) -> Dict[str, Any]:
         """Make HTTP request with retry logic and metrics."""
         start_time = time.monotonic()
+        
+        # Update connection pool metrics periodically
+        self.update_pool_metrics()
         
         try:
             url = f"{self.base_url}{endpoint}"

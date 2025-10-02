@@ -405,9 +405,9 @@ def main():
         
         # Output results
         if args.out:
-            # Save JSON report
-            with open(args.out, 'w') as f:
-                json.dump(results, f, indent=2, sort_keys=True, ensure_ascii=False)
+            # Save JSON report (atomic)
+            from src.common.artifacts import write_json_atomic
+            write_json_atomic(str(args.out), results)
             print(f"Results saved to {args.out}")
             
             # E1: Generate and save markdown report

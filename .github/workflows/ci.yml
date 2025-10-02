@@ -5,15 +5,24 @@ on:
   pull_request:
 
 jobs:
-  tests:
+  # ===========================================================================
+  # UNIT TESTS: Fast, low memory (~2-3 min)
+  # ===========================================================================
+  tests-unit:
+    name: Unit Tests (fast)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PYTHONPATH: "${{ github.workspace }}"
+      # Test credentials for CI environment (not real keys)
+      BYBIT_API_KEY: "test_api_key_for_ci_only"
+      BYBIT_API_SECRET: "test_api_secret_for_ci_only"
+      STORAGE_PG_PASSWORD: "test_pg_password_for_ci_only"
 
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -39,6 +48,55 @@ jobs:
           python -m pip install -U pip
           pip install -r requirements_ci.txt
 
-      - name: Run fast tests (verbose)
+      - name: Run Unit Tests
+        # Unit tests: Fast, low memory, use -n 2 for speed
         run: |
-          pytest -vv -s --maxfail=1 tests/e2e/test_full_stack_validation.py
+          python tools/ci/run_selected_unit.py
+
+  # ===========================================================================
+  # E2E TESTS: Slower, higher memory (~5-8 min)
+  # ===========================================================================
+  tests-e2e:
+    name: E2E Tests (integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTHONPATH: "${{ github.workspace }}"
+      # Test credentials for CI environment (not real keys)
+      BYBIT_API_KEY: "test_api_key_for_ci_only"
+      BYBIT_API_SECRET: "test_api_secret_for_ci_only"
+      STORAGE_PG_PASSWORD: "test_pg_password_for_ci_only"
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Prepare minimal requirements for CI
+        shell: bash
+        run: |
+          awk '
+            BEGIN{IGNORECASE=1}
+            /^bybit-connector/ {next}
+            /^mm-orderbook/    {next}
+            /^git\+ssh:/       {next}
+            {print}
+          ' requirements.txt > requirements_ci.txt
+          echo "pydantic>=2,<3"           >> requirements_ci.txt
+          echo "pydantic-settings>=2,<3"  >> requirements_ci.txt
+          echo "pandas>=2,<3"             >> requirements_ci.txt
+
+      - name: Install deps (CI subset)
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements_ci.txt
+
+      - name: Run E2E Tests
+        # E2E tests: Sequential mode (-n 0) to prevent OOM
+        # These tests use heavy fixtures, run them one at a time
+        run: |
+          python tools/ci/run_selected_e2e.py

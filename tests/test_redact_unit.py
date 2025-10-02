@@ -7,7 +7,7 @@ def test_redact_masks_tokens_and_kv():
         "AKIAABCDEFGHIJKLMNOP\n"
         "hex: DEADBEEFDEADBEEFDEADBEEFDEADBEEF\n"
     )
-    out = redact(s, DEFAULT_PATTERNS)
+    out = redact(s)  # Uses DEFAULT_PATTERNS by default
     # kv masked
     assert 'api_secret=****' in out or 'api_secret="****"' in out
     # AWS key masked

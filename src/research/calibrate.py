@@ -499,8 +499,9 @@ def run_sim(candidate: Dict[str, float], symbol: str, out_dir: Path, seed: int,
         temp_calibration = out_dir / "calibration_candidate.json"
         calibration_data = round_floats(candidate, round_dp)
         
-        with open(temp_calibration, 'w') as f:
-            json.dump(calibration_data, f, sort_keys=True, ensure_ascii=False, indent=2)
+        # Write temp calibration deterministically
+        from src.common.artifacts import write_json_atomic
+        write_json_atomic(str(temp_calibration), calibration_data)
         
         # Run fast backtest with calibration
         cmd = [

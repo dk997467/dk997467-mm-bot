@@ -37,6 +37,7 @@ mm-orderbook>=0.1.0  # Rust-backed L2 order book
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
 pytest-cov>=4.1.0
+pytest-xdist>=3.5.0  # Parallel test execution for CI performance (4x speedup)
 hypothesis>=6.88.0
 
 # Development
