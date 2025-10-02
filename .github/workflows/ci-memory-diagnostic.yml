@@ -93,13 +93,17 @@ jobs:
           echo "Batch size: ${{ inputs.batch_size }}"
           echo ""
           
-          # Run batch runner
+          # Run batch runner and capture exit code
           python tools/ci/test_batch_runner.py \
             --test-file "${{ inputs.test_file }}" \
             --batch-size "${{ inputs.batch_size }}" \
             --verbose
           
-          echo "EXIT_CODE=$?" >> $GITHUB_OUTPUT
+          # CRITICAL: Save exit code BEFORE any other commands
+          EXIT_CODE=$?
+          echo "EXIT_CODE=${EXIT_CODE}" >> $GITHUB_OUTPUT
+          echo ""
+          echo "Batch runner exit code: ${EXIT_CODE}"
 
       - name: "[4/6] System resource snapshot (after tests)"
         if: always()
