@@ -1,0 +1,7 @@
+{"symbol":"BTCUSDT","ts_ms":1000,"side":"B","price":100.0,"qty":1.0,"mid_before":100.0,"mid_after_1s":100.2,"fee_bps":0.1}
+{"symbol":"BTCUSDT","ts_ms":2000,"side":"S","price":99.8,"qty":2.0,"mid_before":100.0,"mid_after_1s":99.7,"fee_bps":0.2}
+{"symbol":"BTCUSDT","ts_ms":3000,"side":"B","price":100.1,"qty":1.5,"mid_before":100.0,"mid_after_1s":100.0}
+{"symbol":"ETHUSDT","ts_ms":1100,"side":"B","price":200.0,"qty":5.0,"mid_before":200.0,"mid_after_1s":200.4,"fee_bps":0.1}
+{"symbol":"ETHUSDT","ts_ms":2100,"side":"S","price":199.6,"qty":3.0,"mid_before":200.0,"mid_after_1s":199.5,"fee_bps":0.2}
+{"symbol":"ETHUSDT","ts_ms":3100,"side":"B","price":200.2,"qty":4.0,"mid_before":200.0,"mid_after_1s":200.0}
+

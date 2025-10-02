@@ -1,0 +1,5 @@
+{"ts":"1970-01-01T00:00:10Z","symbol":"BTCUSDT","side":"B","price":100.0,"qty":1.0,"fee_bps":0.1,"maker_rebate_bps":0.0}
+{"ts":"1970-01-01T12:00:00Z","symbol":"ETHUSDT","side":"B","price":200.0,"qty":2.0,"fee_bps":0.1,"maker_rebate_bps":-0.05}
+{"ts":"1970-01-02T01:00:00Z","symbol":"BTCUSDT","side":"S","price":101.0,"qty":1.0,"fee_bps":0.1}
+
+
