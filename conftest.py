@@ -1,7 +1,45 @@
 import os, sys, io, builtins, asyncio
+from pathlib import Path
 import pytest
 
 import socket as _socket
+
+# ============================================================================
+# CRITICAL FIX: Establish project root for fixture/golden file resolution
+# ============================================================================
+# Many tests use `Path(__file__).resolve().parents[1]` to find project root,
+# then access fixtures via `root / "fixtures"` or `root / "golden"`.
+# However, fixtures are actually in `tests/fixtures/` and `tests/golden/`.
+# This creates symlinks in project root to resolve paths correctly.
+# ============================================================================
+PROJECT_ROOT = Path(__file__).resolve().parent
+FIXTURES_TARGET = PROJECT_ROOT / "tests" / "fixtures"
+GOLDEN_TARGET = PROJECT_ROOT / "tests" / "golden"
+FIXTURES_LINK = PROJECT_ROOT / "fixtures"
+GOLDEN_LINK = PROJECT_ROOT / "golden"
+
+def _ensure_fixture_links():
+    """Ensure fixtures/ and golden/ symlinks exist in project root."""
+    for link, target in [(FIXTURES_LINK, FIXTURES_TARGET), (GOLDEN_LINK, GOLDEN_TARGET)]:
+        if not link.exists():
+            try:
+                # Try creating symlink (works on Linux/Mac, admin on Windows)
+                link.symlink_to(target, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                # Fallback: Create junction on Windows (no admin needed)
+                import subprocess
+                try:
+                    subprocess.run(
+                        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                        check=True,
+                        capture_output=True
+                    )
+                except subprocess.CalledProcessError:
+                    # Last fallback: Just ensure target exists
+                    pass
+
+# Create links at module import time (before any tests run)
+_ensure_fixture_links()
 
 if not isinstance(sys.stdout, io.TextIOBase):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="ascii", newline="\n")  # type: ignore
