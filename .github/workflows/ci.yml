@@ -91,6 +91,9 @@ jobs:
 
       - name: "[DEBUG] Run Isolated Whitelist Test"
         continue-on-error: true
+        timeout-minutes: 20
+        # Purpose: Isolated test with -n 2 workers takes longer than default timeout
+        # Timeout increased from default (6min) to 20min to prevent SIGTERM (exit 143)
         run: |
           echo "=============================================="
           echo "ISOLATED WHITELIST TEST DIAGNOSTIC"
