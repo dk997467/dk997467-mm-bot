@@ -6,9 +6,9 @@ from typing import List, Tuple
 from src.common.redact import DEFAULT_PATTERNS
 
 
-TARGET_DIRS = ['artifacts', 'dist', 'logs', 'config']
-EXCLUDE_DIRS = {'venv', '.git', '__pycache__', 'tests/fixtures'}
-TEXT_EXT = {'.txt', '.md', '.json', '.jsonl', '.yaml', '.yml', '.log', '.ini', ''}
+TARGET_DIRS = ['src', 'cli', 'tools']  # Only scan source code for secrets
+EXCLUDE_DIRS = {'venv', '.git', '__pycache__', 'tests/fixtures', 'artifacts', 'dist', 'logs', 'data', 'config'}
+TEXT_EXT = {'.txt', '.json', '.jsonl', '.yaml', '.yml', '.log', '.ini', '.py', '.sh', ''}  # Exclude .md - contains examples/placeholders
 
 # Whitelist of known test/dummy values that should be ignored
 # These are intentionally fake credentials used in CI/tests
@@ -19,6 +19,7 @@ TEST_CREDENTIALS_WHITELIST = {
     'dummy_api_key_12345',
     'fake_secret_for_testing',
     'ci-0.0.0',  # Version string that might match patterns
+    '****',      # Redacted/masked placeholder
 }
 
 

@@ -12,7 +12,9 @@ ALLOWED = set([
     # Connectivity labels
     'exchange', 'ws_type', 'endpoint',
     # Rollout/Deployment labels
-    'color',
+    'color', 'direction',
+    # Admin/Alerts labels
+    'kind',
     # Markout labels
     'horizon_ms',
     # Misc labels

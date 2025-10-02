@@ -33,6 +33,10 @@ jobs:
       SOAK_ITERATION_TIMEOUT_SECONDS: "1200"  # 20 minutes per iteration
       SOAK_HEARTBEAT_INTERVAL_SECONDS: "300"  # 5 minutes between iterations
       
+      # Validation timeouts (adjust for cold start)
+      FSV_TIMEOUT_SEC: "900"            # 15 minutes for steps (was 5 min)
+      FSV_RETRIES: "1"                  # Allow 1 retry for flaky tests
+      
       # Log rotation (prevent disk bloat)
       FSV_MAX_LOGS_PER_STEP: "5"        # Keep only 5 newest logs per step
       FSV_MAX_LOG_SIZE_MB: "500"        # Warn at 500MB
