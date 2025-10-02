@@ -33,7 +33,7 @@ def test_full_stack_validation_e2e():
     
     # Run full stack validation
     validate_cmd = [sys.executable, str(root / 'tools' / 'ci' / 'full_stack_validate.py')]
-    result = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True)
+    result = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True, encoding='utf-8')
     
     # Validation script should always exit 0 (status is in report)
     assert result.returncode == 0, f"Validation script failed: {result.stderr}"
@@ -65,7 +65,7 @@ def test_full_stack_validation_e2e():
         str(root / 'tools' / 'ci' / 'report_full_stack.py'),
         str(validation_json)
     ]
-    result = subprocess.run(report_cmd, cwd=root, capture_output=True, text=True)
+    result = subprocess.run(report_cmd, cwd=root, capture_output=True, text=True, encoding='utf-8')
     
     assert result.returncode == 0, f"Report generator failed: {result.stderr}"
     
@@ -124,7 +124,7 @@ def test_full_stack_validation_json_deterministic():
     if validation_json.exists():
         validation_json.unlink()
     
-    result1 = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True)
+    result1 = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True, encoding='utf-8')
     assert result1.returncode == 0
     
     with open(validation_json, 'rb') as f:
@@ -133,7 +133,7 @@ def test_full_stack_validation_json_deterministic():
     # Second run
     validation_json.unlink()
     
-    result2 = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True)
+    result2 = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True, encoding='utf-8')
     assert result2.returncode == 0
     
     with open(validation_json, 'rb') as f:
@@ -167,7 +167,7 @@ def test_full_stack_validation_handles_missing_fixtures():
     try:
         # Run validation
         validate_cmd = [sys.executable, str(root / 'tools' / 'ci' / 'full_stack_validate.py')]
-        result = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True)
+        result = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True, encoding='utf-8')
         
         # Should still succeed (graceful degradation)
         assert result.returncode == 0
