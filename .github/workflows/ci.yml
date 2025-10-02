@@ -11,6 +11,10 @@ jobs:
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PYTHONPATH: "${{ github.workspace }}"
+      # Test credentials for CI environment (not real keys)
+      BYBIT_API_KEY: "test_api_key_for_ci_only"
+      BYBIT_API_SECRET: "test_api_secret_for_ci_only"
+      STORAGE_PG_PASSWORD: "test_pg_password_for_ci_only"
 
     steps:
       - uses: actions/checkout@v4
