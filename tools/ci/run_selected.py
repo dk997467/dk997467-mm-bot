@@ -13,10 +13,11 @@ if not sel.exists():
     print("ERROR: test_selection.txt not found", file=sys.stderr)
     sys.exit(2)
 paths = [p.strip() for p in sel.read_text(encoding="ascii").splitlines() if p.strip() and not p.strip().startswith("#")]
-# Enable parallel execution for 4-5x speedup (5min → 1min)
+# Enable parallel execution with limited workers to prevent OOM
 # Requires: pytest-xdist (see requirements.txt)
 # Note: With PYTEST_DISABLE_PLUGIN_AUTOLOAD=1, we must explicitly load xdist via -p
-cmd = [sys.executable, "-m", "pytest", "-q", "-p", "xdist", "-n", "auto", *paths]
+# Changed from "-n auto" to "-n 2" to avoid SIGTERM (exit code 143) due to memory exhaustion
+cmd = [sys.executable, "-m", "pytest", "-q", "-p", "xdist", "-n", "2", *paths]
 r = subprocess.run(cmd, check=False)
 sys.exit(r.returncode)
 
