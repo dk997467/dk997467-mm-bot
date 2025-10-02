@@ -22,16 +22,31 @@ jobs:
         shell: pwsh
     timeout-minutes: 4380 # 73 часа (с запасом)
     env:
-      # Revert to the Python version that actually exists on the runner
+      # Python configuration
       PYTHON_EXE: C:\Program Files\Python313\python.exe
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_PYTHON_VERSION_WARNING: "1"
+      
+      # Soak test configuration
       SOAK_HOURS: ${{ inputs.soak_hours || '24' }}
+      SOAK_ITERATION_TIMEOUT_SECONDS: "1200"  # 20 minutes per iteration
+      SOAK_HEARTBEAT_INTERVAL_SECONDS: "300"  # 5 minutes between iterations
+      
+      # Log rotation (prevent disk bloat)
+      FSV_MAX_LOGS_PER_STEP: "5"        # Keep only 5 newest logs per step
+      FSV_MAX_LOG_SIZE_MB: "500"        # Warn at 500MB
+      FSV_AGGRESSIVE_CLEANUP_MB: "750"  # Force cleanup at 750MB
+      
+      # API credentials
       API_KEY: ${{ secrets.API_KEY }}
       API_SECRET: ${{ secrets.API_SECRET }}
+      
+      # Notifications
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      
+      # Proxy configuration
       HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
       HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
 
@@ -69,11 +84,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~\AppData\Local\.cargo\registry
-            ~\AppData\Local\.cargo\git
-            ~\.cargo\registry
-            ~\.cargo\git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/**/Cargo.lock') }}
+            ~\.cargo\registry\index
+            ~\.cargo\registry\cache
+            ~\.cargo\git\db
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/**/Cargo.lock', 'rust/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
@@ -97,7 +111,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements_ci.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
@@ -130,14 +144,75 @@ jobs:
           Write-Host "--- Installing local mm-bot package ---"
           & $env:PYTHON_EXE -m pip install -e . -v
 
-      - name: Start transcript and write summary
-        id: start-transcript
+      - name: Pre-flight checks and transcript
+        id: preflight
         run: |
+          Write-Host "================================================"
+          Write-Host "PRE-FLIGHT CHECKS"
+          Write-Host "================================================"
+          
+          # Start transcript
           Start-Transcript -Path "${{ github.workspace }}\artifacts\soak\soak_windows.log" -Append | Out-Null
-          "SOAK started: $(Get-Date -Format s)Z" | Out-File "${{ github.workspace }}\artifacts\soak\summary.txt" -Encoding ascii
-          "Git rev: $(git rev-parse --short HEAD)" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt"
-          $pythonVersion = (& $env:PYTHON_EXE --version)
-          "Python: $pythonVersion" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt"
+          
+          # Check Python
+          Write-Host "[CHECK] Python..."
+          $pythonVersion = & $env:PYTHON_EXE --version 2>&1
+          Write-Host "  ✓ $pythonVersion"
+          
+          # Check Rust (optional, but good to know)
+          Write-Host "[CHECK] Rust..."
+          try {
+            $rustVersion = rustc --version 2>&1
+            Write-Host "  ✓ $rustVersion"
+          } catch {
+            Write-Host "  ⚠ Rust not available (non-critical)"
+          }
+          
+          # Check critical files
+          Write-Host "[CHECK] Critical files..."
+          $criticalFiles = @(
+            "tools\ci\full_stack_validate.py",
+            "tools\soak\resource_monitor.py"
+          )
+          foreach ($file in $criticalFiles) {
+            $path = "${{ github.workspace }}\$file"
+            if (Test-Path $path) {
+              Write-Host "  ✓ $file"
+            } else {
+              Write-Host "  ✗ $file MISSING"
+              exit 1
+            }
+          }
+          
+          # Check disk space
+          Write-Host "[CHECK] Disk space..."
+          $drive = (Get-Item "${{ github.workspace }}").PSDrive
+          $freeGB = [math]::Round($drive.Free / 1GB, 2)
+          $totalGB = [math]::Round(($drive.Free + $drive.Used) / 1GB, 2)
+          Write-Host "  Disk: $freeGB GB free / $totalGB GB total"
+          if ($freeGB -lt 5) {
+            Write-Host "  ⚠ WARNING: Less than 5GB free space"
+          } else {
+            Write-Host "  ✓ Sufficient disk space"
+          }
+          
+          # Write summary header
+          $summaryFile = "${{ github.workspace }}\artifacts\soak\summary.txt"
+          "=============================================" | Out-File $summaryFile -Encoding ascii
+          "SOAK TEST SUMMARY" | Add-Content $summaryFile
+          "=============================================" | Add-Content $summaryFile
+          "Started: $(Get-Date -Format s)Z" | Add-Content $summaryFile
+          "Git revision: $(git rev-parse --short HEAD)" | Add-Content $summaryFile
+          "Python: $pythonVersion" | Add-Content $summaryFile
+          "Duration: $env:SOAK_HOURS hours" | Add-Content $summaryFile
+          "Iteration timeout: $env:SOAK_ITERATION_TIMEOUT_SECONDS seconds" | Add-Content $summaryFile
+          "Heartbeat interval: $env:SOAK_HEARTBEAT_INTERVAL_SECONDS seconds" | Add-Content $summaryFile
+          "=============================================" | Add-Content $summaryFile
+          "" | Add-Content $summaryFile
+          
+          Write-Host "================================================"
+          Write-Host "PRE-FLIGHT CHECKS PASSED"
+          Write-Host "================================================"
 
       - name: Start resource monitoring (background)
         id: start-monitoring
@@ -162,33 +237,184 @@ jobs:
           if ($durationHours -lt 1 -or $durationHours -gt 72) { $durationHours = 24 }
           $deadline = (Get-Date).AddHours($durationHours)
           Write-Host "Target duration (hours): $durationHours (deadline: $deadline UTC)"
-          $failCount = 0
+          Write-Host "Soak test will run until: $deadline UTC"
+          Write-Host "Current time: $(Get-Date -Format s)Z"
+          Write-Host "================================================"
+          
+          $iterationCount = 0
+          $successCount = 0
+          $summaryFile = "${{ github.workspace }}\artifacts\soak\summary.txt"
+          $ciArtifactsDir = "${{ github.workspace }}\artifacts\ci"
+          $metricsFile = "${{ github.workspace }}\artifacts\soak\metrics.jsonl"
+          
+          # Configuration from env
+          $iterationTimeoutSeconds = [int]$env:SOAK_ITERATION_TIMEOUT_SECONDS
+          $heartbeatIntervalSeconds = [int]$env:SOAK_HEARTBEAT_INTERVAL_SECONDS
+          
+          Write-Host "Configuration:"
+          Write-Host "  Iteration timeout: $iterationTimeoutSeconds seconds"
+          Write-Host "  Heartbeat interval: $heartbeatIntervalSeconds seconds"
+          Write-Host ""
 
           while ((Get-Date) -lt $deadline) {
-            try {
-              $iterStart = Get-Date
-              & $env:PYTHON_EXE tools\ci\full_stack_validate.py
-              $rc = $LASTEXITCODE
-              $iterSec = ((Get-Date) - $iterStart).TotalSeconds
-              $msg = "ITER rc=$rc duration_s=$([math]::Round($iterSec,2)) at $(Get-Date -Format s)Z"
-              Write-Host "[INFO] $msg"
-              $summaryFile = "${{ github.workspace }}\artifacts\soak\summary.txt"
-              $msg | Add-Content $summaryFile -Encoding ascii
-              if ($rc -ne 0) {
-                $failCount = [int]$failCount + 1
-                $backoff = [math]::Min(900, [math]::Pow(2, [int]$failCount) * 60)
-                Write-Host "[WARN] validation failed rc=$rc, backing off $backoff seconds (failCount=$failCount)"
-                Start-Sleep -Seconds $backoff
-              } else {
-                $failCount = 0
+            $iterationCount++
+            $iterStart = Get-Date
+            Write-Host ""
+            Write-Host "================================================"
+            Write-Host "[ITER $iterationCount] Starting iteration at $(Get-Date -Format s)Z"
+            Write-Host "================================================"
+            
+            # Clean up CI artifacts from previous iteration (isolation)
+            if (Test-Path $ciArtifactsDir) {
+              Write-Host "[CLEANUP] Removing old CI artifacts..."
+              try {
+                Remove-Item -Path "$ciArtifactsDir\*" -Recurse -Force -ErrorAction SilentlyContinue
+                Write-Host "[CLEANUP] CI artifacts cleaned"
+              } catch {
+                Write-Host "[WARN] Could not clean CI artifacts: $_"
               }
-            } catch {
-              Write-Host "[ERROR] $_"
             }
-            # Heartbeat: каждые 5 минут
-            Start-Sleep -Seconds 300
-            Write-Host "[HB] alive $(Get-Date -Format s)Z"
+            
+            # Run validation with timeout protection
+            $validationJob = Start-Job -ScriptBlock {
+              param($pythonExe, $workspace)
+              Set-Location $workspace
+              & $pythonExe tools\ci\full_stack_validate.py 2>&1
+              exit $LASTEXITCODE
+            } -ArgumentList $env:PYTHON_EXE, "${{ github.workspace }}"
+            
+            # Wait for job with timeout
+            $completed = Wait-Job -Job $validationJob -Timeout $iterationTimeoutSeconds
+            $iterSec = ((Get-Date) - $iterStart).TotalSeconds
+            
+            if ($null -eq $completed) {
+              # Timeout occurred
+              Write-Host ""
+              Write-Host "###############################################"
+              Write-Host "# ⏱️ ITERATION TIMEOUT"
+              Write-Host "###############################################"
+              Write-Host "Iteration $iterationCount exceeded timeout of $iterationTimeoutSeconds seconds"
+              Write-Host "Duration: $([math]::Round($iterSec,2))s"
+              Write-Host "###############################################"
+              Write-Host ""
+              
+              # Kill the job
+              Stop-Job -Job $validationJob -ErrorAction SilentlyContinue
+              Remove-Job -Job $validationJob -Force -ErrorAction SilentlyContinue
+              
+              # Record timeout and exit
+              "SOAK FAILED at iteration $iterationCount: TIMEOUT after $([math]::Round($iterSec,2))s" | Add-Content $summaryFile -Encoding ascii
+              Write-Host "[FATAL] Exiting due to timeout"
+              exit 1
+            }
+            
+            # Get output and exit code
+            $validationOutput = Receive-Job -Job $validationJob
+            $rc = $validationJob.State -eq 'Completed' ? $validationJob.ChildJobs[0].Output[-1] : 1
+            
+            # Extract exit code from job (PowerShell job doesn't preserve $LASTEXITCODE directly)
+            # We check the state and look for error records
+            if ($validationJob.State -eq 'Failed' -or $validationJob.Error.Count -gt 0) {
+              $rc = 1
+            } else {
+              # Try to extract exit code from output
+              $outputLines = $validationOutput -split "`n"
+              foreach ($line in $outputLines) {
+                if ($line -match 'RESULT=(FAIL|OK)') {
+                  $rc = $Matches[1] -eq 'OK' ? 0 : 1
+                  break
+                }
+              }
+            }
+            
+            Remove-Job -Job $validationJob -Force -ErrorAction SilentlyContinue
+            
+            # Log iteration summary
+            $timestamp = Get-Date -Format s
+            $msg = "ITER #$iterationCount rc=$rc duration_s=$([math]::Round($iterSec,2)) at ${timestamp}Z"
+            Write-Host ""
+            Write-Host "[SUMMARY] $msg"
+            $msg | Add-Content $summaryFile -Encoding ascii
+            
+            # Write structured metrics (JSONL for easy parsing)
+            $metricJson = @{
+              timestamp = $timestamp
+              iteration = $iterationCount
+              exit_code = $rc
+              duration_seconds = [math]::Round($iterSec, 2)
+              status = if ($rc -eq 0) { "success" } else { "failure" }
+            } | ConvertTo-Json -Compress
+            $metricJson | Add-Content $metricsFile -Encoding ascii
+            
+            # CRITICAL: Fail fast on error (no retries in soak test)
+            if ($rc -ne 0) {
+              Write-Host ""
+              Write-Host "###############################################"
+              Write-Host "# ❌ SOAK TEST FAILED"
+              Write-Host "###############################################"
+              Write-Host "Iteration: $iterationCount"
+              Write-Host "Exit code: $rc"
+              Write-Host "Duration: $([math]::Round($iterSec,2))s"
+              Write-Host "Time: $(Get-Date -Format s)Z"
+              Write-Host "###############################################"
+              Write-Host ""
+              
+              # Show last 30 lines of validation output for immediate debugging
+              Write-Host "--- LAST 30 LINES OF OUTPUT ---"
+              $validationOutput | Select-Object -Last 30
+              Write-Host "--- END OF OUTPUT ---"
+              Write-Host ""
+              
+              # Try to capture recent log files for context
+              Write-Host "--- RECENT LOG FILES ---"
+              if (Test-Path $ciArtifactsDir) {
+                Get-ChildItem "$ciArtifactsDir\*.err.log" | 
+                  Sort-Object LastWriteTime -Descending | 
+                  Select-Object -First 3 | 
+                  ForEach-Object {
+                    Write-Host ""
+                    Write-Host "=== $($_.Name) ==="
+                    Get-Content $_.FullName -Tail 20 -ErrorAction SilentlyContinue
+                  }
+              }
+              Write-Host "--- END OF LOG FILES ---"
+              Write-Host ""
+              
+              # Record failure in summary
+              "SOAK FAILED at iteration $iterationCount, rc=$rc" | Add-Content $summaryFile -Encoding ascii
+              
+              # Exit immediately with error code
+              Write-Host "[FATAL] Exiting with error code $rc"
+              exit $rc
+            }
+            
+            # Success - continue to next iteration
+            $successCount++
+            Write-Host "[OK] Iteration $iterationCount completed successfully"
+            Write-Host "[STATS] Success rate: $successCount/$iterationCount"
+            
+            # Heartbeat: wait configured interval before next iteration
+            Write-Host "[WAIT] Sleeping for $heartbeatIntervalSeconds seconds before next iteration..."
+            Start-Sleep -Seconds $heartbeatIntervalSeconds
+            Write-Host "[HB] Heartbeat at $(Get-Date -Format s)Z"
           }
+          
+          Write-Host ""
+          Write-Host "###############################################"
+          Write-Host "# ✅ SOAK TEST COMPLETED SUCCESSFULLY"
+          Write-Host "###############################################"
+          Write-Host "Total iterations: $iterationCount"
+          Write-Host "Successful iterations: $successCount"
+          Write-Host "Success rate: $([math]::Round(($successCount / $iterationCount) * 100, 2))%"
+          Write-Host "Duration: $durationHours hours"
+          Write-Host "End time: $(Get-Date -Format s)Z"
+          Write-Host "###############################################"
+          
+          # Write final summary
+          "=============================================" | Add-Content $summaryFile -Encoding ascii
+          "SOAK COMPLETED: $iterationCount iterations, $successCount successful" | Add-Content $summaryFile -Encoding ascii
+          "Finished: $(Get-Date -Format s)Z" | Add-Content $summaryFile -Encoding ascii
+          "=============================================" | Add-Content $summaryFile -Encoding ascii
 
       - name: Stop resource monitoring and analyze
         id: stop-monitoring
@@ -231,20 +457,78 @@ jobs:
         id: finalize
         if: always()
         run: |
-          Write-Host "--- Finalize log files before snapshotting ---"
+          Write-Host "================================================"
+          Write-Host "FINALIZATION"
+          Write-Host "================================================"
+          
+          # Analyze metrics if available
+          $metricsFile = "${{ github.workspace }}\artifacts\soak\metrics.jsonl"
+          if (Test-Path $metricsFile) {
+            Write-Host "[ANALYSIS] Processing metrics..."
+            $metrics = Get-Content $metricsFile | ForEach-Object { $_ | ConvertFrom-Json }
+            
+            if ($metrics.Count -gt 0) {
+              $totalIterations = $metrics.Count
+              $successfulIterations = ($metrics | Where-Object { $_.status -eq "success" }).Count
+              $failedIterations = ($metrics | Where-Object { $_.status -eq "failure" }).Count
+              $avgDuration = ($metrics | Measure-Object -Property duration_seconds -Average).Average
+              $maxDuration = ($metrics | Measure-Object -Property duration_seconds -Maximum).Maximum
+              $minDuration = ($metrics | Measure-Object -Property duration_seconds -Minimum).Minimum
+              
+              Write-Host ""
+              Write-Host "METRICS SUMMARY:"
+              Write-Host "  Total iterations: $totalIterations"
+              Write-Host "  Successful: $successfulIterations"
+              Write-Host "  Failed: $failedIterations"
+              Write-Host "  Success rate: $([math]::Round(($successfulIterations / $totalIterations) * 100, 2))%"
+              Write-Host "  Avg duration: $([math]::Round($avgDuration, 2))s"
+              Write-Host "  Min duration: $([math]::Round($minDuration, 2))s"
+              Write-Host "  Max duration: $([math]::Round($maxDuration, 2))s"
+              Write-Host ""
+              
+              # Write metrics summary to file
+              $metricsSummary = @{
+                total_iterations = $totalIterations
+                successful = $successfulIterations
+                failed = $failedIterations
+                success_rate_percent = [math]::Round(($successfulIterations / $totalIterations) * 100, 2)
+                duration_seconds = @{
+                  avg = [math]::Round($avgDuration, 2)
+                  min = [math]::Round($minDuration, 2)
+                  max = [math]::Round($maxDuration, 2)
+                }
+              } | ConvertTo-Json -Depth 5
+              $metricsSummary | Out-File "${{ github.workspace }}\artifacts\soak\metrics_summary.json" -Encoding ascii
+            }
+          }
+          
+          # Finalize log files
+          Write-Host "[FINALIZE] Closing transcript..."
           "SOAK finished: $(Get-Date -Format s)Z" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt" -ErrorAction SilentlyContinue
           Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
           
-          Write-Host "--- Snapshotting environment ---"
+          # Snapshot environment
+          Write-Host "[SNAPSHOT] Capturing environment state..."
           & $env:PYTHON_EXE -m pip freeze | Out-File "${{ github.workspace }}\artifacts\soak\pip-freeze.txt" -Encoding ascii
           git status -sb | Out-File "${{ github.workspace }}\artifacts\soak\git-status.txt" -Encoding ascii
-          Get-ChildItem "${{ github.workspace }}\artifacts" -Recurse -File |
-            Get-FileHash -Algorithm SHA256 |
+          
+          # Create hash manifest for artifact integrity
+          Write-Host "[SNAPSHOT] Creating hash manifest..."
+          Get-ChildItem "${{ github.workspace }}\artifacts" -Recurse -File -ErrorAction SilentlyContinue |
+            Get-FileHash -Algorithm SHA256 -ErrorAction SilentlyContinue |
             ConvertTo-Json -Depth 5 |
             Out-File "${{ github.workspace }}\artifacts\soak\hash_manifest.json" -Encoding ascii
-          Get-ChildItem "${{ github.workspace }}\artifacts\soak" | Sort-Object Length -Descending |
+          
+          # List artifacts
+          Write-Host "[SNAPSHOT] Listing artifacts..."
+          Get-ChildItem "${{ github.workspace }}\artifacts\soak" -ErrorAction SilentlyContinue |
+            Sort-Object Length -Descending |
             Select-Object Name,Length,LastWriteTime |
             Out-File "${{ github.workspace }}\artifacts\soak\ls.txt" -Encoding ascii
+          
+          Write-Host "================================================"
+          Write-Host "FINALIZATION COMPLETE"
+          Write-Host "================================================"
 
       - name: Upload artifacts
         id: upload-artifacts
