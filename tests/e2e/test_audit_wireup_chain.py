@@ -16,6 +16,7 @@ def test_audit_wireup_chain(tmp_path):
     env['TZ'] = 'UTC'
     env['LC_ALL'] = 'C'
     env['LANG'] = 'C'
+    env['ARTIFACTS_DIR'] = str(work / 'artifacts')  # Point audit to work dir
 
     # Generate a few events via modules
     from src.audit.log import audit_event
@@ -27,9 +28,10 @@ def test_audit_wireup_chain(tmp_path):
 
     # Dump day
     import subprocess
+    audit_input = work / 'artifacts' / 'audit.jsonl'
     out_path = work / 'artifacts' / 'AUDIT_DUMP.jsonl'
-    cmd = [sys.executable, str(root / 'tools' / 'audit' / 'dump_day.py'), '--audit', str(work / 'artifacts' / 'audit.jsonl'), '--utc-date', '1970-01-01', '--out', str(out_path)]
-    r = subprocess.run(cmd, cwd=root, env=env, capture_output=True, text=True)
+    cmd = [sys.executable, str(root / 'tools' / 'audit' / 'dump_day.py'), '--audit', str(audit_input), '--utc-date', '1970-01-01', '--out', str(out_path)]
+    r = subprocess.run(cmd, cwd=root, env=env, capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, r.stderr
     got = out_path.read_bytes()
     gold = (root / 'tests' / 'golden' / 'AUDIT_WIREUP_case1.jsonl').read_bytes()

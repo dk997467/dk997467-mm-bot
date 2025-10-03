@@ -14,4 +14,3 @@ Silence alerts, drain, switch leader, restart.
 
 ## Contacts (RASCI)
 Owner/Approver/Support contacts.
-
