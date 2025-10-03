@@ -488,6 +488,7 @@ def main() -> int:
             subprocess.run(
                 [sys.executable, str(reporter_script), str(json_report_path)],
                 check=False,
+                timeout=60,  # 1 minute timeout for report generation
                 timeout=30
             )
         except Exception as e:

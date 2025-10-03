@@ -33,7 +33,7 @@ def test_cron_sentinel_e2e(tmp_path):
     out_json = artifacts / 'CRON_SENTINEL.json'
     out_md = artifacts / 'CRON_SENTINEL.md'
 
-    r = subprocess.run([sys.executable, '-m', 'tools.ops.cron_sentinel', '--window-hours', '24', '--artifacts-dir', str(artifacts, timeout=300), '--utc-today', today, '--out-json', str(out_json), '--out-md', str(out_md)], cwd=str(root), capture_output=True, text=True)
+    r = subprocess.run([sys.executable, '-m', 'tools.ops.cron_sentinel', '--window-hours', '24', '--artifacts-dir', str(artifacts), '--utc-today', today, '--out-json', str(out_json), '--out-md', str(out_md)], cwd=str(root), capture_output=True, text=True, timeout=300)
     assert r.returncode == 0
     stdout = r.stdout.replace('\r\n', '\n')
     assert stdout.strip().endswith('SENTINEL=OK')
