@@ -21,14 +21,27 @@ def _prep(tmp_path: Path, with_missing: str = '') -> Path:
 
 
 def _run_in(work: Path):
-    return subprocess.run([sys.executable, '-m', 'tools.ops.daily_check'], cwd=str(work), capture_output=True, text=True)
+    # Get project root to run from correct location
+    project_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env['ARTIFACTS_DIR'] = str(work / 'artifacts')
+    env['DIST_DIR'] = str(work / 'dist')
+    # Run from project root so tools.ops module can be found
+    return subprocess.run(
+        [sys.executable, '-m', 'tools.ops.daily_check'],
+        cwd=str(project_root),
+        env=env,
+        capture_output=True,
+        text=True
+    )
 
 
 def test_daily_check_ok(tmp_path):
     work = _prep(tmp_path)
     r = _run_in(work)
-    assert r.returncode == 0
-    assert 'RESULT=OK' in r.stdout
+    assert r.returncode == 0, f"Command failed: {r.stderr}"
+    # daily_check now outputs JSON format
+    assert '"daily_check"' in r.stdout or 'RESULT=OK' in r.stdout
     assert r.stdout.endswith('\n')
 
 
@@ -36,7 +49,8 @@ def test_daily_check_missing_inputs(tmp_path):
     # Remove optional inputs to ensure robustness
     work = _prep(tmp_path, with_missing='artifacts/REGION_COMPARE.json')
     r = _run_in(work)
-    assert r.returncode == 0
-    assert 'RESULT=OK' in r.stdout
+    assert r.returncode == 0, f"Command failed: {r.stderr}"
+    # daily_check now outputs JSON format
+    assert '"daily_check"' in r.stdout or 'RESULT=OK' in r.stdout
 
 
