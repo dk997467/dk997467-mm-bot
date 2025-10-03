@@ -10,7 +10,15 @@ def test_param_sweep_e2e(tmp_path):
     out = tmp_path / 'artifacts' / 'PARAM_SWEEP.json'
     out.parent.mkdir(parents=True, exist_ok=True)
     subprocess.check_call([sys.executable, '-m', 'tools.sweep.run_sweep', '--events', str(events), '--grid', str(grid), '--out-json', str(out)])
-    subprocess.check_call([sys.executable, '-m', 'tools.sweep.render'], cwd=str(tmp_path))
+    # Copy PARAM_SWEEP.json to project artifacts/ for render to find
+    import shutil
+    project_artifacts = root / 'artifacts'
+    project_artifacts.mkdir(exist_ok=True)
+    shutil.copy(out, project_artifacts / 'PARAM_SWEEP.json')
+    # Run render from project root
+    subprocess.check_call([sys.executable, '-m', 'tools.sweep.render'], cwd=str(root))
+    # Copy result back to tmp_path
+    shutil.copy(project_artifacts / 'PARAM_SWEEP.md', tmp_path / 'artifacts' / 'PARAM_SWEEP.md')
     j = out.read_bytes()
     m = (tmp_path / 'artifacts' / 'PARAM_SWEEP.md').read_bytes()
     assert j.endswith(b'\n') and m.endswith(b'\n')
