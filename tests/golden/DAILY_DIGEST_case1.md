@@ -1,4 +1,4 @@
-DAILY DIGEST 2025-10-03 [OK]
+DAILY DIGEST 1970-01-01 [OK]
 
 | net_bps | order_age_p95_ms | taker_share_pct | fills | turnover_usd |
 |---------|-------------------|-----------------|-------|--------------|

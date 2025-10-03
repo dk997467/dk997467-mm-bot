@@ -39,6 +39,13 @@ def _date_from_report(rep: dict) -> str:
             return utc.split('T')[0]
     except Exception:
         pass
+    # Use frozen time if available for deterministic output
+    iso_freeze = os.environ.get('MM_FREEZE_UTC_ISO')
+    if iso_freeze:
+        try:
+            return datetime.strptime(iso_freeze, '%Y-%m-%dT%H:%M:%SZ').strftime('%Y-%m-%d')
+        except Exception:
+            pass
     return datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
 

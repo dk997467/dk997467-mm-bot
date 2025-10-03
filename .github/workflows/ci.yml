@@ -194,3 +194,42 @@ jobs:
         # These tests use heavy fixtures, run them one at a time
         run: |
           python tools/ci/run_selected_e2e.py
+      
+      - name: "[DEBUG] Show failing test diffs (on failure)"
+        if: failure()
+        run: |
+          echo "=============================================="
+          echo "DIAGNOSTIC: Checking for golden file mismatches"
+          echo "=============================================="
+          
+          # Check if pytest generated any temp files
+          if [ -d "/tmp/pytest-of-$(whoami)" ]; then
+            echo "=== Recent pytest temp dirs ==="
+            find /tmp/pytest-of-$(whoami) -type d -name "test_*_e2e*" -mmin -5 | head -5
+            
+            # Try to find generated DAILY_DIGEST.md
+            for dir in $(find /tmp/pytest-of-$(whoami) -type d -name "test_daily_digest_e2e*" -mmin -5); do
+              if [ -f "$dir/artifacts/DAILY_DIGEST.md" ]; then
+                echo ""
+                echo "=== Generated DAILY_DIGEST.md ==="
+                head -10 "$dir/artifacts/DAILY_DIGEST.md"
+                echo ""
+                echo "=== Expected DAILY_DIGEST_case1.md ==="
+                head -10 tests/golden/DAILY_DIGEST_case1.md
+              fi
+            done
+            
+            # Try to find generated POSTMORTEM_DAY.md
+            for dir in $(find /tmp/pytest-of-$(whoami) -type d -name "test_postmortem_day_e2e*" -mmin -5); do
+              if [ -f "$dir/artifacts/POSTMORTEM_DAY.md" ]; then
+                echo ""
+                echo "=== Generated POSTMORTEM_DAY.md ==="
+                head -10 "$dir/artifacts/POSTMORTEM_DAY.md"
+                echo ""
+                echo "=== Expected POSTMORTEM_DAY_case1.md ==="
+                head -10 tests/golden/POSTMORTEM_DAY_case1.md
+              fi
+            done
+          fi
+          
+          echo "=============================================="

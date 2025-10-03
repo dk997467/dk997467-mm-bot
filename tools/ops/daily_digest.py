@@ -130,7 +130,15 @@ def main(argv=None) -> int:
         advice = []
 
     lines = []
-    now = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    # Use frozen time if available for deterministic output
+    iso_freeze = os.environ.get('MM_FREEZE_UTC_ISO')
+    if iso_freeze:
+        try:
+            now = datetime.strptime(iso_freeze, '%Y-%m-%dT%H:%M:%SZ').strftime('%Y-%m-%d')
+        except Exception:
+            now = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    else:
+        now = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     lines.append(f'DAILY DIGEST {now} { _status_icon(verdict) }\n')
     lines.append('\n')
     lines.append('| net_bps | order_age_p95_ms | taker_share_pct | fills | turnover_usd |\n')
@@ -167,11 +175,7 @@ def main(argv=None) -> int:
         else:
             os.rename(tmp, args.out)
         print('WROTE', args.out)
-        try:
-            from src.common.eol import normalize_eol  # type: ignore
-            normalize_eol(args.out, style='crlf', ensure_trailing=3)
-        except Exception:
-            pass
+        # NOTE: normalize_eol removed - line endings handled by .gitattributes and test normalization
 
     # optional soak summary
     if args.journal:

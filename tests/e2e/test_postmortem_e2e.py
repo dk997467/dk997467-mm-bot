@@ -15,6 +15,7 @@ def test_postmortem_day_e2e(tmp_path):
     import os
     env = os.environ.copy()
     env['WORK_DIR'] = str(tmp_path)
+    env['MM_FREEZE_UTC_ISO'] = '1970-01-01T00:00:00Z'  # Deterministic date
     subprocess.check_call([sys.executable, '-m', 'tools.ops.postmortem', '--scope', 'day', '--out', str(out)], cwd=str(root), env=env)
     # Normalize line endings for comparison
     md = out.read_bytes().replace(b'\r\n', b'\n')
