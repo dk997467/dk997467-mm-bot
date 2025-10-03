@@ -25,9 +25,15 @@ if not sel.exists():
 paths = [p.strip() for p in sel.read_text(encoding="ascii").splitlines() 
          if p.strip() and not p.strip().startswith("#")]
 
-# Unit tests: Use -n 2 for speed (low memory usage)
-# Note: With PYTEST_DISABLE_PLUGIN_AUTOLOAD=1, must explicitly load xdist via -p
-cmd = [sys.executable, "-m", "pytest", "-q", "-p", "xdist", "-n", "2", *paths]
-r = subprocess.run(cmd, check=False)
-sys.exit(r.returncode)
+# Unit tests: Run sequentially to prevent zombie processes from subprocess-heavy tests
+# Many tests spawn subprocesses (daily_check, postmortem, etc.)
+# Parallel execution can cause CPU overload and zombie process accumulation
+# Timeout: 15 minutes should be enough for all unit tests sequentially
+cmd = [sys.executable, "-m", "pytest", "-q", *paths]
+try:
+    r = subprocess.run(cmd, check=False, timeout=900)  # 15 min timeout
+    sys.exit(r.returncode)
+except subprocess.TimeoutExpired:
+    print("ERROR: Unit tests exceeded 15 minute timeout", file=sys.stderr)
+    sys.exit(124)  # Standard timeout exit code
 
