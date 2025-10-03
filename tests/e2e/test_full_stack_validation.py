@@ -31,9 +31,13 @@ def test_full_stack_validation_e2e():
     if validation_md.exists():
         validation_md.unlink()
     
-    # Run full stack validation
+    # Run full stack validation with timeout to prevent zombie processes
     validate_cmd = [sys.executable, str(root / 'tools' / 'ci' / 'full_stack_validate.py')]
-    result = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True, encoding='utf-8')
+    try:
+        result = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True, encoding='utf-8', timeout=300)  # 5 min timeout
+    except subprocess.TimeoutExpired:
+        import pytest
+        pytest.fail("Full stack validation exceeded 5 minute timeout")
     
     # Validation script should complete (status is in JSON report, returncode may be 0 or 1)
     # returncode 0 = all checks passed, returncode 1 = some checks failed
@@ -66,7 +70,11 @@ def test_full_stack_validation_e2e():
         str(root / 'tools' / 'ci' / 'report_full_stack.py'),
         str(validation_json)
     ]
-    result = subprocess.run(report_cmd, cwd=root, capture_output=True, text=True, encoding='utf-8')
+    try:
+        result = subprocess.run(report_cmd, cwd=root, capture_output=True, text=True, encoding='utf-8', timeout=60)
+    except subprocess.TimeoutExpired:
+        import pytest
+        pytest.fail("Report generation exceeded 1 minute timeout")
     
     assert result.returncode == 0, f"Report generator failed: {result.stderr}"
     
@@ -146,7 +154,11 @@ def test_full_stack_validation_json_deterministic():
     if validation_json.exists():
         validation_json.unlink()
     
-    result1 = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True, encoding='utf-8')
+    try:
+        result1 = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True, encoding='utf-8', timeout=300)
+    except subprocess.TimeoutExpired:
+        import pytest
+        pytest.fail("Validation run 1 exceeded timeout")
     # Script completed (returncode may be 0 or 1 depending on validation results)
     
     with open(validation_json, 'r', encoding='ascii') as f:
@@ -155,7 +167,11 @@ def test_full_stack_validation_json_deterministic():
     # Second run
     validation_json.unlink()
     
-    result2 = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True, encoding='utf-8')
+    try:
+        result2 = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True, encoding='utf-8', timeout=300)
+    except subprocess.TimeoutExpired:
+        import pytest
+        pytest.fail("Validation run 2 exceeded timeout")
     # Script completed (returncode may be 0 or 1 depending on validation results)
     
     with open(validation_json, 'r', encoding='ascii') as f:
@@ -201,7 +217,11 @@ def test_full_stack_validation_handles_missing_fixtures():
     try:
         # Run validation
         validate_cmd = [sys.executable, str(root / 'tools' / 'ci' / 'full_stack_validate.py')]
-        result = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True, encoding='utf-8')
+        try:
+            result = subprocess.run(validate_cmd, cwd=root, env=env, capture_output=True, text=True, encoding='utf-8', timeout=300)
+        except subprocess.TimeoutExpired:
+            import pytest
+            pytest.fail(f"Validation run {run_id} exceeded timeout")
         
         # Should complete (graceful degradation - returncode may be 0 or 1)
         
