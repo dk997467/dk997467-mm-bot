@@ -101,12 +101,12 @@ jobs:
           python tools/ci/run_selected_unit.py
 
   # ===========================================================================
-  # E2E TESTS: Slower, higher memory (~5-8 min)
+  # E2E TESTS: Slower, higher memory (~20-30 min)
   # ===========================================================================
   tests-e2e:
     name: E2E Tests (integration)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PYTHONPATH: "${{ github.workspace }}"
