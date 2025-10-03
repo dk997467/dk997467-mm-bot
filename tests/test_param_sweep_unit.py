@@ -7,7 +7,8 @@ from pathlib import Path
 def test_param_sweep_safe_filter_and_sort(tmp_path):
     root = Path(__file__).resolve().parents[1]
     events = root / 'fixtures' / 'sweep' / 'events_case1.jsonl'
-    grid = root.parents[1] / 'tools' / 'sweep' / 'grid.yaml'
+    # Fix: grid.yaml is in project root, not parent's parent
+    grid = root / 'tools' / 'sweep' / 'grid.yaml'
     out = tmp_path / 'PARAM_SWEEP.json'
     subprocess.check_call([sys.executable, '-m', 'tools.sweep.run_sweep', '--events', str(events), '--grid', str(grid), '--out-json', str(out)])
     d = json.loads(out.read_text(encoding='ascii'))

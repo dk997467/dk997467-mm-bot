@@ -14,7 +14,9 @@ def test_regression_guard_triggers(tmp_path):
     import glob
     paths = sorted(glob.glob(str(repo / 'fixtures' / 'reg' / 'base_7days' / 'REPORT_SOAK_*.json')))
     for p in paths:
-        last7.append(json.loads(open(p, 'r', encoding='ascii').read()))
+        # Use context manager to properly close files
+        with open(p, 'r', encoding='ascii') as f:
+            last7.append(json.loads(f.read()))
     today = json.loads((repo / 'fixtures' / 'reg' / 'today_worse.json').read_text(encoding='ascii'))
     res = check(today, last7)
     assert res['ok'] is False and res['reason'] in ('EDGE_REG','LAT_REG','TAKER_REG')
