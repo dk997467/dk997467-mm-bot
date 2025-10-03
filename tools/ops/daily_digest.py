@@ -161,6 +161,8 @@ def main(argv=None) -> int:
             lines.append('- ' + a + '\n')
 
     md = ''.join(lines)
+    # Ensure exactly one trailing newline
+    md = md.rstrip('\n') + '\n'
     if args.out:
         # write
         os.makedirs(os.path.dirname(args.out), exist_ok=True)

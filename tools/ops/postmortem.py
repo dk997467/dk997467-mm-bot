@@ -120,6 +120,8 @@ def main(argv=None) -> int:
             lines.append('Action items:\n')
             for a in adv:
                 lines.append('- ' + str(a) + '\n')
+    
+    # NOTE: 'else' clause below handles 'week' scope
 
     else:  # week
         wk = _read('artifacts/WEEKLY_ROLLUP.json') or {}
@@ -137,6 +139,8 @@ def main(argv=None) -> int:
             lines.append('Gate reasons: ' + ','.join(gate.get('reasons')) + '\n')
 
     md = ''.join(lines)
+    # Ensure exactly one trailing newline
+    md = md.rstrip('\n') + '\n'
     _write_text_atomic(args.out, md)
     print('WROTE', args.out)
     return 0
