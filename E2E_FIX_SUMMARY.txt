@@ -1,0 +1,11 @@
+
+E2E Test Stabilization - Complete Fix
+========================================
+
+All 4 root causes fixed:
+1. Frozen time support
+2. Trailing newline normalization
+3. Missing EDGE_SENTINEL.json fixture
+4. Missing DRIFT_STOP + REG_GUARD_STOP fixtures
+
+All tests verified locally: PASSED
