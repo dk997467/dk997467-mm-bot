@@ -120,6 +120,35 @@ jobs:
         with:
           lfs: true  # Enable Git LFS support if needed
       
+      - name: "[DEBUG] Verify fixtures after checkout"
+        run: |
+          echo "=============================================="
+          echo "DIAGNOSTIC: Verifying test fixtures exist"
+          echo "=============================================="
+          
+          if [ -d "tests/fixtures/digest/" ]; then
+            echo "✓ tests/fixtures/digest/ directory exists"
+            echo ""
+            echo "=== Directory contents ==="
+            ls -lh tests/fixtures/digest/
+            echo ""
+            echo "=== Critical fixtures check ==="
+            for f in EDGE_SENTINEL.json DRIFT_STOP.json REG_GUARD_STOP.json; do
+              if [ -f "tests/fixtures/digest/$f" ]; then
+                size=$(wc -c < "tests/fixtures/digest/$f")
+                echo "✓ $f exists ($size bytes)"
+                head -c 100 "tests/fixtures/digest/$f"
+                echo "..."
+              else
+                echo "✗ $f MISSING!"
+              fi
+            done
+          else
+            echo "✗ ERROR: tests/fixtures/digest/ directory not found!"
+            echo "This means git checkout failed to get fixture files."
+          fi
+          echo "=============================================="
+      
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
