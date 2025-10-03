@@ -1,0 +1,29 @@
+Running 38 E2E test files sequentially...
+
+[1/38] tests/e2e/test_latency_queue.py
+
+[2/38] tests/e2e/test_backtest_end2end.py
+
+[3/38] tests/e2e/test_backtest_determinism_thresholds.py
+
+[4/38] tests/e2e/test_micro_signals_effect.py
+
+[5/38] tests/e2e/test_ha_failover.py
+
+[6/38] tests/e2e/test_finops_automation.py
+
+[7/38] tests/e2e/test_investor_package.py
+
+[8/38] tests/e2e/test_region_canary.py
+
+[9/38] tests/e2e/test_edge_audit_e2e.py
+
+[10/38] tests/e2e/test_release_wrapup.py
+Traceback (most recent call last):
+  File "C:\Users\dimak\mm-bot\tools\ci\run_selected_e2e.py", line 54, in <module>
+    print(f"    \u2717 Test failed (exit {r.returncode})", flush=True)
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python313\Lib\encodings\cp1251.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2717' in position 4: character maps to <undefined>

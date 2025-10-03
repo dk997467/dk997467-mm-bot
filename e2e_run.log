@@ -1,0 +1,91 @@
+Running 38 E2E test files sequentially...
+
+[1/38] tests/e2e/test_latency_queue.py
+
+[2/38] tests/e2e/test_backtest_end2end.py
+
+[3/38] tests/e2e/test_backtest_determinism_thresholds.py
+
+[4/38] tests/e2e/test_micro_signals_effect.py
+
+[5/38] tests/e2e/test_ha_failover.py
+
+[6/38] tests/e2e/test_finops_automation.py
+
+[7/38] tests/e2e/test_investor_package.py
+
+[8/38] tests/e2e/test_region_canary.py
+
+[9/38] tests/e2e/test_edge_audit_e2e.py
+
+[10/38] tests/e2e/test_release_wrapup.py
+    [FAIL] Test failed (exit 1)
+      C:\Users\dimak\mm-bot\tests\e2e\test_release_wrapup.py:55: AssertionError: assert 1 == 0
+      =========================== short test summary info ===========================
+      FAILED tests/e2e/test_release_wrapup.py::test_verify_links - assert 1 == 0
+      FAILED tests/e2e/test_release_wrapup.py::test_go_nogo_on_fixtures - Assertion...
+      FAILED tests/e2e/test_release_wrapup.py::test_shadow_canary_plan - AssertionE...
+
+[11/38] tests/e2e/test_perf_latency_distribution.py
+    [FAIL] Test failed (exit 1)
+      F                                                                        [100%]
+      ================================== FAILURES ===================================
+      C:\Users\dimak\mm-bot\tests\e2e\test_perf_latency_distribution.py:35: assert b'{"cancel_ba...":"0.1.0"}}\n' == b'{"cancel_ba...}\r\n\r\n\r\n'
+      =========================== short test summary info ===========================
+      FAILED tests/e2e/test_perf_latency_distribution.py::test_perf_latency_distribution
+
+[12/38] tests/e2e/test_ops_snapshot_e2e.py
+
+[13/38] tests/e2e/test_profile_allocator_effect.py
+
+[14/38] tests/e2e/test_virtual_balance_flow.py
+    [FAIL] Test failed (exit 1)
+      F                                                                        [100%]
+      ================================== FAILURES ===================================
+      C:\Program Files\Python313\Lib\subprocess.py:419: subprocess.CalledProcessError: Command '['C:\\Program Files\\Python313\\python.exe', '-m', 'tools.sim.virtual_balance', '--trades', 'C:\\Users\\dimak\\mm-bot\\tests\\fixtures\\ledger\\trades_case1.jsonl', '--prices', 'C:\\Users\\dimak\\mm-bot\\tests\\fixtures\\ledger\\prices_case1.jsonl']' returned non-zero exit status 1.
+      =========================== short test summary info ===========================
+      FAILED tests/e2e/test_virtual_balance_flow.py::test_virtual_balance_e2e - sub...
+
+[15/38] tests/e2e/test_soak_autopilot_dryrun.py
+
+[16/38] tests/e2e/test_weekly_rollup_e2e.py
+
+[17/38] tests/e2e/test_drift_guard_e2e.py
+    [FAIL] Test failed (exit 1)
+      F                                                                        [100%]
+      ================================== FAILURES ===================================
+      C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\_pytest\unraisableexception.py:81: ExceptionGroup: multiple unraisable exception warnings (2 sub-exceptions)
+      =========================== short test summary info ===========================
+      FAILED tests/e2e/test_drift_guard_e2e.py::test_drift_guard_e2e - ExceptionGro...
+
+[18/38] tests/e2e/test_rotate_artifacts_e2e.py
+
+[19/38] tests/e2e/test_chaos_failover_e2e.py
+
+[20/38] tests/e2e/test_edge_sentinel_e2e.py
+
+[21/38] tests/e2e/test_param_sweep_e2e.py
+
+[22/38] tests/e2e/test_tuning_apply_e2e.py
+
+[23/38] tests/e2e/test_regression_guard_e2e.py
+
+[24/38] tests/e2e/test_daily_digest_e2e.py
+
+[25/38] tests/e2e/test_auto_rollback_e2e.py
+
+[26/38] tests/e2e/test_long_run_dry.py
+
+[27/38] tests/e2e/test_postmortem_e2e.py
+
+[28/38] tests/e2e/test_anomaly_radar_e2e.py
+
+[29/38] tests/e2e/test_repro_minimizer_e2e.py
+    [FAIL] Test failed (exit 1)
+      F                                                                        [100%]
+      ================================== FAILURES ===================================
+      C:\Users\dimak\mm-bot\tests\e2e\test_repro_minimizer_e2e.py:16: assert b'{"reason":"...e":"guard"}\n' == b'{"ts_ms":20...}\r\n\r\n\r\n'
+      =========================== short test summary info ===========================
+      FAILED tests/e2e/test_repro_minimizer_e2e.py::test_repro_minimizer_e2e - asse...
+
+[30/38] tests/e2e/test_pre_live_pack_dry.py
