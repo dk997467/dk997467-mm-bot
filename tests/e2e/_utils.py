@@ -4,6 +4,11 @@ from src.metrics.exporter import Metrics
 
 
 def reset_registry() -> None:
+    """Legacy registry cleanup helper.
+    
+    NOTE: Registry cleanup is now handled by conftest.py autouse fixture.
+    This function is kept for backwards compatibility with existing e2e tests.
+    """
     try:
         collectors = list(REGISTRY._collector_to_names.keys())
         for col in collectors:
@@ -16,6 +21,8 @@ def reset_registry() -> None:
 
 
 def make_metrics_ctx() -> Metrics:
+    # NOTE: Registry cleanup now handled by conftest.py, but keeping explicit
+    # call here for e2e tests that may run in isolation
     reset_registry()
     ctx = SimpleNamespace(
         cfg=SimpleNamespace(

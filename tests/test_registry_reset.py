@@ -11,13 +11,21 @@ from src.metrics.exporter import Metrics
 
 
 def clear_registry():
-    """Clear Prometheus registry completely."""
+    """Clear Prometheus registry completely.
+    
+    NOTE: This function is kept for TESTING the registry cleanup functionality itself.
+    In normal tests, registry is auto-cleared by conftest.py autouse fixture.
+    """
     REGISTRY._collector_to_names.clear()
     REGISTRY._names_to_collectors.clear()
 
 
 class TestRegistryReset:
-    """Test that multiple tests can init Metrics without duplicate-collector errors."""
+    """Test that multiple tests can init Metrics without duplicate-collector errors.
+    
+    NOTE: This test explicitly tests registry cleanup functionality, so it
+    manually calls clear_registry() to verify the cleanup mechanism works.
+    """
     
     def test_metrics_init_after_clear(self):
         """Test that Metrics can be initialized after registry clear."""

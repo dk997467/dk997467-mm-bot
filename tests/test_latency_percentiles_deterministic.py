@@ -4,16 +4,8 @@ from src.metrics.exporter import Metrics
 
 
 def _mk_metrics():
-    # Reset default registry to avoid duplicate metric names across tests
-    try:
-        collectors = list(REGISTRY._collector_to_names.keys())  # type: ignore[attr-defined]
-        for col in collectors:
-            try:
-                REGISTRY.unregister(col)
-            except Exception:
-                pass
-    except Exception:
-        pass
+    # NOTE: Registry cleanup now handled by conftest.py autouse fixture
+    # This helper just creates a minimal context for testing
     ctx = SimpleNamespace(
         cfg=SimpleNamespace(
             strategy=SimpleNamespace(

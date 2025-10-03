@@ -5,7 +5,7 @@ import pytest
 import socket as _socket
 
 # ============================================================================
-# CRITICAL FIX: Establish project root for fixture/golden file resolution
+# CRITICAL FIX #1: Establish project root for fixture/golden file resolution
 # ============================================================================
 # Many tests use `Path(__file__).resolve().parents[1]` to find project root,
 # then access fixtures via `root / "fixtures"` or `root / "golden"`.
@@ -40,6 +40,46 @@ def _ensure_fixture_links():
 
 # Create links at module import time (before any tests run)
 _ensure_fixture_links()
+
+# ============================================================================
+# CRITICAL FIX #2: Prevent Prometheus Registry Memory Leak
+# ============================================================================
+# Problem: Each test creates a new Metrics() object via mk_ctx fixture.
+# Metrics.__init__() registers 100+ collectors in the global REGISTRY.
+# Without cleanup, REGISTRY accumulates collectors across all tests,
+# causing OOM (exit 143) on GitHub Actions runners (7GB RAM limit).
+#
+# Solution: Auto-clear REGISTRY before each test to prevent accumulation.
+# ============================================================================
+
+@pytest.fixture(autouse=True)
+def _clear_prometheus_registry():
+    """Clear Prometheus registry before each test to prevent memory leaks."""
+    try:
+        from prometheus_client import REGISTRY
+        # Unregister all collectors to prevent accumulation
+        for collector in list(REGISTRY._collector_to_names.keys()):
+            try:
+                REGISTRY.unregister(collector)
+            except Exception:
+                pass
+        # Clear internal dictionaries for clean slate
+        REGISTRY._collector_to_names.clear()
+        REGISTRY._names_to_collectors.clear()
+    except ImportError:
+        # prometheus_client not installed (shouldn't happen, but safe fallback)
+        pass
+    yield
+    # Optional: cleanup after test too (belt-and-suspenders approach)
+    try:
+        from prometheus_client import REGISTRY
+        for collector in list(REGISTRY._collector_to_names.keys()):
+            try:
+                REGISTRY.unregister(collector)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 if not isinstance(sys.stdout, io.TextIOBase):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="ascii", newline="\n")  # type: ignore

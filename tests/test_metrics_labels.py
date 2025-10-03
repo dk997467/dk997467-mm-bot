@@ -13,10 +13,7 @@ from src.metrics.exporter import Metrics
 class TestMetricsLabels:
     """Test that metrics have exact names and labels."""
     
-    def setup_method(self):
-        """Clear Prometheus registry before each test."""
-        REGISTRY._collector_to_names.clear()
-        REGISTRY._names_to_collectors.clear()
+    # NOTE: Registry cleanup now handled by conftest.py autouse fixture
     
     def test_metrics_class_instantiation(self):
         """Test that Metrics class can be instantiated."""
