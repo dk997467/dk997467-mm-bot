@@ -38,17 +38,41 @@ failed_tests = []
 
 def kill_all_python_children():
     """Kill all Python child processes to prevent zombie accumulation."""
+    killed_count = 0
     try:
         import psutil
-        current = psutil.Process()
-        children = current.children(recursive=True)
-        for child in children:
+        current_pid = os.getpid()
+        
+        # Strategy 1: Kill direct children recursively
+        try:
+            current = psutil.Process(current_pid)
+            children = current.children(recursive=True)
+            for child in children:
+                try:
+                    child.kill()
+                    killed_count += 1
+                except:
+                    pass
+            psutil.wait_procs(children, timeout=3)
+        except:
+            pass
+        
+        # Strategy 2: Kill ALL python.exe processes except current one
+        # This is aggressive but necessary for zombie cleanup
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
-                child.kill()
-            except:
+                if proc.info['name'] and 'python' in proc.info['name'].lower():
+                    if proc.info['pid'] != current_pid:
+                        # Check if it's a pytest process
+                        cmdline = proc.info.get('cmdline', [])
+                        if cmdline and any('pytest' in str(arg) for arg in cmdline):
+                            proc.kill()
+                            killed_count += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
-        # Wait for processes to die
-        psutil.wait_procs(children, timeout=3)
+        
+        return killed_count
+        
     except ImportError:
         # Fallback: kill process group (Unix-like systems)
         if hasattr(signal, 'SIGTERM'):
@@ -56,6 +80,7 @@ def kill_all_python_children():
                 os.killpg(os.getpgid(os.getpid()), signal.SIGTERM)
             except:
                 pass
+        return 0
 
 print(f"Running {len(paths)} E2E test files sequentially...")
 for i, test_path in enumerate(paths, 1):
@@ -92,7 +117,9 @@ for i, test_path in enumerate(paths, 1):
                 print(f"      {line}", flush=True)
         
         # Aggressive cleanup: kill any remaining child processes
-        kill_all_python_children()
+        killed = kill_all_python_children()
+        if killed > 0:
+            print(f"    [CLEANUP] Killed {killed} zombie processes", flush=True)
         
         # Longer pause to allow OS to cleanup processes
         time.sleep(2)
