@@ -16,13 +16,18 @@ def test_weekly_rollup_e2e(tmp_path):
         '--out-json', str(out_json),
         '--out-md', str(out_md),
     ]
-    subprocess.check_call(cmd)
-    # determinism
+    subprocess.check_call(cmd, timeout=300)
+    # determinism - run again with different output files
     out_json2 = tmp_path / 'WEEKLY_ROLLUP_2.json'
     out_md2 = tmp_path / 'WEEKLY_ROLLUP_2.md'
-    cmd[-2] = str(out_json2)
-    cmd[-1] = str(out_md2)
-    subprocess.check_call(cmd)
+    cmd2 = [
+        sys.executable, '-m', 'tools.soak.weekly_rollup',
+        '--soak-dir', str(soak_dir),
+        '--ledger', str(ledger),
+        '--out-json', str(out_json2),
+        '--out-md', str(out_md2),
+    ]
+    subprocess.check_call(cmd2, timeout=300)
     assert out_json.read_bytes() == out_json2.read_bytes()
     assert out_md.read_bytes() == out_md2.read_bytes()
     # golden
