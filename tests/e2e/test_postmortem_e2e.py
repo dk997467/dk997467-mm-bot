@@ -11,7 +11,11 @@ def test_postmortem_day_e2e(tmp_path):
         dst = tmp_path / 'artifacts' / name
         dst.write_text(src.read_text(encoding='ascii'), encoding='ascii')
     out = tmp_path / 'artifacts' / 'POSTMORTEM_DAY.md'
-    subprocess.check_call([sys.executable, '-m', 'tools.ops.postmortem', '--scope', 'day', '--out', str(out)])
+    # Run from project root with explicit paths
+    import os
+    env = os.environ.copy()
+    env['WORK_DIR'] = str(tmp_path)
+    subprocess.check_call([sys.executable, '-m', 'tools.ops.postmortem', '--scope', 'day', '--out', str(out)], cwd=str(root), env=env)
     md = out.read_bytes()
     g = (root / 'tests' / 'golden' / 'POSTMORTEM_DAY_case1.md').read_bytes()
     assert md == g
