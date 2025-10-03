@@ -14,7 +14,8 @@ def test_daily_digest_e2e(tmp_path):
     env = os.environ.copy()
     env['PYTHONPATH'] = str(root)
     env['MM_FREEZE_UTC_ISO'] = '1970-01-01T00:00:00Z'
-    subprocess.check_call([sys.executable, '-m', 'tools.ops.daily_digest', '--out', 'artifacts/DAILY_DIGEST.md'], cwd=str(tmp_path), env=env)
+    # Run from project root with explicit output path
+    subprocess.check_call([sys.executable, '-m', 'tools.ops.daily_digest', '--out', str(tmp_path / 'artifacts' / 'DAILY_DIGEST.md')], cwd=str(root), env=env)
     md = (tmp_path / 'artifacts' / 'DAILY_DIGEST.md').read_bytes()
     g = (root / 'tests' / 'golden' / 'DAILY_DIGEST_case1.md').read_bytes()
     assert md == g

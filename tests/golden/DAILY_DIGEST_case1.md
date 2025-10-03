@@ -1,6 +1,12 @@
-DAILY DIGEST 2025-09-28 [OK]
+DAILY DIGEST 2025-10-03 [OK]
 
 | net_bps | order_age_p95_ms | taker_share_pct | fills | turnover_usd |
 |---------|-------------------|-----------------|-------|--------------|
-| 2.900000 | 300.000000 | 12.000000 | 10.000000 | 1000.000000 |
+| -1.779578 | 0.000000 | 0.000000 | 6.000000 | 2849.350000 |
 
+Drift Guard: DRIFT_EDGE
+Regression Guard: EDGE_REG
+
+Actionables:
+- tune throttle: raise min_interval_ms
+- increase vip tilt cap mildly

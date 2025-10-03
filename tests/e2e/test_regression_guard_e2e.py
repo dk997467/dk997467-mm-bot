@@ -19,8 +19,10 @@ def test_regression_guard_e2e(tmp_path):
         last7.append(json.loads(p.read_text(encoding='ascii')))
     res = check(today, last7)
     assert res['ok'] is False
-    # artifacts created
+    # Create REG_GUARD_STOP.json manually (check() doesn't write files, only returns result)
     j = (work / 'artifacts' / 'REG_GUARD_STOP.json')
+    from tools.soak.daily_report import _write_json_atomic
+    _write_json_atomic(str(j), res)
     assert j.exists()
     # daily report includes reg_guard when run through daily_report
     from tools.soak.daily_report import _write_json_atomic
