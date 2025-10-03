@@ -18,7 +18,7 @@ def test_live_sim_flow(tmp_path, monkeypatch):
         sys.executable, "tools/sim/run_sim.py",
         "--events", "tests/fixtures/sim_events_case1.jsonl",
         "--mode", "queue_aware",
-        "--out", str(out_json)
+        "--out", str(out_json, timeout=300)
     ], check=False, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
 
@@ -35,7 +35,7 @@ def test_live_sim_flow(tmp_path, monkeypatch):
     assert json.dumps(got, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n" == json.dumps(gold, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"
 
     # Render MD and compare
-    r2 = subprocess.run([sys.executable, "tools/sim/report_sim.py", str(out_json)], check=False, capture_output=True, text=True)
+    r2 = subprocess.run([sys.executable, "tools/sim/report_sim.py", str(out_json, timeout=300)], check=False, capture_output=True, text=True)
     assert r2.returncode == 0
     md_path = Path("artifacts")/"REPORT_SIM.md"
     got_md = md_path.read_text(encoding="ascii")

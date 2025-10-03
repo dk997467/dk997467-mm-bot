@@ -10,7 +10,7 @@ def test_readiness_score_e2e(tmp_path):
     for p in sorted(src_dir.glob('REPORT_SOAK_*.json')):
         (tmp_path / 'artifacts' / p.name).write_text(p.read_text(encoding='ascii'), encoding='ascii')
     out_json = tmp_path / 'artifacts' / 'READINESS_SCORE.json'
-    r = subprocess.run([sys.executable, '-m', 'tools.release.readiness_score', '--dir', str(tmp_path / 'artifacts'), '--out-json', str(out_json)], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, '-m', 'tools.release.readiness_score', '--dir', str(tmp_path / 'artifacts', timeout=300), '--out-json', str(out_json)], capture_output=True, text=True)
     assert r.returncode == 0
     got = out_json.read_bytes()
     golden = Path('tests/golden/READINESS_SCORE_case1.json').read_bytes()

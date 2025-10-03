@@ -20,7 +20,7 @@ def test_ops_snapshot(tmp_path):
     (work / 'dist' / 'finops' / 'x' / 'reconcile_report.json').write_text('{"d":4}\n', encoding='ascii')
 
     env = os.environ.copy()
-    r = subprocess.run(['sh', str(root / 'tools' / 'ops' / 'snapshot.sh')], cwd=str(work), capture_output=True, text=True, env=env)
+    r = subprocess.run(['sh', str(root / 'tools' / 'ops' / 'snapshot.sh', timeout=300)], cwd=str(work), capture_output=True, text=True, env=env)
     assert r.returncode == 0
     assert r.stdout.endswith('\n')
     assert 'SNAPSHOT' in r.stdout

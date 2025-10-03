@@ -14,7 +14,7 @@ def test_auto_rollback_e2e(tmp_path):
     import os
     env = os.environ.copy()
     env['PYTHONPATH'] = str(root)
-    r = subprocess.run([sys.executable, '-m', 'tools.tuning.auto_rollback'], cwd=str(tmp_path), capture_output=True, text=True, env=env)
+    r = subprocess.run([sys.executable, '-m', 'tools.tuning.auto_rollback'], cwd=str(tmp_path, timeout=300), capture_output=True, text=True, env=env)
     assert r.returncode == 0
     # stdout has final status
     assert 'ROLLBACK=APPLIED' in r.stdout

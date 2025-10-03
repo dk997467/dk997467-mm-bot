@@ -42,12 +42,12 @@ def test_report_and_md_determinism():
         str(out_json),
     ]
 
-    r1 = subprocess.run(cmd, check=False)
+    r1 = subprocess.run(cmd, check=False, timeout=300)
     assert r1.returncode == 0
     b1_json = _readb(str(out_json))
     b1_md = _readb(str(out_md))
 
-    r2 = subprocess.run(cmd, check=False)
+    r2 = subprocess.run(cmd, check=False, timeout=300)
     assert r2.returncode == 0
     b2_json = _readb(str(out_json))
     b2_md = _readb(str(out_md))
@@ -89,11 +89,11 @@ def test_walkforward_determinism_and_thresholds():
         str(out_json),
     ]
 
-    r1 = subprocess.run(cmd, check=False)
+    r1 = subprocess.run(cmd, check=False, timeout=300)
     assert r1.returncode == 0
     b1 = _readb(str(out_json))
 
-    r2 = subprocess.run(cmd, check=False)
+    r2 = subprocess.run(cmd, check=False, timeout=300)
     assert r2.returncode == 0
     b2 = _readb(str(out_json))
 

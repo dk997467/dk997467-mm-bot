@@ -35,7 +35,7 @@ def test_release_bundle_e2e(tmp_path):
     # Run bundle maker
     cmd = [sys.executable, str(root / 'tools' / 'release' / 'make_bundle.py')]
     import subprocess
-    r = subprocess.run(cmd, cwd=root, env=env, capture_output=True, text=True)
+    r = subprocess.run(cmd, cwd=root, env=env, capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, r.stderr
     assert 'RELEASE_BUNDLE=' in (r.stdout or '')
 

@@ -9,10 +9,10 @@ def test_investor_package_end2end(tmp_path):
     env = os.environ.copy()
     env["MM_FREEZE_UTC"] = "1"
     # First run
-    r1 = subprocess.run([os.sys.executable, "-m", "tools.finops.assemble_investor_pkg", str(art)], check=False, env=env)
+    r1 = subprocess.run([os.sys.executable, "-m", "tools.finops.assemble_investor_pkg", str(art, timeout=300)], check=False, env=env)
     assert r1.returncode == 0
     # Second run
-    r2 = subprocess.run([os.sys.executable, "-m", "tools.finops.assemble_investor_pkg", str(art)], check=False, env=env)
+    r2 = subprocess.run([os.sys.executable, "-m", "tools.finops.assemble_investor_pkg", str(art, timeout=300)], check=False, env=env)
     assert r2.returncode == 0
     # Compare docs
     got_deck = (root / "docs" / "INVESTOR_DECK.md").read_bytes()

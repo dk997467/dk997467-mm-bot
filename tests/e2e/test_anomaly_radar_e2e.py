@@ -10,7 +10,7 @@ def test_anomaly_radar_e2e(tmp_path):
     inp.parent.mkdir(parents=True, exist_ok=True)
     inp.write_text(src, encoding='ascii')
     out_json = tmp_path / 'artifacts' / 'ANOMALY_RADAR.json'
-    r = subprocess.run([sys.executable, '-m', 'tools.soak.anomaly_radar', '--edge-report', str(inp), '--bucket-min', '15', '--out-json', str(out_json)], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, '-m', 'tools.soak.anomaly_radar', '--edge-report', str(inp, timeout=300), '--bucket-min', '15', '--out-json', str(out_json)], capture_output=True, text=True)
     assert r.returncode == 0
     got = out_json.read_bytes()
     golden = Path('tests/golden/ANOMALY_RADAR_case1.json').read_bytes()

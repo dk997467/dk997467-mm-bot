@@ -29,12 +29,12 @@ def test_make_ready_dry_and_real(tmp_path):
     import subprocess
 
     # Dry-run plan must be deterministic and end with MAKE_READY=PLAN with trailing LF
-    r = subprocess.run([sys.executable, str(root / 'tools' / 'release' / 'make_ready.py'), '--dry-run'], cwd=work, env=env, capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(root / 'tools' / 'release' / 'make_ready.py', timeout=300), '--dry-run'], cwd=work, env=env, capture_output=True, text=True)
     assert r.returncode == 0
     assert (r.stdout or '').endswith('MAKE_READY=PLAN\n')
 
     # Real run should generate MAKE_READY.md and print final status
-    r2 = subprocess.run([sys.executable, str(root / 'tools' / 'release' / 'make_ready.py')], cwd=work, env=env, capture_output=True, text=True)
+    r2 = subprocess.run([sys.executable, str(root / 'tools' / 'release' / 'make_ready.py', timeout=300)], cwd=work, env=env, capture_output=True, text=True)
     assert r2.returncode == 0
     md = work / 'artifacts' / 'MAKE_READY.md'
     assert md.exists()
