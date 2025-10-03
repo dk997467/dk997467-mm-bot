@@ -28,11 +28,12 @@ def test_weekly_rollup_e2e(tmp_path):
         '--out-md', str(out_md2),
     ]
     subprocess.check_call(cmd2, timeout=300)
-    assert out_json.read_bytes() == out_json2.read_bytes()
-    assert out_md.read_bytes() == out_md2.read_bytes()
+    # Normalize line endings for comparison
+    assert out_json.read_bytes().replace(b'\r\n', b'\n') == out_json2.read_bytes().replace(b'\r\n', b'\n')
+    assert out_md.read_bytes().replace(b'\r\n', b'\n') == out_md2.read_bytes().replace(b'\r\n', b'\n')
     # golden
     g = root / 'tests' / 'golden'
-    assert out_json.read_bytes() == (g / 'WEEKLY_ROLLUP_case1.json').read_bytes()
-    assert out_md.read_bytes() == (g / 'WEEKLY_ROLLUP_case1.md').read_bytes()
+    assert out_json.read_bytes().replace(b'\r\n', b'\n') == (g / 'WEEKLY_ROLLUP_case1.json').read_bytes().replace(b'\r\n', b'\n')
+    assert out_md.read_bytes().replace(b'\r\n', b'\n') == (g / 'WEEKLY_ROLLUP_case1.md').read_bytes().replace(b'\r\n', b'\n')
 
 

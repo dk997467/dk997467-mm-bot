@@ -16,8 +16,9 @@ def test_postmortem_day_e2e(tmp_path):
     env = os.environ.copy()
     env['WORK_DIR'] = str(tmp_path)
     subprocess.check_call([sys.executable, '-m', 'tools.ops.postmortem', '--scope', 'day', '--out', str(out)], cwd=str(root), env=env)
-    md = out.read_bytes()
-    g = (root / 'tests' / 'golden' / 'POSTMORTEM_DAY_case1.md').read_bytes()
+    # Normalize line endings for comparison
+    md = out.read_bytes().replace(b'\r\n', b'\n')
+    g = (root / 'tests' / 'golden' / 'POSTMORTEM_DAY_case1.md').read_bytes().replace(b'\r\n', b'\n')
     assert md == g
 
 
