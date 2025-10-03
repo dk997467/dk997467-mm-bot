@@ -40,7 +40,7 @@ def test_reconcile_zero_deltas(tmp_path):
     assert md.encode('ascii', 'strict')
 
 
-def test_reconcile_small_deltas(tmp_path):
+def test_reconcile_small_deltas(tmp_path, test_paths):
     # Create temporary exchange CSV with tiny deviations
     ex = tmp_path / 'exchange'
     ex.mkdir()
@@ -48,8 +48,8 @@ def test_reconcile_small_deltas(tmp_path):
     (ex / 'fees.csv').write_text('date,symbol,fees_bps,turnover_usd,pnl\n1970-01-01,BTCUSDT,0.0000002,0.0,0.0\n', encoding='ascii', newline='\n')
     (ex / 'turnover.csv').write_text('date,symbol,turnover_usd,fees_bps,pnl\n1970-01-01,BTCUSDT,0.0000003,0.0,0.0\n', encoding='ascii', newline='\n')
 
-    root = Path(__file__).resolve().parents[1]
-    artifacts = str(root / 'fixtures' / 'artifacts_sample' / 'metrics.json')
+    # Use universal fixture for paths
+    artifacts = str(test_paths.fixtures_dir / 'artifacts_sample' / 'metrics.json')
 
     report = reconcile(artifacts, str(ex))
     # Expected deltas are negative of exchange because artifacts are zeros

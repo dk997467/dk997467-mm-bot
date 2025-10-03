@@ -1,12 +1,10 @@
 import json
-from pathlib import Path
 from tools.soak.drift_guard import check
 
 
-def test_drift_edge_unit(tmp_path):
-    # Get project root and fixtures path correctly
-    repo = Path(__file__).resolve().parents[1]
-    fixture_file = repo / 'fixtures' / 'drift' / 'soak_edge_bad.json'
+def test_drift_edge_unit(tmp_path, test_paths):
+    # Use universal fixture for paths
+    fixture_file = test_paths.fixtures_dir / 'drift' / 'soak_edge_bad.json'
     
     p = tmp_path / 'EDGE_REPORT.json'
     p.write_text(fixture_file.read_text(encoding='ascii'), encoding='ascii')

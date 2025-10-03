@@ -42,6 +42,38 @@ def _ensure_fixture_links():
 _ensure_fixture_links()
 
 # ============================================================================
+# UNIVERSAL FIXTURE: Provide standard paths to all tests
+# ============================================================================
+# This fixture eliminates the need for each test to compute paths independently
+# using `Path(__file__).parents[...]`. Provides:
+# - project_root: Root directory of the project
+# - fixtures_dir: tests/fixtures directory
+# - golden_dir: tests/golden directory
+# ============================================================================
+
+@pytest.fixture
+def test_paths():
+    """
+    Provide standard paths for test files.
+    
+    Returns:
+        object with attributes:
+            - project_root: Path to project root
+            - fixtures_dir: Path to tests/fixtures
+            - golden_dir: Path to tests/golden
+    """
+    class TestPaths:
+        def __init__(self):
+            self.project_root = PROJECT_ROOT
+            self.fixtures_dir = FIXTURES_TARGET
+            self.golden_dir = GOLDEN_TARGET
+        
+        def __repr__(self):
+            return f"TestPaths(root={self.project_root}, fixtures={self.fixtures_dir}, golden={self.golden_dir})"
+    
+    return TestPaths()
+
+# ============================================================================
 # CRITICAL FIX #2: Prevent Prometheus Registry Memory Leak
 # ============================================================================
 # Problem: Each test creates a new Metrics() object via mk_ctx fixture.

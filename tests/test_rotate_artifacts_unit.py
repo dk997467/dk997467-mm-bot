@@ -12,7 +12,7 @@ def _mkfile(p: Path, size: int, mtime: float):
     os.utime(p, (mtime, mtime))
 
 
-def test_rotate_dryrun(tmp_path):
+def test_rotate_dryrun(tmp_path, test_paths):
     now = 1_600_000_000
     # create artifacts and dist with files of varying ages
     a1 = tmp_path / 'artifacts' / 'old.json'
@@ -24,8 +24,8 @@ def test_rotate_dryrun(tmp_path):
     d2 = tmp_path / 'dist' / 'finops' / '19700102T000000Z' / 'reconcile_report.json'
     _mkfile(d2, 20, now - 5*86400)
 
-    # Get project root to run command from correct location
-    project_root = Path(__file__).resolve().parents[1]
+    # Use universal fixture for project root
+    project_root = test_paths.project_root
     
     env = os.environ.copy()
     # Must run from project root so tools.ops module can be found

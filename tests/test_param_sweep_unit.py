@@ -4,11 +4,10 @@ import sys
 from pathlib import Path
 
 
-def test_param_sweep_safe_filter_and_sort(tmp_path):
-    root = Path(__file__).resolve().parents[1]
-    events = root / 'fixtures' / 'sweep' / 'events_case1.jsonl'
-    # Fix: grid.yaml is in project root, not parent's parent
-    grid = root / 'tools' / 'sweep' / 'grid.yaml'
+def test_param_sweep_safe_filter_and_sort(tmp_path, test_paths):
+    # Use universal fixture for paths
+    events = test_paths.fixtures_dir / 'sweep' / 'events_case1.jsonl'
+    grid = test_paths.project_root / 'tools' / 'sweep' / 'grid.yaml'
     out = tmp_path / 'PARAM_SWEEP.json'
     subprocess.check_call([sys.executable, '-m', 'tools.sweep.run_sweep', '--events', str(events), '--grid', str(grid), '--out-json', str(out)])
     d = json.loads(out.read_text(encoding='ascii'))
