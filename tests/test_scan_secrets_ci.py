@@ -3,12 +3,12 @@ import sys
 from pathlib import Path
 
 
-def test_scan_secrets_finds_fixture(tmp_path):
+def test_scan_secrets_finds_fixture(tmp_path, test_paths):
     (tmp_path / 'artifacts').mkdir()
     leak = (tmp_path / 'artifacts' / 'leaky_logs.txt')
-    leak.write_text(Path('tests/fixtures/secrets/leaky_logs.txt').read_text(encoding='ascii'), encoding='ascii')
-    # Run from project root so tools.ci module can be found
-    project_root = Path(__file__).resolve().parents[1]
+    leak.write_text((test_paths.fixtures_dir / 'secrets' / 'leaky_logs.txt').read_text(encoding='ascii'), encoding='ascii')
+    # Use universal fixture for project root
+    project_root = test_paths.project_root
     import os
     env = os.environ.copy()
     env['WORK_DIR'] = str(tmp_path)

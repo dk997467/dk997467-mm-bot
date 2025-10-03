@@ -9,15 +9,15 @@ def _read_json(path: Path):
     return json.loads(path.read_text(encoding='ascii'))
 
 
-def test_baseline_lock_stable_and_changes(tmp_path):
+def test_baseline_lock_stable_and_changes(tmp_path, test_paths):
     # copy minimal config.yaml
     cfg = (Path('.') / 'config.yaml')
     (tmp_path / 'config.yaml').write_text(cfg.read_text(encoding='utf-8'), encoding='ascii', errors='ignore')
     out = tmp_path / 'artifacts' / 'BASELINE_LOCK.json'
     env = os.environ.copy()
     env['MM_FREEZE_UTC_ISO'] = '1970-01-01T00:00:00Z'
-    # Run from project root so tools.tuning module can be found
-    project_root = Path(__file__).resolve().parents[1]
+    # Use universal fixture for project root
+    project_root = test_paths.project_root
     env2 = env.copy()
     env2['WORK_DIR'] = str(tmp_path)
     r1 = subprocess.run([sys.executable, '-m', 'tools.tuning.baseline_lock', '--config', str(tmp_path / 'config.yaml'), '--out', str(out)], 
