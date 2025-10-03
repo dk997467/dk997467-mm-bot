@@ -3,6 +3,9 @@ import os
 import json
 import subprocess
 
+# Default timeout for all subprocess calls
+SUBPROCESS_TIMEOUT = 300  # 5 minutes
+
 
 def test_region_canary_e2e(tmp_path):
     root = Path(__file__).resolve().parents[2]
@@ -16,12 +19,12 @@ def test_region_canary_e2e(tmp_path):
     ]
     env = os.environ.copy()
     env['MM_FREEZE_UTC'] = '1'
-    subprocess.check_call(cmd, env=env)
+    subprocess.check_call(cmd, env=env, timeout=SUBPROCESS_TIMEOUT)
 
     # determinism: run again into another dir
     out_json2 = tmp_path / 'REGION_COMPARE_2.json'
     cmd[-1] = str(out_json2)
-    subprocess.check_call(cmd, env=env)
+    subprocess.check_call(cmd, env=env, timeout=SUBPROCESS_TIMEOUT)
 
     b1 = out_json.read_bytes()
     b2 = out_json2.read_bytes()
