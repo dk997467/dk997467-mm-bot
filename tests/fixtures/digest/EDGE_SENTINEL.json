@@ -1,0 +1,2 @@
+{"advice":["tune throttle: raise min_interval_ms","increase vip tilt cap mildly"],"summary":{"symbols":{"BTCUSDT":{"gross_bps":0.3,"fees_eff_bps":0.3,"adverse_bps":0.5,"slippage_bps":0.7,"inventory_bps":0.0,"net_bps":-0.6,"fills":2.0,"turnover_usd":201.0},"ETHUSDT":{"gross_bps":0.2,"fees_eff_bps":0.2,"adverse_bps":0.4,"slippage_bps":0.6,"inventory_bps":0.0,"net_bps":-0.5,"fills":1.0,"turnover_usd":150.0}}},"top":{"top_symbols_by_net_drop":["BTCUSDT","ETHUSDT"],"top_buckets_by_net_drop":["1970-01-01T00:00Z"]},"runtime":{"utc":"1970-01-01T00:00:00Z","version":"0.1.0"}}
+
