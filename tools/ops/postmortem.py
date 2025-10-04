@@ -39,6 +39,13 @@ def _date_from_report(rep: dict) -> str:
             return utc.split('T')[0]
     except Exception:
         pass
+    # Use frozen time if available for deterministic output
+    iso_freeze = os.environ.get('MM_FREEZE_UTC_ISO')
+    if iso_freeze:
+        try:
+            return datetime.strptime(iso_freeze, '%Y-%m-%dT%H:%M:%SZ').strftime('%Y-%m-%d')
+        except Exception:
+            pass
     return datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
 
@@ -113,6 +120,8 @@ def main(argv=None) -> int:
             lines.append('Action items:\n')
             for a in adv:
                 lines.append('- ' + str(a) + '\n')
+    
+    # NOTE: 'else' clause below handles 'week' scope
 
     else:  # week
         wk = _read('artifacts/WEEKLY_ROLLUP.json') or {}
@@ -130,6 +139,8 @@ def main(argv=None) -> int:
             lines.append('Gate reasons: ' + ','.join(gate.get('reasons')) + '\n')
 
     md = ''.join(lines)
+    # Ensure exactly one trailing newline
+    md = md.rstrip('\n') + '\n'
     _write_text_atomic(args.out, md)
     print('WROTE', args.out)
     return 0

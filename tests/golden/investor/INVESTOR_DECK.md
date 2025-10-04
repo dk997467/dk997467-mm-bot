@@ -17,4 +17,3 @@ fees_bps=0.000000, turnover_usd=0.000000
 
 ## Risk
 drawdown_proxy_pct=0.000000
-

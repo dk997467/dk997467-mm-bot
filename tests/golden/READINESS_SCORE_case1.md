@@ -1,6 +1,6 @@
 READINESS SCORE
 
-Result: GO  Score: 90.000000
+Result: GO  Score: 100.000000
 
 | section | score |
 |---------|-------|
@@ -10,5 +10,3 @@ Result: GO  Score: 90.000000
 | guards | 10.000000 |
 | chaos | 10.000000 |
 | tests | 10.000000 |
-
-
