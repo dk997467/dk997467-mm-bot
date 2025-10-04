@@ -234,7 +234,7 @@ jobs:
           # Check if pytest generated any temp files
           if [ -d "/tmp/pytest-of-$(whoami)" ]; then
             echo "=== Recent pytest temp dirs ==="
-            find /tmp/pytest-of-$(whoami) -type d -name "test_*_e2e*" -mmin -5 | head -5
+            find /tmp/pytest-of-$(whoami) -type d -name "test_*_e2e*" -mmin -5 | head -10
             
             # Try to find generated DAILY_DIGEST.md
             for dir in $(find /tmp/pytest-of-$(whoami) -type d -name "test_daily_digest_e2e*" -mmin -5); do
@@ -257,6 +257,21 @@ jobs:
                 echo ""
                 echo "=== Expected POSTMORTEM_DAY_case1.md ==="
                 head -10 tests/golden/POSTMORTEM_DAY_case1.md
+              fi
+            done
+            
+            # Try to find generated WEEKLY_ROLLUP.json
+            for dir in $(find /tmp/pytest-of-$(whoami) -type d -name "test_weekly_rollup_e2e*" -mmin -5); do
+              if [ -f "$dir/WEEKLY_ROLLUP.json" ]; then
+                echo ""
+                echo "=== Generated WEEKLY_ROLLUP.json ==="
+                cat "$dir/WEEKLY_ROLLUP.json"
+                echo ""
+                echo "=== Expected WEEKLY_ROLLUP_case1.json ==="
+                cat tests/golden/WEEKLY_ROLLUP_case1.json
+                echo ""
+                echo "=== DIFF (generated vs golden) ==="
+                diff -u tests/golden/WEEKLY_ROLLUP_case1.json "$dir/WEEKLY_ROLLUP.json" || true
               fi
             done
           fi
