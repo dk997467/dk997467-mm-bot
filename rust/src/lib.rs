@@ -1,6 +1,7 @@
 use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
 use pyo3::prelude::*;
+use pyo3::types::PyModuleMethods;
 
 #[pyclass]
 #[derive(Default, Clone)]
