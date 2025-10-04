@@ -262,8 +262,14 @@ jobs:
           Write-Host "PRE-FLIGHT CHECKS"
           Write-Host "================================================"
           
-          # Start transcript
-          Start-Transcript -Path "${{ github.workspace }}\artifacts\soak\soak_windows.log" -Append | Out-Null
+          # Start transcript (optional - don't fail if it doesn't work)
+          try {
+            Start-Transcript -Path "${{ github.workspace }}\artifacts\soak\soak_windows.log" -Append -ErrorAction Stop | Out-Null
+            Write-Host "[TRANSCRIPT] Started logging to soak_windows.log"
+          } catch {
+            Write-Host "[WARN] Could not start transcript: $($_.Exception.Message)"
+            Write-Host "[WARN] Continuing without transcript logging"
+          }
           
           # Check Python
           Write-Host "[CHECK] Python..."
@@ -616,7 +622,14 @@ jobs:
           # Finalize log files
           Write-Host "[FINALIZE] Closing transcript..."
           "SOAK finished: $(Get-Date -Format s)Z" | Add-Content "${{ github.workspace }}\artifacts\soak\summary.txt" -ErrorAction SilentlyContinue
-          Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+          
+          # Stop transcript (idempotent - safe if no active transcript)
+          try {
+            Stop-Transcript -ErrorAction Stop | Out-Null
+            Write-Host "[TRANSCRIPT] Stopped logging"
+          } catch {
+            Write-Host "[INFO] No active transcript to stop (this is normal if Start-Transcript failed earlier)"
+          }
           
           # Snapshot environment
           Write-Host "[SNAPSHOT] Capturing environment state..."
