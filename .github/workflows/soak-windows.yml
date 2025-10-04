@@ -414,7 +414,7 @@ jobs:
               Remove-Job -Job $validationJob -Force -ErrorAction SilentlyContinue
               
               # Record timeout and exit
-              "SOAK FAILED at iteration $iterationCount: TIMEOUT after $([math]::Round($iterSec,2))s" | Add-Content $summaryFile -Encoding ascii
+              "SOAK FAILED at iteration ${iterationCount}: TIMEOUT after $([math]::Round($iterSec,2))s" | Add-Content $summaryFile -Encoding ascii
               Write-Host "[FATAL] Exiting due to timeout"
               exit 1
             }
