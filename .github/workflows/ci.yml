@@ -224,56 +224,50 @@ jobs:
         run: |
           python tools/ci/run_selected_e2e.py
       
-      - name: "[DEBUG] Show failing test diffs (on failure)"
+      - name: "[DEBUG] Re-run failing test_weekly_rollup_e2e with diagnostics"
         if: failure()
+        continue-on-error: true
         run: |
           echo "=============================================="
-          echo "DIAGNOSTIC: Checking for golden file mismatches"
+          echo "DIAGNOSTIC: Re-running test_weekly_rollup_e2e.py"
           echo "=============================================="
           
-          # Check if pytest generated any temp files
-          if [ -d "/tmp/pytest-of-$(whoami)" ]; then
-            echo "=== Recent pytest temp dirs ==="
-            find /tmp/pytest-of-$(whoami) -type d -name "test_*_e2e*" -mmin -5 | head -10
+          # Run the test and capture output to a file
+          python -m pytest tests/e2e/test_weekly_rollup_e2e.py -xvs --tb=short 2>&1 | tee /tmp/weekly_rollup_debug.log
+          
+          echo ""
+          echo "=== Checking for generated files ==="
+          # Find the most recent test directory
+          TEST_DIR=$(find /tmp/pytest-of-$(whoami) -type d -name "test_weekly_rollup_e2e*" -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+          
+          if [ -n "$TEST_DIR" ] && [ -d "$TEST_DIR" ]; then
+            echo "Found test directory: $TEST_DIR"
+            echo ""
             
-            # Try to find generated DAILY_DIGEST.md
-            for dir in $(find /tmp/pytest-of-$(whoami) -type d -name "test_daily_digest_e2e*" -mmin -5); do
-              if [ -f "$dir/artifacts/DAILY_DIGEST.md" ]; then
-                echo ""
-                echo "=== Generated DAILY_DIGEST.md ==="
-                head -10 "$dir/artifacts/DAILY_DIGEST.md"
-                echo ""
-                echo "=== Expected DAILY_DIGEST_case1.md ==="
-                head -10 tests/golden/DAILY_DIGEST_case1.md
-              fi
-            done
-            
-            # Try to find generated POSTMORTEM_DAY.md
-            for dir in $(find /tmp/pytest-of-$(whoami) -type d -name "test_postmortem_day_e2e*" -mmin -5); do
-              if [ -f "$dir/artifacts/POSTMORTEM_DAY.md" ]; then
-                echo ""
-                echo "=== Generated POSTMORTEM_DAY.md ==="
-                head -10 "$dir/artifacts/POSTMORTEM_DAY.md"
-                echo ""
-                echo "=== Expected POSTMORTEM_DAY_case1.md ==="
-                head -10 tests/golden/POSTMORTEM_DAY_case1.md
-              fi
-            done
-            
-            # Try to find generated WEEKLY_ROLLUP.json
-            for dir in $(find /tmp/pytest-of-$(whoami) -type d -name "test_weekly_rollup_e2e*" -mmin -5); do
-              if [ -f "$dir/WEEKLY_ROLLUP.json" ]; then
-                echo ""
-                echo "=== Generated WEEKLY_ROLLUP.json ==="
-                cat "$dir/WEEKLY_ROLLUP.json"
-                echo ""
-                echo "=== Expected WEEKLY_ROLLUP_case1.json ==="
-                cat tests/golden/WEEKLY_ROLLUP_case1.json
-                echo ""
-                echo "=== DIFF (generated vs golden) ==="
-                diff -u tests/golden/WEEKLY_ROLLUP_case1.json "$dir/WEEKLY_ROLLUP.json" || true
-              fi
-            done
+            if [ -f "$TEST_DIR/WEEKLY_ROLLUP.json" ]; then
+              echo "=== Generated WEEKLY_ROLLUP.json ==="
+              cat "$TEST_DIR/WEEKLY_ROLLUP.json"
+              echo ""
+              echo "=== Expected WEEKLY_ROLLUP_case1.json ==="
+              cat tests/golden/WEEKLY_ROLLUP_case1.json
+              echo ""
+              echo "=== DIFF (expected vs generated) ==="
+              diff -u tests/golden/WEEKLY_ROLLUP_case1.json "$TEST_DIR/WEEKLY_ROLLUP.json" || true
+              echo ""
+              echo "=== HEX DUMP comparison (first 500 bytes) ==="
+              echo "Generated:"
+              head -c 500 "$TEST_DIR/WEEKLY_ROLLUP.json" | od -A x -t x1z -v | head -20
+              echo "Golden:"
+              head -c 500 tests/golden/WEEKLY_ROLLUP_case1.json | od -A x -t x1z -v | head -20
+            else
+              echo "ERROR: WEEKLY_ROLLUP.json not found in $TEST_DIR"
+              echo "Directory contents:"
+              ls -la "$TEST_DIR"
+            fi
+          else
+            echo "ERROR: Could not find test directory"
+            echo "Available pytest directories:"
+            ls -la /tmp/pytest-of-$(whoami)/ 2>/dev/null || echo "No pytest directories found"
           fi
           
           echo "=============================================="
