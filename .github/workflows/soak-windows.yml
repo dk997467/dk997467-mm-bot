@@ -144,6 +144,13 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Clear Cargo Cache (to ensure clean build)
+        run: |
+          Write-Host "Clearing cargo registry and git caches..."
+          Remove-Item -Recurse -Force "$($env:USERPROFILE)\.cargo\registry" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "$($env:USERPROFILE)\.cargo\git" -ErrorAction SilentlyContinue
+          Write-Host "Cargo cache cleared."
+
       - name: "[2/12] Install Rust toolchain"
         id: install-rust
         # Purpose: Install Rust for mm-orderbook bindings (PyO3)
