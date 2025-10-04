@@ -3,6 +3,11 @@ import re
 import sys
 from typing import List, Tuple
 
+# Ensure src/ is in path for imports (works locally, CI, and editable install)
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
 from src.common.redact import DEFAULT_PATTERNS
 
 
@@ -79,9 +84,11 @@ def main(argv=None) -> int:
     # deterministic order
     found.sort(key=lambda x: (x[0], x[1]))
     if found:
+        # Import redact function (already in sys.path from above)
+        from src.common.redact import redact
+        
         for (p, ln, s) in found:
             # Do not print the secret itself; just show redacted and location
-            from src.common.redact import redact
             red = redact(s, patterns)
             sys.stdout.write(f"SECRET? {p}:{ln}: {red}\n")
         sys.stdout.write('RESULT=FOUND\n')
