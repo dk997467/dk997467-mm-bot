@@ -104,8 +104,10 @@ def main(argv=None) -> int:
     ledger_week = [x for x in ledger if str(x.get('date', '')) in date_set]
     equity_first = _finite(ledger_week[0].get('equity', 0.0)) if ledger_week else 0.0
     equity_last = _finite(ledger_week[-1].get('equity', 0.0)) if ledger_week else 0.0
-    fees_sum = sum(_finite(x.get('fees', 0.0)) for x in ledger_week)
-    rebates_sum = sum(_finite(x.get('rebates', 0.0)) for x in ledger_week)
+    # Round to 10 decimal places to avoid floating point representation differences
+    # between Python 3.11 (0.6) and 3.13 (0.6000000000000001)
+    fees_sum = round(sum(_finite(x.get('fees', 0.0)) for x in ledger_week), 10)
+    rebates_sum = round(sum(_finite(x.get('rebates', 0.0)) for x in ledger_week), 10)
 
     # Prev week trends
     prev_path = os.path.join(os.path.dirname(args.out_json), 'WEEKLY_ROLLUP_prev.json')
