@@ -136,7 +136,7 @@ impl L2Book {
 }
 
 #[pymodule]
-fn mm_orderbook(m: &Bound<PyModule>) -> PyResult<()> {
-    m.add_pyclass::<L2Book>()?;
+fn mm_orderbook(m: Bound<'_, PyModule>) -> PyResult<()> {
+    m.add::<L2Book>()?;
     Ok(())
 }
