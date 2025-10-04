@@ -5,6 +5,7 @@ Outcome: FAIL
 Timeline:
 - Drift guard stop: reason=DRIFT_EDGE
 - Regression guard stop: reason=EDGE_REG
+- Daily report verdict=OK
 - Sentinel: Top symbols by net drop: BTCUSDT,ETHUSDT
 - Sentinel: Top buckets by net drop: 1970-01-01T00:00Z
 
