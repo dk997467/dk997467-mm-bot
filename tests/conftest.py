@@ -6,6 +6,9 @@ Provides:
 - mk_ctx(mk_cfg): AppContext with fresh Metrics registry
 - FakeOrderBook: Mock orderbook with ahead_volume simulation
 - FakeREST/FakeWS: Minimal stub connectors
+
+IMPORTANT: Prometheus registry is auto-cleared before each test by conftest.py
+at project root. This prevents memory leaks from metric accumulation.
 """
 
 import asyncio

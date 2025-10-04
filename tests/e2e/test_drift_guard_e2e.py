@@ -18,8 +18,8 @@ def test_drift_guard_e2e(tmp_path):
     env = os.environ.copy()
     env['PYTHONPATH'] = str(root)
     # First tick: good -> runner continues then sleep skipped by small hours
-    r = subprocess.Popen([sys.executable, '-m', 'tools.soak.runner', '--mode', 'shadow', '--hours', '0'], cwd=str(work), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    r.wait()
+    r = subprocess.run([sys.executable, '-m', 'tools.soak.runner', '--mode', 'shadow', '--hours', '0'], cwd=str(work), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=300)
+    assert r.returncode == 0
     # overwrite with bad and run one more cycle iteration by direct guard call
     shutil.copy(bad, work / 'artifacts' / 'EDGE_REPORT.json')
     from tools.soak.drift_guard import check as drift_check

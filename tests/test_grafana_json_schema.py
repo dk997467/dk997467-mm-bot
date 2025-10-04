@@ -14,15 +14,15 @@ def _check(path: Path):
     assert isinstance(d['panels'], list)
 
 
-def test_grafana_json_schema():
-    root = Path(__file__).resolve().parents[1].parents[0]
+def test_grafana_json_schema(test_paths):
+    # Use universal fixture for project root
     for name in ['EdgeBreakdown.json','LatencyQueue.json','GuardsAndAlerts.json','RegionCompare.json']:
-        _check(root / 'monitoring' / 'grafana' / name)
+        _check(test_paths.project_root / 'monitoring' / 'grafana' / name)
 
 
-def test_latencyqueue_has_p50_p95_p99():
-    root = Path(__file__).resolve().parents[1].parents[0]
-    path = root / 'monitoring' / 'grafana' / 'LatencyQueue.json'
+def test_latencyqueue_has_p50_p95_p99(test_paths):
+    # Use universal fixture for project root
+    path = test_paths.project_root / 'monitoring' / 'grafana' / 'LatencyQueue.json'
     data = json.loads(path.read_text('ascii'))
     panels = data.get('panels', [])
     titles = [p.get('title') for p in panels]

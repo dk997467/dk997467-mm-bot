@@ -9,7 +9,8 @@ from src.common.artifacts import write_json_atomic
 
 def _run(cmd: List[str]) -> Dict[str, Any]:
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        # Add 5 minute timeout to prevent hanging subprocesses
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         out = (r.stdout or '').strip().splitlines()
         err = (r.stderr or '').strip().splitlines()
         tail = ''
@@ -21,6 +22,8 @@ def _run(cmd: List[str]) -> Dict[str, Any]:
             if tail:
                 break
         return {'code': int(r.returncode), 'tail': tail}
+    except subprocess.TimeoutExpired:
+        return {'code': 124, 'tail': 'TIMEOUT: Command exceeded 5 minutes'}
     except Exception as e:
         return {'code': 99, 'tail': f'EXC:{e.__class__.__name__}'}
 

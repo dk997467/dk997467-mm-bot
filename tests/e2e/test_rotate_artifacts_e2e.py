@@ -32,8 +32,16 @@ def test_rotate_real(tmp_path):
     _mkfile(d2, 1024*100, now - 2*86400)
     before = _total_size(tmp_path)
 
-    cmd = [sys.executable, '-m', 'tools.ops.rotate_artifacts', '--roots', 'artifacts', 'dist', '--keep-days', '14', '--max-size-gb', '0.0001', '--archive-dir', 'dist/archives']
-    r = subprocess.run(cmd, cwd=str(tmp_path), capture_output=True, text=True)
+    # Run from project root (tools module must be accessible)
+    root = Path(__file__).resolve().parents[2]
+    env = os.environ.copy()
+    env['PYTHONPATH'] = str(root)
+    # Use absolute paths for roots since we're running from project root
+    cmd = [sys.executable, '-m', 'tools.ops.rotate_artifacts', 
+           '--roots', str(tmp_path / 'artifacts'), str(tmp_path / 'dist'), 
+           '--keep-days', '14', '--max-size-gb', '0.0001', 
+           '--archive-dir', str(tmp_path / 'dist' / 'archives')]
+    r = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, timeout=300, env=env)
     assert r.returncode == 0
     out = r.stdout
     assert out.endswith('\n') or out.endswith('\r\n')

@@ -22,6 +22,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true  # Enable Git LFS support if needed
       
       - uses: actions/setup-python@v5
         with:
@@ -48,18 +50,63 @@ jobs:
           python -m pip install -U pip
           pip install -r requirements_ci.txt
 
+      - name: "[DEBUG] Environment and File Structure"
+        run: |
+          echo "=============================================="
+          echo "CI DIAGNOSTIC INFORMATION"
+          echo "=============================================="
+          echo ""
+          echo "--- Current Working Directory ---"
+          pwd
+          echo ""
+          echo "--- Directory Structure (tests/) ---"
+          ls -la tests/ || echo "tests/ not found"
+          echo ""
+          echo "--- tests/fixtures/ Contents ---"
+          ls -la tests/fixtures/ || echo "tests/fixtures/ not found"
+          echo ""
+          echo "--- tests/golden/ Contents ---"
+          ls -la tests/golden/ || echo "tests/golden/ not found"
+          echo ""
+          echo "--- Specific File Checks ---"
+          echo "tests/fixtures/audit/chain_ok.jsonl:"
+          ls -la tests/fixtures/audit/chain_ok.jsonl || echo "  NOT FOUND"
+          echo "tests/golden/EDGE_REPORT_case1.json:"
+          ls -la tests/golden/EDGE_REPORT_case1.json || echo "  NOT FOUND"
+          echo ""
+          echo "--- File Counts ---"
+          echo "tests/fixtures/ files: $(find tests/fixtures/ -type f 2>/dev/null | wc -l)"
+          echo "tests/golden/ files: $(find tests/golden/ -type f 2>/dev/null | wc -l)"
+          echo ""
+          echo "--- Python Environment ---"
+          python --version
+          which python
+          echo "PYTHONPATH: $PYTHONPATH"
+          echo ""
+          echo "=============================================="
+
+      - name: "[DEBUG] Run Single Failing Test"
+        continue-on-error: true
+        run: |
+          echo "=============================================="
+          echo "SINGLE TEST DIAGNOSTIC"
+          echo "=============================================="
+          echo "Running: tests/test_finops_exporter_unit.py"
+          python -m pytest tests/test_finops_exporter_unit.py -v --tb=short
+          echo "=============================================="
+
       - name: Run Unit Tests
         # Unit tests: Fast, low memory, use -n 2 for speed
         run: |
           python tools/ci/run_selected_unit.py
 
   # ===========================================================================
-  # E2E TESTS: Slower, higher memory (~5-8 min)
+  # E2E TESTS: Slower, higher memory (~20-30 min)
   # ===========================================================================
   tests-e2e:
     name: E2E Tests (integration)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PYTHONPATH: "${{ github.workspace }}"
@@ -70,6 +117,37 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true  # Enable Git LFS support if needed
+      
+      - name: "[DEBUG] Verify fixtures after checkout"
+        run: |
+          echo "=============================================="
+          echo "DIAGNOSTIC: Verifying test fixtures exist"
+          echo "=============================================="
+          
+          if [ -d "tests/fixtures/digest/" ]; then
+            echo "✓ tests/fixtures/digest/ directory exists"
+            echo ""
+            echo "=== Directory contents ==="
+            ls -lh tests/fixtures/digest/
+            echo ""
+            echo "=== Critical fixtures check ==="
+            for f in EDGE_SENTINEL.json DRIFT_STOP.json REG_GUARD_STOP.json; do
+              if [ -f "tests/fixtures/digest/$f" ]; then
+                size=$(wc -c < "tests/fixtures/digest/$f")
+                echo "✓ $f exists ($size bytes)"
+                head -c 100 "tests/fixtures/digest/$f"
+                echo "..."
+              else
+                echo "✗ $f MISSING!"
+              fi
+            done
+          else
+            echo "✗ ERROR: tests/fixtures/digest/ directory not found!"
+            echo "This means git checkout failed to get fixture files."
+          fi
+          echo "=============================================="
       
       - uses: actions/setup-python@v5
         with:
@@ -95,8 +173,101 @@ jobs:
           python -m pip install -U pip
           pip install -r requirements_ci.txt
 
+      - name: "[DEBUG] Environment and File Structure"
+        run: |
+          echo "=============================================="
+          echo "CI DIAGNOSTIC INFORMATION"
+          echo "=============================================="
+          echo ""
+          echo "--- Current Working Directory ---"
+          pwd
+          echo ""
+          echo "--- Directory Structure (tests/) ---"
+          ls -la tests/ || echo "tests/ not found"
+          echo ""
+          echo "--- tests/fixtures/ Contents ---"
+          ls -la tests/fixtures/ || echo "tests/fixtures/ not found"
+          echo ""
+          echo "--- tests/golden/ Contents ---"
+          ls -la tests/golden/ || echo "tests/golden/ not found"
+          echo ""
+          echo "--- Specific File Checks ---"
+          echo "tests/fixtures/audit/chain_ok.jsonl:"
+          ls -la tests/fixtures/audit/chain_ok.jsonl || echo "  NOT FOUND"
+          echo "tests/golden/EDGE_REPORT_case1.json:"
+          ls -la tests/golden/EDGE_REPORT_case1.json || echo "  NOT FOUND"
+          echo ""
+          echo "--- File Counts ---"
+          echo "tests/fixtures/ files: $(find tests/fixtures/ -type f 2>/dev/null | wc -l)"
+          echo "tests/golden/ files: $(find tests/golden/ -type f 2>/dev/null | wc -l)"
+          echo ""
+          echo "--- Python Environment ---"
+          python --version
+          which python
+          echo "PYTHONPATH: $PYTHONPATH"
+          echo ""
+          echo "=============================================="
+
+      - name: "[DEBUG] Run Single Failing Test"
+        continue-on-error: true
+        run: |
+          echo "=============================================="
+          echo "SINGLE TEST DIAGNOSTIC"
+          echo "=============================================="
+          echo "Running: tests/test_finops_exporter_unit.py"
+          python -m pytest tests/test_finops_exporter_unit.py -v --tb=short
+          echo "=============================================="
+
       - name: Run E2E Tests
         # E2E tests: Sequential mode (-n 0) to prevent OOM
         # These tests use heavy fixtures, run them one at a time
         run: |
           python tools/ci/run_selected_e2e.py
+      
+      - name: "[DEBUG] Re-run failing test_weekly_rollup_e2e with diagnostics"
+        if: failure()
+        continue-on-error: true
+        run: |
+          echo "=============================================="
+          echo "DIAGNOSTIC: Re-running test_weekly_rollup_e2e.py"
+          echo "=============================================="
+          
+          # Run the test and capture output to a file
+          python -m pytest tests/e2e/test_weekly_rollup_e2e.py -xvs --tb=short 2>&1 | tee /tmp/weekly_rollup_debug.log
+          
+          echo ""
+          echo "=== Checking for generated files ==="
+          # Find the most recent test directory
+          TEST_DIR=$(find /tmp/pytest-of-$(whoami) -type d -name "test_weekly_rollup_e2e*" -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+          
+          if [ -n "$TEST_DIR" ] && [ -d "$TEST_DIR" ]; then
+            echo "Found test directory: $TEST_DIR"
+            echo ""
+            
+            if [ -f "$TEST_DIR/WEEKLY_ROLLUP.json" ]; then
+              echo "=== Generated WEEKLY_ROLLUP.json ==="
+              cat "$TEST_DIR/WEEKLY_ROLLUP.json"
+              echo ""
+              echo "=== Expected WEEKLY_ROLLUP_case1.json ==="
+              cat tests/golden/WEEKLY_ROLLUP_case1.json
+              echo ""
+              echo "=== DIFF (expected vs generated) ==="
+              diff -u tests/golden/WEEKLY_ROLLUP_case1.json "$TEST_DIR/WEEKLY_ROLLUP.json" || true
+              echo ""
+              echo "=== HEX DUMP comparison (first 500 bytes) ==="
+              echo "Generated:"
+              head -c 500 "$TEST_DIR/WEEKLY_ROLLUP.json" | od -A x -t x1z -v | head -20
+              echo "Golden:"
+              head -c 500 tests/golden/WEEKLY_ROLLUP_case1.json | od -A x -t x1z -v | head -20
+            else
+              echo "ERROR: WEEKLY_ROLLUP.json not found in $TEST_DIR"
+              echo "Directory contents:"
+              ls -la "$TEST_DIR"
+            fi
+          else
+            echo "ERROR: Could not find test directory"
+            echo "Available pytest directories:"
+            ls -la /tmp/pytest-of-$(whoami)/ 2>/dev/null || echo "No pytest directories found"
+          fi
+          
+          echo "=============================================="

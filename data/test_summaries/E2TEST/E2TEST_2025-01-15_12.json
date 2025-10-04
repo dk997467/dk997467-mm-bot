@@ -1,0 +1,58 @@
+{
+  "bins_max_bps": 25,
+  "counts": {
+    "fills": 21,
+    "orders": 40,
+    "quotes": 80
+  },
+  "generated_at_utc": "2025-10-02T10:59:17.798247+00:00Z",
+  "hit_rate_by_bin": {
+    "0": {
+      "count": 24,
+      "fills": 7
+    },
+    "10": {
+      "count": 32,
+      "fills": 8
+    },
+    "5": {
+      "count": 24,
+      "fills": 6
+    }
+  },
+  "hour_utc": "2025-01-15T12:00:00+00:00Z",
+  "metadata": {
+    "cfg_hash": "test_cfg_2",
+    "git_sha": "test_sha_2"
+  },
+  "percentiles_used": [
+    0.25,
+    0.5,
+    0.75,
+    0.9
+  ],
+  "queue_wait_cdf_ms": [
+    {
+      "p": 0.25,
+      "v": 120.0
+    },
+    {
+      "p": 0.5,
+      "v": 180.0
+    },
+    {
+      "p": 0.75,
+      "v": 240.0
+    },
+    {
+      "p": 0.9,
+      "v": 300.0
+    }
+  ],
+  "schema_version": "e1.1",
+  "symbol": "E2TEST",
+  "window_utc": {
+    "hour_end": "2025-01-15T13:00:00Z",
+    "hour_start": "2025-01-15T12:00:00Z"
+  }
+}

@@ -10,6 +10,11 @@ __pycache__/
 artifacts/
 artifacts/**
 
+# Auto-generated symlinks (created by conftest.py)
+# These point to tests/fixtures/ and tests/golden/
+fixtures/
+golden/
+
 # Secrets (NEVER commit!)
 secrets/
 *.secret

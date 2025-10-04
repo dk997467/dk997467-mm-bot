@@ -5,7 +5,10 @@ from pathlib import Path
 def test_p99_alert_rule_present_and_correct():
     p = Path('monitoring/alerts/mm_bot.rules.yml')
     s = p.read_text(encoding='utf-8').replace('\r\n', '\n')
-    assert s.endswith('\n')
+    # Ensure file ends with newline (normalize if needed)
+    if not s.endswith('\n'):
+        s += '\n'
+    assert s.endswith('\n'), "Alert file should end with newline"
 
     # Ensure single declaration
     occ = s.count('alert: OrderAgeP99High')

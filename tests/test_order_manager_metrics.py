@@ -27,9 +27,7 @@ class TestOrderManagerMetrics:
     
     def setup_method(self):
         """Set up test fixtures."""
-        # Clear Prometheus registry to avoid duplicate metric errors
-        for collector in list(REGISTRY._collector_to_names.keys()):
-            REGISTRY.unregister(collector)
+        # NOTE: Registry cleanup now handled by conftest.py autouse fixture
         
         # Create config
         self.config = AppConfig(

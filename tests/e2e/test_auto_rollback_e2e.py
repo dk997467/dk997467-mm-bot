@@ -10,7 +10,11 @@ def test_auto_rollback_e2e(tmp_path):
     (tmp_path / 'artifacts' / 'REPORT_SOAK_19700101.json').write_text((root / 'tests' / 'fixtures' / 'rollback' / 'today_bad_reg.json').read_text(encoding='ascii'), encoding='ascii')
     (tmp_path / 'tools' / 'tuning' / 'overlay_profile.yaml').write_text('profiles:\n  overlay_tune:\n    allocator:\n      smoothing:\n        max_delta_ratio: 0.15\n', encoding='ascii')
     (tmp_path / 'tools' / 'tuning' / 'overlay_prev.yaml').write_text('profiles:\n  overlay_tune:\n    allocator:\n      smoothing:\n        max_delta_ratio: 0.12\n', encoding='ascii')
-    r = subprocess.run([sys.executable, '-m', 'tools.tuning.auto_rollback'], cwd=str(tmp_path), capture_output=True, text=True)
+    # Run from tmp_path with PYTHONPATH to find tools module
+    import os
+    env = os.environ.copy()
+    env['PYTHONPATH'] = str(root)
+    r = subprocess.run([sys.executable, '-m', 'tools.tuning.auto_rollback'], cwd=str(tmp_path), capture_output=True, text=True, env=env, timeout=300)
     assert r.returncode == 0
     # stdout has final status
     assert 'ROLLBACK=APPLIED' in r.stdout

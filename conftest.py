@@ -1,7 +1,117 @@
 import os, sys, io, builtins, asyncio
+from pathlib import Path
 import pytest
 
 import socket as _socket
+
+# ============================================================================
+# CRITICAL FIX #1: Establish project root for fixture/golden file resolution
+# ============================================================================
+# Many tests use `Path(__file__).resolve().parents[1]` to find project root,
+# then access fixtures via `root / "fixtures"` or `root / "golden"`.
+# However, fixtures are actually in `tests/fixtures/` and `tests/golden/`.
+# This creates symlinks in project root to resolve paths correctly.
+# ============================================================================
+PROJECT_ROOT = Path(__file__).resolve().parent
+FIXTURES_TARGET = PROJECT_ROOT / "tests" / "fixtures"
+GOLDEN_TARGET = PROJECT_ROOT / "tests" / "golden"
+FIXTURES_LINK = PROJECT_ROOT / "fixtures"
+GOLDEN_LINK = PROJECT_ROOT / "golden"
+
+def _ensure_fixture_links():
+    """Ensure fixtures/ and golden/ symlinks exist in project root."""
+    for link, target in [(FIXTURES_LINK, FIXTURES_TARGET), (GOLDEN_LINK, GOLDEN_TARGET)]:
+        if not link.exists():
+            try:
+                # Try creating symlink (works on Linux/Mac, admin on Windows)
+                link.symlink_to(target, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                # Fallback: Create junction on Windows (no admin needed)
+                import subprocess
+                try:
+                    subprocess.run(
+                        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                        check=True,
+                        capture_output=True
+                    )
+                except subprocess.CalledProcessError:
+                    # Last fallback: Just ensure target exists
+                    pass
+
+# Create links at module import time (before any tests run)
+_ensure_fixture_links()
+
+# ============================================================================
+# UNIVERSAL FIXTURE: Provide standard paths to all tests
+# ============================================================================
+# This fixture eliminates the need for each test to compute paths independently
+# using `Path(__file__).parents[...]`. Provides:
+# - project_root: Root directory of the project
+# - fixtures_dir: tests/fixtures directory
+# - golden_dir: tests/golden directory
+# ============================================================================
+
+@pytest.fixture
+def test_paths():
+    """
+    Provide standard paths for test files.
+    
+    Returns:
+        object with attributes:
+            - project_root: Path to project root
+            - fixtures_dir: Path to tests/fixtures
+            - golden_dir: Path to tests/golden
+    """
+    class TestPaths:
+        def __init__(self):
+            self.project_root = PROJECT_ROOT
+            self.fixtures_dir = FIXTURES_TARGET
+            self.golden_dir = GOLDEN_TARGET
+        
+        def __repr__(self):
+            return f"TestPaths(root={self.project_root}, fixtures={self.fixtures_dir}, golden={self.golden_dir})"
+    
+    return TestPaths()
+
+# ============================================================================
+# CRITICAL FIX #2: Prevent Prometheus Registry Memory Leak
+# ============================================================================
+# Problem: Each test creates a new Metrics() object via mk_ctx fixture.
+# Metrics.__init__() registers 100+ collectors in the global REGISTRY.
+# Without cleanup, REGISTRY accumulates collectors across all tests,
+# causing OOM (exit 143) on GitHub Actions runners (7GB RAM limit).
+#
+# Solution: Auto-clear REGISTRY before each test to prevent accumulation.
+# ============================================================================
+
+@pytest.fixture(autouse=True)
+def _clear_prometheus_registry():
+    """Clear Prometheus registry before each test to prevent memory leaks."""
+    try:
+        from prometheus_client import REGISTRY
+        # Unregister all collectors to prevent accumulation
+        for collector in list(REGISTRY._collector_to_names.keys()):
+            try:
+                REGISTRY.unregister(collector)
+            except Exception:
+                pass
+        # Clear internal dictionaries for clean slate
+        REGISTRY._collector_to_names.clear()
+        REGISTRY._names_to_collectors.clear()
+    except ImportError:
+        # prometheus_client not installed (shouldn't happen, but safe fallback)
+        pass
+    yield
+    # Optional: cleanup after test too (belt-and-suspenders approach)
+    try:
+        from prometheus_client import REGISTRY
+        for collector in list(REGISTRY._collector_to_names.keys()):
+            try:
+                REGISTRY.unregister(collector)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 if not isinstance(sys.stdout, io.TextIOBase):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="ascii", newline="\n")  # type: ignore

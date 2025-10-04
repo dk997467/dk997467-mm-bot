@@ -9,15 +9,8 @@ from src.deploy.gate import evaluate, GateThresholds
 
 
 def _mk_ctx():
-    # ensure clean registry for each test
-    try:
-        for col in list(REGISTRY._collector_to_names.keys()):
-            try:
-                REGISTRY.unregister(col)
-            except Exception:
-                pass
-    except Exception:
-        pass
+    # NOTE: Registry cleanup now handled by conftest.py autouse fixture
+    # This helper just creates a test context with metrics
     cfg = AppConfig()
     ctx = AppContext(cfg=cfg)
     m = Metrics(ctx)

@@ -346,6 +346,11 @@ def run_linters() -> Dict[str, Any]:
 def run_tests_whitelist() -> Dict[str, Any]:
     """Run selected test suite."""
     print("Running tests whitelist...", file=sys.stderr)
+    
+    # In FAST mode, skip expensive test suite to avoid subprocess explosion
+    if os.environ.get('FULL_STACK_VALIDATION_FAST', '0') == '1':
+        return {'name': 'tests_whitelist', 'ok': True, 'details': 'SKIP: FAST mode'}
+    
     result = run_step_with_retries('tests_whitelist', [sys.executable, str(ROOT_DIR / 'tools/ci/run_selected.py')])
     return {'name': 'tests_whitelist', 'ok': result['ok'], 'details': result['details'] or ('OK' if result['ok'] else 'FAIL'), 'meta': result}
 
@@ -353,6 +358,11 @@ def run_tests_whitelist() -> Dict[str, Any]:
 def run_dry_runs() -> Dict[str, Any]:
     """Run dry-run scenarios."""
     print("Running dry runs...", file=sys.stderr)
+    
+    # In FAST mode, skip pre_live_pack (it's heavy and runs bug_bash)
+    if os.environ.get('FULL_STACK_VALIDATION_FAST', '0') == '1':
+        return {'name': 'dry_runs', 'ok': True, 'details': 'SKIP: FAST mode'}
+    
     dry_runs = [
         ([sys.executable, str(ROOT_DIR / 'tools/rehearsal/pre_live_pack.py')], 'pre_live_pack'),
     ]
@@ -365,6 +375,11 @@ def run_dry_runs() -> Dict[str, Any]:
 def run_reports() -> Dict[str, Any]:
     """Run report generation on fixtures."""
     print("Running reports...", file=sys.stderr)
+    
+    # In FAST mode, skip report generation
+    if os.environ.get('FULL_STACK_VALIDATION_FAST', '0') == '1':
+        return {'name': 'reports', 'ok': True, 'details': 'SKIP: FAST mode'}
+    
     if not (ROOT_DIR / "tests" / "fixtures").exists():
         return {'name': 'reports', 'ok': True, 'details': 'SKIP: missing fixtures'}
 
@@ -389,6 +404,11 @@ def run_secrets_scan() -> Dict[str, Any]:
 def run_audit_chain() -> Dict[str, Any]:
     """Run audit chain validation."""
     print("Running audit chain...", file=sys.stderr)
+    
+    # In FAST mode, skip audit chain (runs pytest)
+    if os.environ.get('FULL_STACK_VALIDATION_FAST', '0') == '1':
+        return {'name': 'audit_chain', 'ok': True, 'details': 'SKIP: FAST mode'}
+    
     test_path = ROOT_DIR / 'tests/e2e/test_audit_dump_e2e.py'
     if not test_path.exists():
         return {'name': 'audit_chain', 'ok': True, 'details': 'SKIP: missing test file'}
@@ -488,7 +508,7 @@ def main() -> int:
             subprocess.run(
                 [sys.executable, str(reporter_script), str(json_report_path)],
                 check=False,
-                timeout=30
+                timeout=60  # 1 minute timeout for report generation
             )
         except Exception as e:
             print(f"[WARN] Report generation failed: {e}", file=sys.stderr)

@@ -21,20 +21,20 @@ def test_edge_audit_determinism_and_golden(tmp_path):
     run_cli(out1)
     run_cli(out2)
 
-    b1 = out1.read_bytes()
-    b2 = out2.read_bytes()
+    b1 = out1.read_bytes().replace(b'\r\n', b'\n')
+    b2 = out2.read_bytes().replace(b'\r\n', b'\n')
     assert b1 == b2
     assert b1.endswith(b'\n')
 
     root = Path(__file__).resolve().parents[2]
     g = root / 'tests' / 'golden'
-    assert b1 == (g / 'EDGE_REPORT_case1.json').read_bytes()
+    assert b1 == (g / 'EDGE_REPORT_case1.json').read_bytes().replace(b'\r\n', b'\n')
 
-    md1 = (tmp_path / 'EDGE_REPORT.md').read_bytes()
-    md2 = (tmp_path / 'EDGE_REPORT_2.md').read_bytes()
+    md1 = (tmp_path / 'EDGE_REPORT.md').read_bytes().replace(b'\r\n', b'\n')
+    md2 = (tmp_path / 'EDGE_REPORT_2.md').read_bytes().replace(b'\r\n', b'\n')
     assert md1 == md2
     assert md1.endswith(b'\n')
-    assert md1 == (g / 'EDGE_REPORT_case1.md').read_bytes()
+    assert md1 == (g / 'EDGE_REPORT_case1.md').read_bytes().replace(b'\r\n', b'\n')
 
     rep = json.loads(b1.decode('ascii'))
     assert rep['total']['net_bps'] < 0.0  # Updated to match actual data

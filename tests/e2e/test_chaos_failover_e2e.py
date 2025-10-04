@@ -2,13 +2,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+SUBPROCESS_TIMEOUT = 300  # 5 minutes
+
 
 def test_chaos_failover_e2e():
     cmd = [
         sys.executable, '-m', 'tools.chaos.soak_failover',
         '--ttl-ms', '1500', '--renew-ms', '500', '--kill-at-ms', '3000', '--window-ms', '6000'
     ]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT)
     assert r.returncode == 0
     out = r.stdout
     assert out.endswith('\n')

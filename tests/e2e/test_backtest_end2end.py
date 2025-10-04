@@ -28,7 +28,7 @@ def test_cli_run_and_wf(tmp_path):
         "--out",
         str(out_json),
     ]
-    r = subprocess.run(cmd, check=False)
+    r = subprocess.run(cmd, check=False, timeout=300)
     assert r.returncode == 0
 
     g_json = (root / "tests" / "golden" / "backtest_report_case1.json").read_bytes()
@@ -57,7 +57,7 @@ def test_cli_run_and_wf(tmp_path):
         "--out",
         str(out_wf),
     ]
-    r = subprocess.run(cmd, check=False)
+    r = subprocess.run(cmd, check=False, timeout=300)
     assert r.returncode == 0
 
     g_wf = (root / "tests" / "golden" / "backtest_walkforward_case1.json").read_bytes()

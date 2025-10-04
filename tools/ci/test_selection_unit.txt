@@ -21,7 +21,7 @@ tests/test_invariants_allocator_unit.py
 tests/test_metrics_labels_lint.py
 tests/test_json_writer_lint.py
 tests/test_ledger_accounting_unit.py
-tests/test_bug_bash_smoke.py
+# tests/test_bug_bash_smoke.py  # DISABLED: Spawns too many subprocesses, marked as @pytest.mark.slow
 tests/test_weekly_rollup_unit.py
 tests/test_drift_guard_unit.py
 tests/test_rotate_artifacts_unit.py

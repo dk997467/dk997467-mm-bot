@@ -19,7 +19,7 @@ def _read_jsonl(path: str) -> List[Dict[str, Any]]:
     out = []
     with open(path, 'r', encoding='ascii') as f:
         for line in f:
-            line = line.rstrip('\n')
+            line = line.strip()  # Remove ALL whitespace (including \r\n on Windows)
             if not line:
                 continue
             out.append(json.loads(line))
@@ -50,7 +50,8 @@ def _bucket_key(ts_ms: int, bucket_min: int) -> str:
     bucket_ms = int(bucket_min) * 60_000
     b = (int(ts_ms) // bucket_ms) * bucket_ms
     import datetime as dt
-    return dt.datetime.utcfromtimestamp(b / 1000).strftime('%Y-%m-%dT%H:%MZ')
+    # Use timezone-aware datetime to avoid deprecation warning
+    return dt.datetime.fromtimestamp(b / 1000, dt.UTC).strftime('%Y-%m-%dT%H:%MZ')
 
 
 def analyze(trades_path: str, quotes_path: str, bucket_min: int) -> Dict[str, Any]:

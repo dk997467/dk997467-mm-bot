@@ -9,7 +9,7 @@ def test_repro_minimizer_e2e(tmp_path):
     inp.write_text(src, encoding='ascii')
     out_jsonl = tmp_path / 'artifacts' / 'REPRO_MIN.jsonl'
     out_md = tmp_path / 'artifacts' / 'REPRO_MIN.md'
-    r = subprocess.run([sys.executable, '-m', 'tools.debug.repro_minimizer', '--events', str(inp), '--out-jsonl', str(out_jsonl), '--out-md', str(out_md)], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, '-m', 'tools.debug.repro_minimizer', '--events', str(inp), '--out-jsonl', str(out_jsonl), '--out-md', str(out_md)], capture_output=True, text=True, timeout=300)
     assert r.returncode == 0
     got = out_jsonl.read_bytes()
     golden = Path('tests/golden/REPRO_MIN_case1.jsonl').read_bytes()

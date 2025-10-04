@@ -13,10 +13,8 @@ class TestMetricsIntegration:
     """Test metrics integration with Prometheus registry."""
     
     def setup_method(self):
-        """Clear registry and setup test environment."""
-        # Clear Prometheus registry to avoid duplicate metric errors
-        for collector in list(REGISTRY._collector_to_names.keys()):
-            REGISTRY.unregister(collector)
+        """Setup test environment."""
+        # NOTE: Registry cleanup now handled by conftest.py autouse fixture
         
         self.config = AppConfig(
             strategy=StrategyConfig(),

@@ -8,7 +8,7 @@ E2E tests are:
 - Heavy fixtures and test data
 - Run sequentially to avoid OOM
 """
-import os, sys, subprocess, pathlib
+import os, sys, subprocess, pathlib, signal
 
 os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD","1")
 os.environ.setdefault("TZ","UTC")
@@ -25,10 +25,122 @@ if not sel.exists():
 paths = [p.strip() for p in sel.read_text(encoding="ascii").splitlines() 
          if p.strip() and not p.strip().startswith("#")]
 
-# E2E tests: Run sequentially (-n 0) to prevent memory accumulation and OOM
-# Note: With PYTEST_DISABLE_PLUGIN_AUTOLOAD=1, must explicitly load xdist via -p
-# Using -n 0 (no parallelism) to keep memory usage low
-cmd = [sys.executable, "-m", "pytest", "-q", *paths]
-r = subprocess.run(cmd, check=False)
-sys.exit(r.returncode)
+# E2E tests: Run ONE AT A TIME with aggressive isolation to prevent zombie processes
+# Many E2E tests spawn multiple subprocesses (subprocess.run, Popen)
+# Running them together causes process accumulation and CPU overload
+# Strategy: Run each test file separately with timeout and process cleanup
+
+import time
+total_passed = 0
+total_failed = 0
+total_skipped = 0
+failed_tests = []
+
+def kill_all_python_children():
+    """Kill all Python child processes to prevent zombie accumulation."""
+    killed_count = 0
+    try:
+        import psutil
+        current_pid = os.getpid()
+        
+        # Strategy 1: Kill direct children recursively
+        try:
+            current = psutil.Process(current_pid)
+            children = current.children(recursive=True)
+            for child in children:
+                try:
+                    child.kill()
+                    killed_count += 1
+                except:
+                    pass
+            psutil.wait_procs(children, timeout=3)
+        except:
+            pass
+        
+        # Strategy 2: Kill ALL python.exe processes except current one
+        # This is aggressive but necessary for zombie cleanup
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                if proc.info['name'] and 'python' in proc.info['name'].lower():
+                    if proc.info['pid'] != current_pid:
+                        # Check if it's a pytest process
+                        cmdline = proc.info.get('cmdline', [])
+                        if cmdline and any('pytest' in str(arg) for arg in cmdline):
+                            proc.kill()
+                            killed_count += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        
+        return killed_count
+        
+    except ImportError:
+        # Fallback: kill process group (Unix-like systems)
+        if hasattr(signal, 'SIGTERM'):
+            try:
+                os.killpg(os.getpgid(os.getpid()), signal.SIGTERM)
+            except:
+                pass
+        return 0
+
+print(f"Running {len(paths)} E2E test files sequentially...")
+for i, test_path in enumerate(paths, 1):
+    print(f"\n[{i}/{len(paths)}] {test_path}", flush=True)
+    
+    # Run single test file with 5 minute timeout
+    # Use Popen for better process control
+    cmd = [sys.executable, "-m", "pytest", "-q", "--tb=line", test_path]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            stdout, stderr = proc.communicate(timeout=300)
+            r_code = proc.returncode
+        except subprocess.TimeoutExpired:
+            # Kill the process and all its children
+            proc.kill()
+            proc.wait()
+            print(f"    [TIMEOUT] Test exceeded 5 minute timeout", flush=True)
+            failed_tests.append(test_path)
+            kill_all_python_children()
+            time.sleep(1)
+            continue
+        
+        # Parse pytest output for stats
+        output = stdout + stderr
+        if "passed" in output:
+            print(f"    [OK] Test completed", flush=True)
+        if r_code != 0:
+            failed_tests.append(test_path)
+            print(f"    [FAIL] Test failed (exit {r_code})", flush=True)
+            # Show last few lines of output for debugging
+            lines = output.strip().split('\n')[-5:]
+            for line in lines:
+                print(f"      {line}", flush=True)
+        
+        # Aggressive cleanup: kill any remaining child processes
+        killed = kill_all_python_children()
+        if killed > 0:
+            print(f"    [CLEANUP] Killed {killed} zombie processes", flush=True)
+        
+        # Longer pause to allow OS to cleanup processes
+        time.sleep(2)
+        
+    except KeyboardInterrupt:
+        print("\n\n[INTERRUPT] Tests interrupted by user", file=sys.stderr)
+        kill_all_python_children()
+        sys.exit(130)
+
+# Final summary
+print("\n" + "="*60)
+print("E2E TESTS SUMMARY")
+print("="*60)
+print(f"Total files: {len(paths)}")
+print(f"Failed: {len(failed_tests)}")
+if failed_tests:
+    print("\nFailed tests:")
+    for t in failed_tests:
+        print(f"  - {t}")
+    sys.exit(1)
+else:
+    print("\n[SUCCESS] All E2E tests passed!")
+    sys.exit(0)
 

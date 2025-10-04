@@ -4,13 +4,16 @@ from pathlib import Path
 
 
 def run_cli(out_dir: Path):
+    import os
     root = Path(__file__).resolve().parents[2]
     cmd = [
         sys.executable, '-m', 'tools.sim.virtual_balance',
         '--trades', str(root / 'tests' / 'fixtures' / 'ledger' / 'trades_case1.jsonl'),
         '--prices', str(root / 'tests' / 'fixtures' / 'ledger' / 'prices_case1.jsonl'),
     ]
-    subprocess.check_call(cmd, cwd=str(out_dir))
+    env = os.environ.copy()
+    env['PYTHONPATH'] = str(root)
+    subprocess.check_call(cmd, cwd=str(out_dir), env=env, timeout=300)
 
 
 def test_virtual_balance_e2e(tmp_path):
