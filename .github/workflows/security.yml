@@ -35,13 +35,14 @@ jobs:
           echo ""
           
           # Filter out private/local packages
+          # Log filtered lines to stderr, only pass through clean dependencies to stdout
           awk '
             BEGIN{IGNORECASE=1}
-            /^[[:space:]]*bybit-connector/ {print "  [FILTERED] " $0; next}
-            /^[[:space:]]*mm-orderbook/ {print "  [FILTERED] " $0; next}
-            /^[[:space:]]*mm_orderbook/ {print "  [FILTERED] " $0; next}
-            /^[[:space:]]*git\+ssh:/ {print "  [FILTERED] " $0; next}
-            /^[[:space:]]*git\+https:/ {print "  [FILTERED] " $0; next}
+            /^[[:space:]]*bybit-connector/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*mm-orderbook/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*mm_orderbook/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*git\+ssh:/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*git\+https:/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
             {print}
           ' requirements.txt > requirements_audit.txt
           
