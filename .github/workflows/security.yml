@@ -26,6 +26,37 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
       
+      - name: Prepare requirements for security audit
+        shell: bash
+        run: |
+          echo "=== Filtering requirements.txt for security audit ==="
+          echo "NOTE: mm-orderbook is a local Rust module, not on PyPI"
+          echo "      Filtering it out to avoid lookup failures"
+          echo ""
+          
+          # Filter out private/local packages
+          awk '
+            BEGIN{IGNORECASE=1}
+            /^[[:space:]]*bybit-connector/ {print "  [FILTERED] " $0; next}
+            /^[[:space:]]*mm-orderbook/ {print "  [FILTERED] " $0; next}
+            /^[[:space:]]*mm_orderbook/ {print "  [FILTERED] " $0; next}
+            /^[[:space:]]*git\+ssh:/ {print "  [FILTERED] " $0; next}
+            /^[[:space:]]*git\+https:/ {print "  [FILTERED] " $0; next}
+            {print}
+          ' requirements.txt > requirements_audit.txt
+          
+          echo ""
+          echo "=== Generated requirements_audit.txt (for pip-audit) ==="
+          cat requirements_audit.txt
+          
+          echo ""
+          echo "=== GATE: Verify mm-orderbook not in requirements_audit.txt ==="
+          if grep -i "mm.orderbook\|mm_orderbook" requirements_audit.txt; then
+            echo "❌ GATE FAILED: mm-orderbook found in requirements_audit.txt"
+            exit 1
+          fi
+          echo "✓ GATE PASSED: mm-orderbook correctly filtered out"
+
       - name: Install pip-audit
         run: |
           python -m pip install --upgrade pip
@@ -36,14 +67,14 @@ jobs:
         continue-on-error: true
         run: |
           echo "=== Running pip-audit in strict mode ==="
-          pip-audit --requirement requirements.txt \
+          pip-audit --requirement requirements_audit.txt \
             --format json \
             --output pip-audit-report.json \
             --vulnerability-service osv \
             --strict
           
           # Also generate human-readable output
-          pip-audit --requirement requirements.txt \
+          pip-audit --requirement requirements_audit.txt \
             --format markdown \
             --output pip-audit-report.md \
             --vulnerability-service osv
@@ -53,7 +84,7 @@ jobs:
         continue-on-error: true
         run: |
           echo "=== Running pip-audit for all severities (informational) ==="
-          pip-audit --requirement requirements.txt \
+          pip-audit --requirement requirements_audit.txt \
             --format markdown \
             --output pip-audit-full-report.md \
             --vulnerability-service osv || true
