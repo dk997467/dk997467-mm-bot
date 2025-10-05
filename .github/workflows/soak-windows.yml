@@ -45,6 +45,10 @@ on:
         description: "Python executable path (default: auto-detect)"
         required: false
         default: "python"
+      stay_awake:
+        description: "Anti-sleep protection (1=enabled, 0=disabled)"
+        required: false
+        default: "1"
   schedule:
     - cron: "0 2 * * 1" # Понедельник в 02:00 UTC
 
@@ -85,6 +89,9 @@ jobs:
       
       # Heartbeat: Sleep between iterations (allows system cooldown)
       SOAK_HEARTBEAT_INTERVAL_SECONDS: ${{ inputs.heartbeat_interval_seconds || '300' }}
+      
+      # Stay-awake: Prevent Windows sleep during soak (1=enabled, 0=disabled)
+      SOAK_STAY_AWAKE: ${{ inputs.stay_awake || '1' }}
       
       # ========================================================================
       # VALIDATION TIMEOUTS (for full_stack_validate.py)
@@ -289,7 +296,8 @@ jobs:
           Write-Host "[CHECK] Critical files..."
           $criticalFiles = @(
             "tools\ci\full_stack_validate.py",
-            "tools\soak\resource_monitor.py"
+            "tools\soak\resource_monitor.py",
+            "tools\soak\keep_awake.ps1"
           )
           foreach ($file in $criticalFiles) {
             $path = "${{ github.workspace }}\$file"
@@ -324,12 +332,76 @@ jobs:
           "Duration: $env:SOAK_HOURS hours" | Add-Content $summaryFile
           "Iteration timeout: $env:SOAK_ITERATION_TIMEOUT_SECONDS seconds" | Add-Content $summaryFile
           "Heartbeat interval: $env:SOAK_HEARTBEAT_INTERVAL_SECONDS seconds" | Add-Content $summaryFile
+          "Anti-sleep protection: $(if ($env:SOAK_STAY_AWAKE -eq '1') {'ENABLED'} else {'DISABLED'})" | Add-Content $summaryFile
           "=============================================" | Add-Content $summaryFile
           "" | Add-Content $summaryFile
           
           Write-Host "================================================"
           Write-Host "PRE-FLIGHT CHECKS PASSED"
           Write-Host "================================================"
+
+      - name: Initialize anti-sleep protection
+        id: init-stay-awake
+        if: always()
+        run: |
+          Write-Host ""
+          Write-Host "###############################################"
+          Write-Host "# ANTI-SLEEP INITIALIZATION"
+          Write-Host "###############################################"
+          
+          # Check if stay-awake is enabled
+          $stayAwakeEnabled = $env:SOAK_STAY_AWAKE -eq "1"
+          
+          if (-not $stayAwakeEnabled) {
+            Write-Host "[INFO] SOAK_STAY_AWAKE=0 - Anti-sleep protection DISABLED"
+            Write-Host "[WARN] System may enter sleep/hibernation during soak"
+            Write-Host "###############################################"
+            return
+          }
+          
+          Write-Host "[INFO] SOAK_STAY_AWAKE=1 - Anti-sleep protection ENABLED"
+          Write-Host ""
+          
+          # Import keep_awake module
+          $keepAwakeScript = "${{ github.workspace }}\tools\soak\keep_awake.ps1"
+          
+          if (-not (Test-Path $keepAwakeScript)) {
+            Write-Host "[ERROR] keep_awake.ps1 not found at: $keepAwakeScript"
+            Write-Host "[WARN] Cannot arm anti-sleep protection"
+            Write-Host "###############################################"
+            return
+          }
+          
+          Write-Host "[INFO] Loading keep_awake module..."
+          try {
+            Import-Module $keepAwakeScript -Force -ErrorAction Stop
+            Write-Host "[OK] Module loaded successfully"
+          } catch {
+            Write-Host "[ERROR] Failed to load module: $($_.Exception.Message)"
+            Write-Host "[WARN] Continuing without anti-sleep protection"
+            Write-Host "###############################################"
+            return
+          }
+          
+          Write-Host ""
+          
+          # Step 1: Check runner service health
+          Test-RunnerService
+          
+          # Step 2: Pre-test diagnostics
+          Get-PowerHealthDiagnostics -PreTest
+          
+          # Step 3: Normalize power settings for soak
+          Set-PowerSettingsForSoak
+          
+          # Step 4: Arm WinAPI stay-awake
+          Enable-StayAwake
+          
+          Write-Host ""
+          Write-Host "###############################################"
+          Write-Host "# ANTI-SLEEP INITIALIZATION COMPLETE"
+          Write-Host "###############################################"
+          Write-Host ""
 
       - name: Start resource monitoring (background)
         id: start-monitoring
@@ -569,6 +641,60 @@ jobs:
           } else {
             Write-Host "[MONITOR] No resource data collected"
           }
+
+      - name: Cleanup anti-sleep protection
+        id: cleanup-stay-awake
+        if: always()
+        run: |
+          Write-Host ""
+          Write-Host "###############################################"
+          Write-Host "# ANTI-SLEEP CLEANUP"
+          Write-Host "###############################################"
+          
+          # Check if stay-awake was enabled
+          $stayAwakeEnabled = $env:SOAK_STAY_AWAKE -eq "1"
+          
+          if (-not $stayAwakeEnabled) {
+            Write-Host "[INFO] SOAK_STAY_AWAKE=0 - Nothing to cleanup"
+            Write-Host "###############################################"
+            return
+          }
+          
+          Write-Host "[INFO] SOAK_STAY_AWAKE=1 - Cleaning up anti-sleep protection"
+          Write-Host ""
+          
+          # Import keep_awake module
+          $keepAwakeScript = "${{ github.workspace }}\tools\soak\keep_awake.ps1"
+          
+          if (-not (Test-Path $keepAwakeScript)) {
+            Write-Host "[WARN] keep_awake.ps1 not found - cannot run post-diagnostics"
+            Write-Host "###############################################"
+            return
+          }
+          
+          Write-Host "[INFO] Loading keep_awake module..."
+          try {
+            Import-Module $keepAwakeScript -Force -ErrorAction Stop
+            Write-Host "[OK] Module loaded successfully"
+          } catch {
+            Write-Host "[ERROR] Failed to load module: $($_.Exception.Message)"
+            Write-Host "###############################################"
+            return
+          }
+          
+          Write-Host ""
+          
+          # Step 1: Post-test diagnostics (wake history, power events)
+          Get-PowerHealthDiagnostics -PostTest
+          
+          # Step 2: Disarm WinAPI stay-awake
+          Disable-StayAwake
+          
+          Write-Host ""
+          Write-Host "###############################################"
+          Write-Host "# ANTI-SLEEP CLEANUP COMPLETE"
+          Write-Host "###############################################"
+          Write-Host ""
 
       - name: Finalize and snapshot
         id: finalize
