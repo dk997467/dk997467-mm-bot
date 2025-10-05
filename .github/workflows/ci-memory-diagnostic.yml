@@ -37,27 +37,67 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: "[1/6] Install dependencies + memory profiler"
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: "[1/7] Prepare minimal requirements for CI"
+        shell: bash
+        run: |
+          echo "=== Filtering requirements.txt ==="
+          
+          # Filter out private/local packages (case-insensitive, flexible matching)
+          awk '
+            BEGIN{IGNORECASE=1}
+            /^[[:space:]]*bybit-connector/ {print "  [FILTERED] " $0; next}
+            /^[[:space:]]*mm-orderbook/ {print "  [FILTERED] " $0; next}
+            /^[[:space:]]*mm_orderbook/ {print "  [FILTERED] " $0; next}
+            /^[[:space:]]*git\+ssh:/ {print "  [FILTERED] " $0; next}
+            /^[[:space:]]*git\+https:/ {print "  [FILTERED] " $0; next}
+            {print}
+          ' requirements.txt > requirements_ci.txt
+          
+          # Add CI-specific overrides
+          echo "pydantic>=2,<3"           >> requirements_ci.txt
+          echo "pydantic-settings>=2,<3"  >> requirements_ci.txt
+          echo "pandas>=2,<3"             >> requirements_ci.txt
+          
+          echo ""
+          echo "=== Generated requirements_ci.txt ==="
+          cat requirements_ci.txt
+          
+          echo ""
+          echo "=== GATE: Verify mm-orderbook not in requirements_ci.txt ==="
+          if grep -i "mm.orderbook\|mm_orderbook" requirements_ci.txt; then
+            echo "❌ GATE FAILED: mm-orderbook found in requirements_ci.txt"
+            echo "This should never happen - check AWK filter logic"
+            exit 1
+          fi
+          echo "✓ GATE PASSED: mm-orderbook correctly filtered out"
+
+      - name: "[2/7] Install base dependencies"
+        run: |
+          python -m pip install -U pip
+          pip install maturin
+          echo "✓ pip and maturin installed"
+
+      - name: "[3/7] Install project with Rust module (editable)"
+        run: |
+          echo "=== Building and installing mm-bot with Rust extensions ==="
+          pip install -e . -v
+          echo ""
+          echo "=== Smoke test: import mm_orderbook ==="
+          python -c "import mm_orderbook; print('✓ mm_orderbook import OK')"
+
+      - name: "[4/7] Install remaining dependencies + memory profiler"
         shell: bash
         run: |
           echo "=============================================="
           echo "Installing dependencies + pytest-memray"
           echo "=============================================="
           
-          # Prepare CI requirements
-          awk '
-            BEGIN{IGNORECASE=1}
-            /^bybit-connector/ {next}
-            /^mm-orderbook/    {next}
-            /^git\+ssh:/       {next}
-            {print}
-          ' requirements.txt > requirements_ci.txt
-          echo "pydantic>=2,<3"           >> requirements_ci.txt
-          echo "pydantic-settings>=2,<3"  >> requirements_ci.txt
-          echo "pandas>=2,<3"             >> requirements_ci.txt
-          
-          # Install
-          python -m pip install -U pip
+          # Install external dependencies
           pip install -r requirements_ci.txt
           
           # Install memory profiler
@@ -67,7 +107,7 @@ jobs:
           echo "Installed packages:"
           pip list | grep -E "(pytest|memray)"
 
-      - name: "[2/6] System resource snapshot (before tests)"
+      - name: "[5/7] System resource snapshot (before tests)"
         run: |
           echo "=============================================="
           echo "SYSTEM RESOURCES (BEFORE TESTS)"
@@ -84,7 +124,7 @@ jobs:
           echo ""
           echo "=============================================="
 
-      - name: "[3/6] Run tests in batches with memory profiling"
+      - name: "[6/7] Run tests in batches with memory profiling"
         id: batch_tests
         continue-on-error: true
         run: |
@@ -107,7 +147,7 @@ jobs:
           echo ""
           echo "Batch runner exit code: ${EXIT_CODE}"
 
-      - name: "[4/6] System resource snapshot (after tests)"
+      - name: "[7/7] System resource snapshot (after tests)"
         if: always()
         run: |
           echo "=============================================="
@@ -125,7 +165,7 @@ jobs:
           echo ""
           echo "=============================================="
 
-      - name: "[5/6] Analyze memory profiles"
+      - name: "[extra] Analyze memory profiles"
         if: always()
         run: |
           echo "=============================================="
@@ -149,7 +189,7 @@ jobs:
             echo "No memory profiles found (.bin files)"
           fi
 
-      - name: "[6/6] Upload diagnostic artifacts"
+      - name: "[extra] Upload diagnostic artifacts"
         if: always()
         uses: actions/upload-artifact@v4
         with:
