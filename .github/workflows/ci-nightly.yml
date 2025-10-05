@@ -25,12 +25,18 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
       - name: Prepare minimal requirements for CI
         shell: bash
         run: |
           awk '
             BEGIN{IGNORECASE=1}
             /^bybit-connector/ {next}
+            /^mm-orderbook/ {next}
             /^git\+ssh:/ {next}
             {print}
           ' requirements.txt > requirements_ci.txt
@@ -42,6 +48,12 @@ jobs:
           python -m pip install -U pip
           pip install -r requirements_ci.txt
           pip list
+
+      - name: Install project with Rust module (editable)
+        run: |
+          pip install maturin
+          pip install -e .
+          python -c "import mm_orderbook; print('✓ mm_orderbook import OK')"
 
       - name: Run fast e2e (verbose, targeted)
         run: |

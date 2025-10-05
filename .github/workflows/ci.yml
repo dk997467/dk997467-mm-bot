@@ -30,6 +30,11 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
       - name: Prepare minimal requirements for CI
         shell: bash
         run: |
@@ -49,6 +54,12 @@ jobs:
         run: |
           python -m pip install -U pip
           pip install -r requirements_ci.txt
+
+      - name: Install project with Rust module (editable)
+        run: |
+          pip install maturin
+          pip install -e .
+          python -c "import mm_orderbook; print('✓ mm_orderbook import OK')"
 
       - name: "[DEBUG] Environment and File Structure"
         run: |
@@ -120,6 +131,16 @@ jobs:
         with:
           lfs: true  # Enable Git LFS support if needed
       
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      
       - name: "[DEBUG] Verify fixtures after checkout"
         run: |
           echo "=============================================="
@@ -149,11 +170,6 @@ jobs:
           fi
           echo "=============================================="
       
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
       - name: Prepare minimal requirements for CI
         shell: bash
         run: |
@@ -172,6 +188,12 @@ jobs:
         run: |
           python -m pip install -U pip
           pip install -r requirements_ci.txt
+
+      - name: Install project with Rust module (editable)
+        run: |
+          pip install maturin
+          pip install -e .
+          python -c "import mm_orderbook; print('✓ mm_orderbook import OK')"
 
       - name: "[DEBUG] Environment and File Structure"
         run: |
