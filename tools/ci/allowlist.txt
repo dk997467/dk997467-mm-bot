@@ -1,0 +1,39 @@
+# Secrets Scanner Allowlist
+# ===========================
+#
+# This file contains patterns that should be excluded from secrets scanning.
+# Use this to whitelist false positives that are not actual secrets.
+#
+# Format:
+#   - One pattern per line
+#   - Supports regex patterns (e.g., test_.*_key)
+#   - Supports plain string matches (e.g., example_api_key)
+#   - Lines starting with # are comments
+#   - Empty lines are ignored
+#
+# Examples:
+#   test_api_key_.*
+#   dummy_secret_.*
+#   example_password
+#
+
+# Test/CI credentials (already built-in, but listed here for documentation)
+test_api_key_for_ci_only
+test_api_secret_for_ci_only
+test_pg_password_for_ci_only
+
+# Example/documentation credentials
+example_api_key
+example_secret
+dummy_.*
+
+# Version strings that may trigger false positives
+ci-0\.0\.0
+v\d+\.\d+\.\d+
+
+# Redacted placeholders
+\*\*\*\*
+
+# Add custom patterns below this line:
+# -----------------------------------
+

@@ -199,8 +199,118 @@ sim:
 latency_boost:
   replace:
     max_concurrent: 2
-    min_interval_ms: 60
+    min_interval_ms: 40  # Reduced from 60 to 40ms for lower latency
+    backoff_on_rate_limit_ms: 200  # Auto-backoff when hitting rate limits
   tail_batch:
     tail_age_ms: 800
     max_batch: 10
     jitter_ms: 0
+
+# Fast Cancel Configuration
+fast_cancel:
+  enabled: true
+  cancel_threshold_bps: 3.0  # Cancel and replace if price moves >3bps from order price
+  cooldown_after_spike_ms: 500  # Cooldown period after volatile spike
+  spike_threshold_bps: 10.0  # Threshold to detect volatile spike (>10bps move)
+
+# Taker Cap Configuration (anti-slippage)
+taker_cap:
+  enabled: true
+  max_taker_fills_per_hour: 50  # Max number of taker fills per hour
+  max_taker_share_pct: 10.0  # Max taker share as % of all fills per hour
+  rolling_window_sec: 3600  # Rolling window for tracking (1 hour)
+
+# Queue-Aware Quoting (micro-positioning for better fills)
+queue_aware:
+  enabled: true
+  max_reprice_bps: 0.5  # Max micro-adjustment in bps to improve queue position
+  headroom_ms: 150  # Min interval between queue-based reprices
+  join_threshold_pct: 30.0  # Nudge if queue position worse than X percentile
+  book_depth_levels: 3  # Number of book levels to analyze
+
+# Inventory-Skew (auto-rebalancing via spread adjustment)
+inventory_skew:
+  enabled: true
+  target_pct: 0.0  # Target inventory as % of max position (0 = neutral)
+  max_skew_bps: 0.6  # Maximum bid/ask skew in bps
+  slope_bps_per_1pct: 0.1  # Skew strength per 1% inventory deviation
+  clamp_pct: 5.0  # Ignore noise below ±5% inventory
+
+# Adaptive Spread (dynamic spread based on market conditions)
+adaptive_spread:
+  enabled: true
+  base_spread_bps: 1.0  # Base spread
+  min_spread_bps: 0.6  # Minimum spread
+  max_spread_bps: 2.5  # Maximum spread
+  vol_window_sec: 60  # EMA window for volatility
+  depth_levels: 5  # Book levels for liquidity analysis
+  liquidity_sensitivity: 0.4  # Weight for liquidity score
+  vol_sensitivity: 0.6  # Weight for volatility score
+  latency_sensitivity: 0.3  # Weight for latency score
+  pnl_dev_sensitivity: 0.3  # Weight for PnL deviation score
+  clamp_step_bps: 0.2  # Max spread change per tick
+  cooloff_ms: 200  # Cooldown after rapid change
+
+# Risk Guards (SOFT/HARD protection)
+risk_guards:
+  enabled: true
+  # Volatility guards
+  vol_ema_sec: 60
+  vol_hard_bps: 25.0  # Hard stop if vol > 25 bps
+  vol_soft_bps: 15.0  # Soft warning if vol > 15 bps
+  # Latency guards
+  latency_p95_hard_ms: 450  # Hard stop if p95 > 450ms
+  latency_p95_soft_ms: 300  # Soft warning if p95 > 300ms
+  # PnL drawdown guards
+  pnl_window_min: 60  # Rolling window (minutes)
+  pnl_soft_z: -1.5  # Soft if z-score < -1.5σ
+  pnl_hard_z: -2.5  # Hard if z-score < -2.5σ
+  # Inventory guards
+  inventory_pct_soft: 6.0  # Soft if |inv| > 6%
+  inventory_pct_hard: 10.0  # Hard if |inv| > 10%
+  # Taker series guard
+  taker_fills_window_min: 15  # Rolling window (minutes)
+  taker_fills_soft: 12  # Soft if ≥12 taker fills
+  taker_fills_hard: 20  # Hard if ≥20 taker fills
+  # Actions
+  size_scale_soft: 0.5  # Scale order size by 0.5x in SOFT
+  halt_ms_hard: 2000  # Halt quoting for 2s in HARD
+
+# Chaos Engineering (resilience testing)
+chaos:
+  enabled: false  # Master switch: set to true for chaos testing
+  dry_run: true  # Shadow mode: no real orders (safe testing)
+  
+  # Scenario intensities (0.0-1.0, 0=disabled)
+  net_loss: 0.0  # Packet loss (0.3 = 30%)
+  exch_429: 0.0  # HTTP 429 rate limit waves
+  exch_5xx: 0.0  # HTTP 5xx errors (0.1 = 10%)
+  lat_spike_ms: 0  # Latency burst duration (200 = 200ms spikes)
+  ws_lag_ms: 0  # WebSocket lag (150 = 150ms delays)
+  ws_disconnect: 0.0  # WS disconnect probability per minute (0.05 = 5%)
+  dns_flap: 0.0  # DNS failures (0.05 = 5%)
+  clock_skew_ms: 0  # Clock drift (80 = 80ms skew)
+  mem_pressure: none  # Memory pressure: none/low/medium/high
+  rate_limit_storm: 0.0  # Aggressive rate limits (0.4 = 40%)
+  reconcile_mismatch: 0.0  # Order state mismatches (0.1 = 10%)
+  
+  # Burst control (duty cycle)
+  burst_on_sec: 30  # Burst active duration
+  burst_off_sec: 90  # Burst inactive duration
+
+# Performance Tracing (for canary deployment and diagnostics)
+trace:
+  enabled: true  # Feature flag: set to false to disable tracing overhead
+  sample_rate: 0.2  # Sample 1 in 5 ticks (20%)
+  deadline_ms: 200.0  # Deadline for tick (for deadline_miss tracking)
+  export_golden: true  # Export golden traces to artifacts/traces/
+  golden_trace_interval: 100  # Export golden trace every N ticks
+
+# Async Batching (parallel execution + command coalescing)
+async_batch:
+  enabled: true  # Feature flag: set to false for rollback to sequential
+  max_parallel_symbols: 10  # Max concurrent symbol processing per tick
+  coalesce_cancel: true  # Coalesce N cancel → 1 batch-cancel
+  coalesce_place: true  # Coalesce M place → ≤2 calls
+  max_batch_size: 20  # Max orders per batch (Bybit API limit)
+  tick_deadline_ms: 200  # Target P95 tick duration (ms)

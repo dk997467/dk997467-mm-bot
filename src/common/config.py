@@ -998,6 +998,487 @@ class StorageConfig:
 
 
 @dataclass
+class FastCancelConfig:
+    """Fast-cancel configuration for adverse price moves."""
+    enabled: bool = True
+    cancel_threshold_bps: float = 3.0  # Cancel if price moves >N bps from order price
+    cooldown_after_spike_ms: int = 500  # Cooldown period after volatile spike
+    spike_threshold_bps: float = 10.0  # Threshold to detect volatile spike
+    
+    def __post_init__(self):
+        """Validate configuration values."""
+        try:
+            self.cancel_threshold_bps = float(self.cancel_threshold_bps)
+        except Exception:
+            self.cancel_threshold_bps = 3.0
+        if self.cancel_threshold_bps < 0.5:
+            self.cancel_threshold_bps = 0.5
+        if self.cancel_threshold_bps > 50.0:
+            self.cancel_threshold_bps = 50.0
+        
+        try:
+            self.cooldown_after_spike_ms = int(self.cooldown_after_spike_ms)
+        except Exception:
+            self.cooldown_after_spike_ms = 500
+        if self.cooldown_after_spike_ms < 0:
+            self.cooldown_after_spike_ms = 0
+        if self.cooldown_after_spike_ms > 5000:
+            self.cooldown_after_spike_ms = 5000
+        
+        try:
+            self.spike_threshold_bps = float(self.spike_threshold_bps)
+        except Exception:
+            self.spike_threshold_bps = 10.0
+        if self.spike_threshold_bps < 1.0:
+            self.spike_threshold_bps = 1.0
+        if self.spike_threshold_bps > 100.0:
+            self.spike_threshold_bps = 100.0
+
+
+@dataclass
+class TakerCapConfig:
+    """Taker cap configuration to limit slippage."""
+    enabled: bool = True
+    max_taker_fills_per_hour: int = 50  # Max number of taker fills per hour
+    max_taker_share_pct: float = 10.0  # Max taker share as % of all fills
+    rolling_window_sec: int = 3600  # Rolling window for tracking (1 hour)
+    
+    def __post_init__(self):
+        """Validate configuration values."""
+        try:
+            self.max_taker_fills_per_hour = int(self.max_taker_fills_per_hour)
+        except Exception:
+            self.max_taker_fills_per_hour = 50
+        if self.max_taker_fills_per_hour < 1:
+            self.max_taker_fills_per_hour = 1
+        if self.max_taker_fills_per_hour > 1000:
+            self.max_taker_fills_per_hour = 1000
+        
+        try:
+            self.max_taker_share_pct = float(self.max_taker_share_pct)
+        except Exception:
+            self.max_taker_share_pct = 10.0
+        if self.max_taker_share_pct < 0.0:
+            self.max_taker_share_pct = 0.0
+        if self.max_taker_share_pct > 100.0:
+            self.max_taker_share_pct = 100.0
+        
+        try:
+            self.rolling_window_sec = int(self.rolling_window_sec)
+        except Exception:
+            self.rolling_window_sec = 3600
+        if self.rolling_window_sec < 60:
+            self.rolling_window_sec = 60
+        if self.rolling_window_sec > 86400:
+            self.rolling_window_sec = 86400
+
+
+@dataclass
+class QueueAwareConfig:
+    """Queue-aware quoting configuration for optimal queue positioning."""
+    enabled: bool = True
+    max_reprice_bps: float = 0.5  # Max micro-adjustment in bps to improve queue position
+    headroom_ms: int = 150  # Min interval between queue-based reprices
+    join_threshold_pct: float = 30.0  # Nudge if queue position worse than X percentile
+    book_depth_levels: int = 3  # Number of book levels to analyze for queue estimation
+    
+    def __post_init__(self):
+        """Validate configuration values."""
+        try:
+            self.max_reprice_bps = float(self.max_reprice_bps)
+        except Exception:
+            self.max_reprice_bps = 0.5
+        if self.max_reprice_bps < 0.1:
+            self.max_reprice_bps = 0.1
+        if self.max_reprice_bps > 5.0:
+            self.max_reprice_bps = 5.0
+        
+        try:
+            self.headroom_ms = int(self.headroom_ms)
+        except Exception:
+            self.headroom_ms = 150
+        if self.headroom_ms < 50:
+            self.headroom_ms = 50
+        if self.headroom_ms > 5000:
+            self.headroom_ms = 5000
+        
+        try:
+            self.join_threshold_pct = float(self.join_threshold_pct)
+        except Exception:
+            self.join_threshold_pct = 30.0
+        if self.join_threshold_pct < 0.0:
+            self.join_threshold_pct = 0.0
+        if self.join_threshold_pct > 100.0:
+            self.join_threshold_pct = 100.0
+        
+        try:
+            self.book_depth_levels = int(self.book_depth_levels)
+        except Exception:
+            self.book_depth_levels = 3
+        if self.book_depth_levels < 1:
+            self.book_depth_levels = 1
+        if self.book_depth_levels > 10:
+            self.book_depth_levels = 10
+
+
+@dataclass
+class InventorySkewConfig:
+    """Inventory-skew configuration for automatic inventory management."""
+    enabled: bool = True
+    target_pct: float = 0.0  # Target inventory as % of max position
+    max_skew_bps: float = 0.6  # Maximum bid/ask skew in bps
+    slope_bps_per_1pct: float = 0.1  # Skew strength per 1% inventory deviation
+    clamp_pct: float = 5.0  # Ignore noise below ±X% inventory
+    
+    def __post_init__(self):
+        """Validate configuration values."""
+        try:
+            self.target_pct = float(self.target_pct)
+        except Exception:
+            self.target_pct = 0.0
+        if self.target_pct < -100.0:
+            self.target_pct = -100.0
+        if self.target_pct > 100.0:
+            self.target_pct = 100.0
+        
+        try:
+            self.max_skew_bps = float(self.max_skew_bps)
+        except Exception:
+            self.max_skew_bps = 0.6
+        if self.max_skew_bps < 0.0:
+            self.max_skew_bps = 0.0
+        if self.max_skew_bps > 10.0:
+            self.max_skew_bps = 10.0
+        
+        try:
+            self.slope_bps_per_1pct = float(self.slope_bps_per_1pct)
+        except Exception:
+            self.slope_bps_per_1pct = 0.1
+        if self.slope_bps_per_1pct < 0.0:
+            self.slope_bps_per_1pct = 0.0
+        if self.slope_bps_per_1pct > 1.0:
+            self.slope_bps_per_1pct = 1.0
+        
+        try:
+            self.clamp_pct = float(self.clamp_pct)
+        except Exception:
+            self.clamp_pct = 5.0
+        if self.clamp_pct < 0.0:
+            self.clamp_pct = 0.0
+        if self.clamp_pct > 50.0:
+            self.clamp_pct = 50.0
+
+
+@dataclass
+class AdaptiveSpreadConfig:
+    """Adaptive spread configuration for dynamic spread adjustment."""
+    enabled: bool = True
+    base_spread_bps: float = 1.0  # Base spread in bps
+    min_spread_bps: float = 0.6  # Minimum allowed spread
+    max_spread_bps: float = 2.5  # Maximum allowed spread
+    vol_window_sec: int = 60  # EMA window for volatility
+    depth_levels: int = 5  # Number of book levels for liquidity
+    liquidity_sensitivity: float = 0.4  # Weight for liquidity score (0..1)
+    vol_sensitivity: float = 0.6  # Weight for volatility score (0..1)
+    latency_sensitivity: float = 0.3  # Weight for latency score (0..1)
+    pnl_dev_sensitivity: float = 0.3  # Weight for PnL deviation score (0..1)
+    clamp_step_bps: float = 0.2  # Max spread change per tick
+    cooloff_ms: int = 200  # Cooldown after rapid change
+    
+    def __post_init__(self):
+        """Validate configuration values."""
+        try:
+            self.base_spread_bps = float(self.base_spread_bps)
+        except Exception:
+            self.base_spread_bps = 1.0
+        if self.base_spread_bps < 0.1:
+            self.base_spread_bps = 0.1
+        if self.base_spread_bps > 10.0:
+            self.base_spread_bps = 10.0
+        
+        try:
+            self.min_spread_bps = float(self.min_spread_bps)
+        except Exception:
+            self.min_spread_bps = 0.6
+        if self.min_spread_bps < 0.1:
+            self.min_spread_bps = 0.1
+        
+        try:
+            self.max_spread_bps = float(self.max_spread_bps)
+        except Exception:
+            self.max_spread_bps = 2.5
+        if self.max_spread_bps < self.min_spread_bps:
+            self.max_spread_bps = self.min_spread_bps * 2
+        
+        try:
+            self.vol_window_sec = int(self.vol_window_sec)
+        except Exception:
+            self.vol_window_sec = 60
+        if self.vol_window_sec < 10:
+            self.vol_window_sec = 10
+        if self.vol_window_sec > 3600:
+            self.vol_window_sec = 3600
+        
+        try:
+            self.depth_levels = int(self.depth_levels)
+        except Exception:
+            self.depth_levels = 5
+        if self.depth_levels < 1:
+            self.depth_levels = 1
+        if self.depth_levels > 20:
+            self.depth_levels = 20
+        
+        # Validate sensitivities (0..1)
+        for attr in ['liquidity_sensitivity', 'vol_sensitivity', 'latency_sensitivity', 'pnl_dev_sensitivity']:
+            try:
+                val = float(getattr(self, attr))
+            except Exception:
+                val = 0.5
+            val = max(0.0, min(1.0, val))
+            setattr(self, attr, val)
+        
+        try:
+            self.clamp_step_bps = float(self.clamp_step_bps)
+        except Exception:
+            self.clamp_step_bps = 0.2
+        if self.clamp_step_bps < 0.01:
+            self.clamp_step_bps = 0.01
+        if self.clamp_step_bps > 5.0:
+            self.clamp_step_bps = 5.0
+        
+        try:
+            self.cooloff_ms = int(self.cooloff_ms)
+        except Exception:
+            self.cooloff_ms = 200
+        if self.cooloff_ms < 0:
+            self.cooloff_ms = 0
+        if self.cooloff_ms > 5000:
+            self.cooloff_ms = 5000
+
+
+@dataclass
+class ChaosConfig:
+    """Chaos engineering configuration for resilience testing."""
+    enabled: bool = False  # Master switch: chaos.enabled
+    dry_run: bool = True  # Shadow mode: no real orders
+    
+    # Scenario intensities (0.0-1.0)
+    net_loss: float = 0.0  # Packet loss (0.3 = 30%)
+    exch_429: float = 0.0  # HTTP 429 rate limit
+    exch_5xx: float = 0.0  # HTTP 5xx errors
+    lat_spike_ms: int = 0  # Latency burst duration
+    ws_lag_ms: int = 0  # WebSocket lag
+    ws_disconnect: float = 0.0  # WS disconnect probability per minute
+    dns_flap: float = 0.0  # DNS failures
+    clock_skew_ms: int = 0  # Clock drift
+    mem_pressure: str = "none"  # Memory pressure: none/low/medium/high
+    rate_limit_storm: float = 0.0  # Aggressive rate limits
+    reconcile_mismatch: float = 0.0  # Order state mismatches
+    
+    # Burst control
+    burst_on_sec: int = 30  # Burst on duration
+    burst_off_sec: int = 90  # Burst off duration
+    
+    def __post_init__(self):
+        """Validate configuration values."""
+        # Clamp intensities to [0, 1]
+        for attr in ['net_loss', 'exch_429', 'exch_5xx', 'ws_disconnect', 
+                     'dns_flap', 'rate_limit_storm', 'reconcile_mismatch']:
+            val = getattr(self, attr)
+            setattr(self, attr, max(0.0, min(1.0, float(val))))
+        
+        # Validate latencies
+        if self.lat_spike_ms < 0:
+            self.lat_spike_ms = 0
+        if self.lat_spike_ms > 5000:
+            self.lat_spike_ms = 5000
+        
+        if self.ws_lag_ms < 0:
+            self.ws_lag_ms = 0
+        if self.ws_lag_ms > 5000:
+            self.ws_lag_ms = 5000
+        
+        if self.clock_skew_ms < 0:
+            self.clock_skew_ms = 0
+        if self.clock_skew_ms > 1000:
+            self.clock_skew_ms = 1000
+        
+        # Validate mem_pressure
+        if self.mem_pressure not in ['none', 'low', 'medium', 'high']:
+            self.mem_pressure = 'none'
+        
+        # Validate burst durations
+        if self.burst_on_sec < 1:
+            self.burst_on_sec = 1
+        if self.burst_off_sec < 1:
+            self.burst_off_sec = 1
+
+
+@dataclass
+class TraceConfig:
+    """Performance tracing configuration for canary deployment."""
+    enabled: bool = True  # Feature flag: trace.enabled
+    sample_rate: float = 0.2  # Sampling rate (0.0-1.0), 0.2 = 1 in 5 ticks
+    deadline_ms: float = 200.0  # Deadline for tick (for deadline_miss tracking)
+    export_golden: bool = True  # Export golden traces to artifacts/traces/
+    golden_trace_interval: int = 100  # Export golden trace every N ticks
+    
+    def __post_init__(self):
+        """Validate configuration values."""
+        if self.sample_rate < 0.0:
+            self.sample_rate = 0.0
+        if self.sample_rate > 1.0:
+            self.sample_rate = 1.0
+        
+        if self.deadline_ms < 50.0:
+            self.deadline_ms = 50.0
+        if self.deadline_ms > 1000.0:
+            self.deadline_ms = 1000.0
+        
+        if self.golden_trace_interval < 1:
+            self.golden_trace_interval = 1
+
+
+@dataclass
+class AsyncBatchConfig:
+    """Async batching configuration for parallel execution and command coalescing."""
+    enabled: bool = True  # Feature flag: async_batch
+    max_parallel_symbols: int = 10  # Max concurrent symbols per tick
+    coalesce_cancel: bool = True  # Coalesce N cancel → 1 batch-cancel
+    coalesce_place: bool = True  # Coalesce M place → ≤2 calls
+    max_batch_size: int = 20  # Max orders per batch (Bybit limit)
+    tick_deadline_ms: int = 200  # Target P95 tick duration
+    
+    def __post_init__(self):
+        """Validate configuration values."""
+        if self.max_parallel_symbols < 1:
+            self.max_parallel_symbols = 1
+        if self.max_parallel_symbols > 50:
+            self.max_parallel_symbols = 50
+        
+        if self.max_batch_size < 1:
+            self.max_batch_size = 1
+        if self.max_batch_size > 20:
+            self.max_batch_size = 20  # Bybit API limit
+        
+        if self.tick_deadline_ms < 50:
+            self.tick_deadline_ms = 50
+        if self.tick_deadline_ms > 1000:
+            self.tick_deadline_ms = 1000
+
+
+@dataclass
+class RiskGuardsConfig:
+    """Risk guards configuration for safety limits."""
+    enabled: bool = True
+    # Volatility guards
+    vol_ema_sec: int = 60
+    vol_hard_bps: float = 25.0  # Hard stop threshold
+    vol_soft_bps: float = 15.0  # Soft warning threshold
+    # Latency guards
+    latency_p95_hard_ms: int = 450
+    latency_p95_soft_ms: int = 300
+    # PnL drawdown guards
+    pnl_window_min: int = 60
+    pnl_soft_z: float = -1.5  # Z-score threshold for soft
+    pnl_hard_z: float = -2.5  # Z-score threshold for hard
+    # Inventory guards
+    inventory_pct_soft: float = 6.0
+    inventory_pct_hard: float = 10.0
+    # Taker series guard
+    taker_fills_window_min: int = 15
+    taker_fills_soft: int = 12
+    taker_fills_hard: int = 20
+    # Actions
+    size_scale_soft: float = 0.5  # Size multiplier in SOFT mode
+    halt_ms_hard: int = 2000  # Halt duration in HARD mode
+    
+    def __post_init__(self):
+        """Validate configuration values."""
+        try:
+            self.vol_ema_sec = int(self.vol_ema_sec)
+        except Exception:
+            self.vol_ema_sec = 60
+        if self.vol_ema_sec < 10:
+            self.vol_ema_sec = 10
+        
+        try:
+            self.vol_hard_bps = float(self.vol_hard_bps)
+            self.vol_soft_bps = float(self.vol_soft_bps)
+        except Exception:
+            self.vol_hard_bps = 25.0
+            self.vol_soft_bps = 15.0
+        if self.vol_soft_bps >= self.vol_hard_bps:
+            self.vol_soft_bps = self.vol_hard_bps * 0.6
+        
+        try:
+            self.latency_p95_hard_ms = int(self.latency_p95_hard_ms)
+            self.latency_p95_soft_ms = int(self.latency_p95_soft_ms)
+        except Exception:
+            self.latency_p95_hard_ms = 450
+            self.latency_p95_soft_ms = 300
+        if self.latency_p95_soft_ms >= self.latency_p95_hard_ms:
+            self.latency_p95_soft_ms = self.latency_p95_hard_ms - 50
+        
+        try:
+            self.pnl_window_min = int(self.pnl_window_min)
+        except Exception:
+            self.pnl_window_min = 60
+        if self.pnl_window_min < 5:
+            self.pnl_window_min = 5
+        
+        try:
+            self.pnl_soft_z = float(self.pnl_soft_z)
+            self.pnl_hard_z = float(self.pnl_hard_z)
+        except Exception:
+            self.pnl_soft_z = -1.5
+            self.pnl_hard_z = -2.5
+        if self.pnl_hard_z > self.pnl_soft_z:
+            self.pnl_hard_z = self.pnl_soft_z - 0.5
+        
+        try:
+            self.inventory_pct_soft = float(self.inventory_pct_soft)
+            self.inventory_pct_hard = float(self.inventory_pct_hard)
+        except Exception:
+            self.inventory_pct_soft = 6.0
+            self.inventory_pct_hard = 10.0
+        if self.inventory_pct_soft >= self.inventory_pct_hard:
+            self.inventory_pct_soft = self.inventory_pct_hard * 0.6
+        
+        try:
+            self.taker_fills_window_min = int(self.taker_fills_window_min)
+        except Exception:
+            self.taker_fills_window_min = 15
+        
+        try:
+            self.taker_fills_soft = int(self.taker_fills_soft)
+            self.taker_fills_hard = int(self.taker_fills_hard)
+        except Exception:
+            self.taker_fills_soft = 12
+            self.taker_fills_hard = 20
+        if self.taker_fills_soft >= self.taker_fills_hard:
+            self.taker_fills_soft = self.taker_fills_hard - 5
+        
+        try:
+            self.size_scale_soft = float(self.size_scale_soft)
+        except Exception:
+            self.size_scale_soft = 0.5
+        if self.size_scale_soft < 0.1:
+            self.size_scale_soft = 0.1
+        if self.size_scale_soft > 1.0:
+            self.size_scale_soft = 1.0
+        
+        try:
+            self.halt_ms_hard = int(self.halt_ms_hard)
+        except Exception:
+            self.halt_ms_hard = 2000
+        if self.halt_ms_hard < 100:
+            self.halt_ms_hard = 100
+        if self.halt_ms_hard > 10000:
+            self.halt_ms_hard = 10000
+
+
+@dataclass
 class DatabaseConfig:
     """Database configuration (legacy)."""
     storage_type: str = "parquet"

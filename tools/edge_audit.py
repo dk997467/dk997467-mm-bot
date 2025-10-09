@@ -1,7 +1,15 @@
 import json
 import math
 import os
+import sys
 from typing import Any, Dict, Iterable, List, Tuple
+
+# Ensure src/ is in path for imports
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
+from src.common.runtime import get_runtime_info
 
 
 def _finite(x: Any) -> float:
@@ -176,9 +184,8 @@ def build_report(trades_path: str, quotes_path: str) -> Dict[str, Any]:
             'turnover_usd': 0.0,
         }
 
-    runtime = {'utc': os.environ.get('MM_FREEZE_UTC_ISO', '1970-01-01T00:00:00Z'), 'version': '0.1.0'}
     report: Dict[str, Any] = {
-        'runtime': runtime,
+        'runtime': get_runtime_info(),
         'symbols': {k: symbols[k] for k in sorted(symbols.keys())},
         'total': total,
     }

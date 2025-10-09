@@ -2,8 +2,16 @@ import argparse
 import glob
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List
+
+# Ensure src/ is in path for imports
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
+from src.common.runtime import get_runtime_info
 
 
 def _finite(x: Any) -> float:
@@ -162,7 +170,7 @@ def main(argv=None) -> int:
         'order_age_p95_ms': {'median': lat_median, 'p90': lat_p90, 'trend_vs_prev_week_ms': trend_lat},
         'period': period,
         'regress_guard': guards,
-        'runtime': {'utc': os.environ.get('MM_FREEZE_UTC_ISO', '1970-01-01T00:00:00Z'), 'version': '0.1.0'},
+        'runtime': get_runtime_info(),
         'taker_share_pct': {'median': tak_median, 'p90': tak_p90, 'trend_vs_prev_week_pct': trend_tak},
         'verdict': verdict,
     }

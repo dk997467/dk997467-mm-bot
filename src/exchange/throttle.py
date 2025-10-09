@@ -6,16 +6,29 @@ from src.audit.log import audit_event
 
 
 class ReplaceThrottle:
-    def __init__(self, max_concurrent: int = 2, min_interval_ms: int = 60):
+    def __init__(self, max_concurrent: int = 2, min_interval_ms: int = 40, backoff_on_rate_limit_ms: int = 200):
         self.max_concurrent = int(max_concurrent)
         self.min_interval_ms = int(min_interval_ms)
+        self.backoff_on_rate_limit_ms = int(backoff_on_rate_limit_ms)
         # invariants
         assert_range(self.max_concurrent, 1, 10000, code='E_CFG_THROTTLE')
         assert_range(self.min_interval_ms, 0, 3600000, code='E_CFG_THROTTLE')
+        assert_range(self.backoff_on_rate_limit_ms, 0, 5000, code='E_CFG_THROTTLE')
         self._last_ts_ms: Dict[str, int] = {}
         self._inflight: Dict[str, int] = {}
+        self._backoff_until_ms: Dict[str, int] = {}  # Track backoff periods per symbol
 
     def allow(self, symbol: str, now_ms: int) -> bool:
+        # Check if in backoff period
+        backoff_until = self._backoff_until_ms.get(symbol, 0)
+        if now_ms < backoff_until:
+            print(f"THROTTLE deny symbol={symbol} reason=backoff until_ms={backoff_until}")
+            try:
+                audit_event("REPLACE", symbol, {"allowed": 0, "reason": "backoff"})
+            except Exception:
+                pass
+            return False
+        
         last = self._last_ts_ms.get(symbol, -10**12)
         if self._inflight.get(symbol, 0) >= self.max_concurrent:
             print(f"THROTTLE deny symbol={symbol} reason=concurrency")
@@ -39,6 +52,15 @@ class ReplaceThrottle:
         except Exception:
             pass
         return True
+    
+    def trigger_backoff(self, symbol: str, now_ms: int) -> None:
+        """Trigger rate-limit backoff for a symbol."""
+        self._backoff_until_ms[symbol] = now_ms + self.backoff_on_rate_limit_ms
+        print(f"THROTTLE backoff triggered symbol={symbol} duration_ms={self.backoff_on_rate_limit_ms}")
+        try:
+            audit_event("THROTTLE_BACKOFF", symbol, {"backoff_ms": self.backoff_on_rate_limit_ms})
+        except Exception:
+            pass
 
     def settle(self, symbol: str) -> None:
         c = self._inflight.get(symbol, 0)

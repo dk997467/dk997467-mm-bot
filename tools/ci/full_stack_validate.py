@@ -23,6 +23,10 @@ ARTIFACTS_DIR = ROOT_DIR / "artifacts"
 CI_ARTIFACTS_DIR = ARTIFACTS_DIR / "ci"
 CI_ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
+# Import centralized runtime info generator
+sys.path.insert(0, str(ROOT_DIR))
+from src.common.runtime import get_runtime_info
+
 # Global timeout (seconds) for each external step; can be overridden via env
 TIMEOUT_SECONDS = int(os.environ.get("FSV_TIMEOUT_SEC", "300"))
 RETRIES = int(os.environ.get("FSV_RETRIES", "0"))
@@ -481,14 +485,10 @@ def main() -> int:
     overall_ok = all(section['ok'] for section in sections)
     final_result = 'OK' if overall_ok else 'FAIL'
 
-    # Support frozen time for deterministic testing (e.g., in CI)
-    utc_timestamp = os.environ.get('MM_FREEZE_UTC_ISO', datetime.now(timezone.utc).isoformat())
+    # Use centralized runtime info (respects MM_FREEZE_UTC_ISO for deterministic testing)
     report_data = {
         'result': final_result,
-        'runtime': {
-            'utc': utc_timestamp,
-            'version': os.environ.get('MM_VERSION', 'dev')
-        },
+        'runtime': get_runtime_info(version=os.environ.get('MM_VERSION', 'dev')),
         'sections': sections,
     }
 

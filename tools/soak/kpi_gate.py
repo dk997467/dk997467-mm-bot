@@ -1,6 +1,14 @@
 import json
 import os
+import sys
+
+# Ensure src/ is in path for imports
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
 from src.common.artifacts import write_json_atomic
+from src.common.runtime import get_runtime_info
 
 
 def _finite(x):
@@ -47,7 +55,7 @@ def main(argv=None) -> int:
 
     rep = {
         'reasons': reasons,
-        'runtime': {'utc': os.environ.get('MM_FREEZE_UTC_ISO', '1970-01-01T00:00:00Z'), 'version': '0.1.0'},
+        'runtime': get_runtime_info(),
         'verdict': verdict,
     }
     _write_json_atomic('artifacts/KPI_GATE.json', rep)

@@ -456,3 +456,220 @@ class BybitRESTConnector:
         
         result = await self._make_request("GET", "/v5/execution/list", params=params)
         return result
+    
+    async def batch_cancel_orders(self, symbol: str, order_ids: Optional[List[str]] = None,
+                                  client_order_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Batch cancel orders (коалесинг multiple cancel в 1 запрос).
+        
+        Args:
+            symbol: Trading symbol
+            order_ids: List of order IDs to cancel
+            client_order_ids: List of client order IDs to cancel
+        
+        Returns:
+            Batch cancel result with success/fail counts
+        """
+        if not order_ids and not client_order_ids:
+            raise ValueError("Must provide either order_ids or client_order_ids")
+        
+        # Bybit batch cancel API: /v5/order/cancel-batch
+        # NOTE: Bybit supports up to 20 orders per batch
+        all_ids = (order_ids or []) + (client_order_ids or [])
+        if len(all_ids) > 20:
+            # Split into chunks of 20
+            results = []
+            for i in range(0, len(all_ids), 20):
+                chunk_order_ids = order_ids[i:i+20] if order_ids else None
+                chunk_client_ids = client_order_ids[i:i+20] if client_order_ids else None
+                chunk_result = await self._batch_cancel_chunk(symbol, chunk_order_ids, chunk_client_ids)
+                results.append(chunk_result)
+            
+            # Merge results
+            merged = {
+                "success_count": sum(r.get("success_count", 0) for r in results),
+                "failed_count": sum(r.get("failed_count", 0) for r in results),
+                "details": [item for r in results for item in r.get("details", [])]
+            }
+            return merged
+        
+        return await self._batch_cancel_chunk(symbol, order_ids, client_order_ids)
+    
+    async def _batch_cancel_chunk(self, symbol: str, order_ids: Optional[List[str]] = None,
+                                  client_order_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Internal: batch cancel up to 20 orders."""
+        # Build request payload
+        cancel_requests = []
+        
+        if order_ids:
+            for oid in order_ids[:20]:
+                cancel_requests.append({"symbol": symbol, "orderId": oid})
+        
+        if client_order_ids:
+            for coid in client_order_ids[:20]:
+                cancel_requests.append({"symbol": symbol, "orderLinkId": coid})
+        
+        if not cancel_requests:
+            return {"success_count": 0, "failed_count": 0, "details": []}
+        
+        # Make batch cancel request
+        # Note: Bybit API might vary, adjust endpoint/payload as needed
+        # Using /v5/order/cancel-batch (hypothetical, check Bybit docs)
+        try:
+            result = await self._make_request("POST", "/v5/order/cancel-batch", data={"requests": cancel_requests})
+            
+            # Parse batch result
+            batch_result = result.get("result", {})
+            success_list = batch_result.get("list", [])
+            
+            success_count = sum(1 for item in success_list if item.get("retCode") == 0)
+            failed_count = len(success_list) - success_count
+            
+            return {
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "details": success_list
+            }
+        except Exception as e:
+            # Fallback: if batch API not available, cancel one by one
+            print(f"[WARN] Batch cancel failed, falling back to sequential: {e}")
+            return await self._fallback_cancel_sequential(symbol, order_ids, client_order_ids)
+    
+    async def _fallback_cancel_sequential(self, symbol: str, order_ids: Optional[List[str]] = None,
+                                         client_order_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Fallback: cancel orders sequentially if batch API fails."""
+        results = []
+        success_count = 0
+        failed_count = 0
+        
+        if order_ids:
+            for oid in order_ids:
+                try:
+                    await self.cancel_order(symbol, order_id=oid)
+                    success_count += 1
+                    results.append({"orderId": oid, "retCode": 0})
+                except Exception as e:
+                    failed_count += 1
+                    results.append({"orderId": oid, "retCode": 1, "error": str(e)})
+        
+        if client_order_ids:
+            for coid in client_order_ids:
+                try:
+                    await self.cancel_order(symbol, client_order_id=coid)
+                    success_count += 1
+                    results.append({"orderLinkId": coid, "retCode": 0})
+                except Exception as e:
+                    failed_count += 1
+                    results.append({"orderLinkId": coid, "retCode": 1, "error": str(e)})
+        
+        return {
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "details": results
+        }
+    
+    async def batch_place_orders(self, symbol: str, orders: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Batch place orders (коалесинг multiple place в ≤2 запроса).
+        
+        Args:
+            symbol: Trading symbol
+            orders: List of order specs: [{"side": "Buy", "qty": 1.0, "price": 50000}, ...]
+        
+        Returns:
+            Batch place result with success/fail counts
+        """
+        if not orders:
+            return {"success_count": 0, "failed_count": 0, "details": []}
+        
+        # Bybit batch place API: /v5/order/create-batch
+        # NOTE: Bybit supports up to 20 orders per batch
+        if len(orders) > 20:
+            # Split into chunks
+            results = []
+            for i in range(0, len(orders), 20):
+                chunk = orders[i:i+20]
+                chunk_result = await self._batch_place_chunk(symbol, chunk)
+                results.append(chunk_result)
+            
+            # Merge results
+            merged = {
+                "success_count": sum(r.get("success_count", 0) for r in results),
+                "failed_count": sum(r.get("failed_count", 0) for r in results),
+                "details": [item for r in results for item in r.get("details", [])]
+            }
+            return merged
+        
+        return await self._batch_place_chunk(symbol, orders)
+    
+    async def _batch_place_chunk(self, symbol: str, orders: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Internal: batch place up to 20 orders."""
+        if not orders:
+            return {"success_count": 0, "failed_count": 0, "details": []}
+        
+        # Build request payload
+        place_requests = []
+        for order_spec in orders[:20]:
+            req = {
+                "symbol": symbol,
+                "side": order_spec.get("side", "Buy"),
+                "orderType": order_spec.get("order_type", "Limit"),
+                "qty": str(order_spec.get("qty", 1.0)),
+                "timeInForce": order_spec.get("time_in_force", "GTC"),
+                "orderLinkId": self._generate_client_order_id(symbol, order_spec.get("side", "Buy"))
+            }
+            
+            if "price" in order_spec:
+                rounded_price = self._round_to_tick(order_spec["price"], symbol)
+                req["price"] = str(rounded_price)
+            
+            place_requests.append(req)
+        
+        # Make batch place request
+        try:
+            result = await self._make_request("POST", "/v5/order/create-batch", data={"requests": place_requests})
+            
+            # Parse batch result
+            batch_result = result.get("result", {})
+            success_list = batch_result.get("list", [])
+            
+            success_count = sum(1 for item in success_list if item.get("retCode") == 0)
+            failed_count = len(success_list) - success_count
+            
+            return {
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "details": success_list
+            }
+        except Exception as e:
+            # Fallback: if batch API not available, place one by one
+            print(f"[WARN] Batch place failed, falling back to sequential: {e}")
+            return await self._fallback_place_sequential(symbol, orders)
+    
+    async def _fallback_place_sequential(self, symbol: str, orders: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Fallback: place orders sequentially if batch API fails."""
+        results = []
+        success_count = 0
+        failed_count = 0
+        
+        for order_spec in orders:
+            try:
+                order_id = await self.place_order(
+                    symbol=symbol,
+                    side=order_spec.get("side", "Buy"),
+                    order_type=order_spec.get("order_type", "Limit"),
+                    qty=order_spec.get("qty", 1.0),
+                    price=order_spec.get("price"),
+                    time_in_force=order_spec.get("time_in_force", "GTC")
+                )
+                success_count += 1
+                results.append({"orderLinkId": order_id, "retCode": 0})
+            except Exception as e:
+                failed_count += 1
+                results.append({"retCode": 1, "error": str(e)})
+        
+        return {
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "details": results
+        }

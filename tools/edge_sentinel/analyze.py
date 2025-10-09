@@ -1,7 +1,15 @@
 import argparse
 import json
 import os
+import sys
 from typing import Any, Dict, List, Tuple
+
+# Ensure src/ is in path for imports
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
+from src.common.runtime import get_runtime_info
 
 
 def _finite(x: Any) -> float:
@@ -141,7 +149,7 @@ def analyze(trades_path: str, quotes_path: str, bucket_min: int) -> Dict[str, An
 
     rep = {
         'advice': advice,
-        'runtime': {'utc': os.environ.get('MM_FREEZE_UTC_ISO', '1970-01-01T00:00:00Z'), 'version': '0.1.0'},
+        'runtime': get_runtime_info(),
         'summary': summary,
         'top': {
             'contributors_by_component': contributors_by_component,
@@ -157,11 +165,12 @@ def main(argv=None) -> int:
     ap.add_argument('--trades', required=True)
     ap.add_argument('--quotes', required=True)
     ap.add_argument('--bucket-min', type=int, default=15)
+    ap.add_argument('--out-json', default='artifacts/EDGE_SENTINEL.json', help='Output JSON path')
     args = ap.parse_args(argv)
 
     rep = analyze(args.trades, args.quotes, args.bucket_min)
-    _write_json_atomic('artifacts/EDGE_SENTINEL.json', rep)
-    print('EDGE_SENTINEL WROTE artifacts/EDGE_SENTINEL.json')
+    _write_json_atomic(args.out_json, rep)
+    print(f'EDGE_SENTINEL WROTE {args.out_json}')
     return 0
 
 

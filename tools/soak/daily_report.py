@@ -1,8 +1,16 @@
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+# Ensure src/ is in path for imports
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
+from src.common.runtime import get_runtime_info
 
 
 def _finite(x: Any) -> float:
@@ -125,7 +133,7 @@ def main(argv=None) -> int:
         'order_age_p95_ms': latency,
         'pos_skew_abs_p95': pos_skew_abs_p95,
         'reg_guard': {'reason': reg.get('reason', 'NONE'), 'baseline': reg.get('baseline', {})},
-        'runtime': {'utc': os.environ.get('MM_FREEZE_UTC_ISO', '1970-01-01T00:00:00Z'), 'version': '0.1.0'},
+        'runtime': get_runtime_info(),
         'taker_share_pct': taker,
         'verdict': 'FAIL' if (verdict != 'FAIL' and not reg.get('ok', True)) else verdict,
     }
