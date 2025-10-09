@@ -1,7 +1,10 @@
 import os
 import re
 import sys
+import argparse
+import fnmatch
 from typing import List, Tuple, Set
+from pathlib import Path
 
 # Ensure src/ is in path for imports (works locally, CI, and editable install)
 _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -64,37 +67,60 @@ def _load_custom_allowlist() -> Set[str]:
     return patterns
 
 
-def _is_whitelisted(line: str, custom_allowlist: Set[str]) -> bool:
+def _is_whitelisted(line: str, file_path: str, custom_allowlist: Set[str]) -> bool:
     """
-    Check if line contains whitelisted test credentials or matches custom allowlist.
+    Check if line or file path matches allowlist.
     
     Args:
-        line: Line to check
+        line: Line content to check
+        file_path: File path (for glob matching)
         custom_allowlist: Set of custom allowlist patterns from allowlist.txt
     
     Returns:
-        True if line is whitelisted, False otherwise
+        True if line/path is whitelisted, False otherwise
     """
     # Check built-in test credentials
     for test_value in TEST_CREDENTIALS_WHITELIST:
         if test_value in line:
             return True
     
-    # Check custom allowlist (supports both plain strings and regex)
+    # Normalize file path for matching
+    normalized_path = file_path.replace('\\', '/')
+    
+    # Check custom allowlist (supports regex, glob, and plain strings)
     for pattern in custom_allowlist:
-        try:
-            # Try as regex first
-            if re.search(pattern, line):
-                return True
-        except re.error:
-            # Fallback to plain string match if regex is invalid
-            if pattern in line:
-                return True
+        # 1. Check if pattern is a path glob (contains / or ends with file extension pattern)
+        is_path_pattern = '/' in pattern or pattern.endswith('/**') or pattern.startswith('**/') or pattern.endswith('.py') or pattern.endswith('.json') or pattern.endswith('.yaml')
+        
+        if is_path_pattern:
+            # This is a path glob pattern
+            try:
+                if fnmatch.fnmatch(normalized_path, pattern):
+                    return True
+                # Also try matching against basename
+                if fnmatch.fnmatch(os.path.basename(normalized_path), pattern):
+                    return True
+            except:
+                pass
+            continue  # Don't try as line content match
+        
+        # 2. Check if pattern matches line content
+        # First, try as plain string (most common case)
+        if pattern in line:
+            return True
+        
+        # 3. If pattern starts with ^ or ends with $, treat as regex
+        if pattern.startswith('^') or pattern.endswith('$'):
+            try:
+                if re.search(pattern, line):
+                    return True
+            except re.error:
+                pass
     
     return False
 
 
-def _scan_file(path: str, patterns: List[str], custom_allowlist: Set[str]) -> List[Tuple[int, str]]:
+def _scan_file(path: str, patterns: List[str], custom_allowlist: Set[str]) -> Tuple[List[Tuple[int, str]], List[Tuple[int, str]]]:
     """
     Scan file for secret patterns.
     
@@ -104,29 +130,40 @@ def _scan_file(path: str, patterns: List[str], custom_allowlist: Set[str]) -> Li
         custom_allowlist: Custom allowlist patterns from allowlist.txt
     
     Returns:
-        List of (line_number, line_content) tuples for matches
+        Tuple of (real_hits, allowlisted_hits)
+        - real_hits: Findings not covered by allowlist
+        - allowlisted_hits: Findings covered by allowlist
     """
-    hits: List[Tuple[int, str]] = []
+    real_hits: List[Tuple[int, str]] = []
+    allowlisted_hits: List[Tuple[int, str]] = []
+    
     try:
         with open(path, 'r', encoding='ascii', errors='ignore') as f:
             for i, line in enumerate(f, start=1):
                 s = line.rstrip('\n')
                 
-                # Skip lines with whitelisted test credentials or custom allowlist
-                if _is_whitelisted(s, custom_allowlist):
-                    continue
-                
+                # Check if line matches any pattern
+                matched = False
                 for pat in patterns:
                     try:
                         if re.search(pat, s):
-                            hits.append((i, s))
+                            matched = True
                             break
                     except re.error:
-                        # ignore bad patterns
                         continue
+                
+                if not matched:
+                    continue
+                
+                # Check if finding is allowlisted
+                if _is_whitelisted(s, path, custom_allowlist):
+                    allowlisted_hits.append((i, s))
+                else:
+                    real_hits.append((i, s))
     except Exception:
-        return []
-    return hits
+        return ([], [])
+    
+    return (real_hits, allowlisted_hits)
 
 
 def main(argv=None) -> int:
@@ -134,13 +171,20 @@ def main(argv=None) -> int:
     Scan for secrets in source code.
     
     Exit codes:
-        0: No secrets found (or all findings are false positives)
-        1: Scan failed (import error, invalid patterns, etc.)
-        2: Secrets found (informational warning, not fatal in CI)
+        0: No secrets found OR all findings are allowlisted (unless --strict)
+        1: Real secrets found (always in --strict mode, optional otherwise)
     
-    Note: This scanner intentionally does NOT fail CI jobs (rc=0 even if FOUND=1).
-          It only reports findings for human review. Use strict mode if needed.
+    Environment:
+        CI_STRICT_SECRETS=1: Enable strict mode (exit 1 on any findings)
     """
+    parser = argparse.ArgumentParser(description="Scan for secrets in source code")
+    parser.add_argument('--strict', action='store_true', 
+                       help='Exit 1 even if all findings are allowlisted')
+    args = parser.parse_args(argv)
+    
+    # Check for strict mode from env or CLI
+    strict_mode = args.strict or os.environ.get('CI_STRICT_SECRETS') == '1'
+    
     try:
         patterns = list(DEFAULT_PATTERNS)
     except Exception as e:
@@ -153,7 +197,8 @@ def main(argv=None) -> int:
     if custom_allowlist:
         print(f"[INFO] Loaded {len(custom_allowlist)} custom allowlist patterns", file=sys.stderr)
     
-    found: List[Tuple[str, int, str]] = []
+    real_findings: List[Tuple[str, int, str]] = []
+    allowlisted_findings: List[Tuple[str, int, str]] = []
     scan_errors = []
     
     for root in TARGET_DIRS:
@@ -167,49 +212,81 @@ def main(argv=None) -> int:
                 if not _is_text_file(path):
                     continue
                 try:
-                    for (ln, s) in _scan_file(path, patterns, custom_allowlist):
-                        found.append((path.replace('\\', '/'), ln, s))
+                    real_hits, allowlisted_hits = _scan_file(path, patterns, custom_allowlist)
+                    
+                    for (ln, s) in real_hits:
+                        real_findings.append((path.replace('\\', '/'), ln, s))
+                    
+                    for (ln, s) in allowlisted_hits:
+                        allowlisted_findings.append((path.replace('\\', '/'), ln, s))
                 except Exception as e:
                     scan_errors.append(f"{path}: {e}")
 
-    # deterministic order
-    found.sort(key=lambda x: (x[0], x[1]))
+    # Deterministic order (ASCII-only, stable sort)
+    real_findings.sort(key=lambda x: (x[0], x[1]))
+    allowlisted_findings.sort(key=lambda x: (x[0], x[1]))
     
     # Report scan errors (non-fatal warnings)
     if scan_errors:
         print("[WARN] Some files could not be scanned:", file=sys.stderr)
-        for err in scan_errors[:5]:  # Limit to first 5 errors
+        for err in sorted(scan_errors)[:5]:  # Deterministic order, limit to 5
             print(f"  {err}", file=sys.stderr)
         if len(scan_errors) > 5:
             print(f"  ... and {len(scan_errors) - 5} more", file=sys.stderr)
     
-    if found:
-        # Import redact function (already in sys.path from above)
-        try:
-            from src.common.redact import redact
-        except ImportError:
-            print("[WARN] Could not import redact function, showing raw findings", file=sys.stderr)
-            redact = lambda s, p: s  # Fallback: no redaction
-        
-        print("[WARN] Potential secrets detected (review required):", file=sys.stderr)
-        for (p, ln, s) in found:
-            # Do not print the secret itself; just show redacted and location
+    # Import redact function
+    try:
+        from src.common.redact import redact
+    except ImportError:
+        print("[WARN] Could not import redact function, showing raw findings", file=sys.stderr)
+        redact = lambda s, p: s  # Fallback: no redaction
+    
+    # Report findings
+    if real_findings:
+        print("[ERROR] Real secrets detected (NOT allowlisted):", file=sys.stderr)
+        for (p, ln, s) in real_findings:
             red = redact(s, patterns)
             print(f"  {p}:{ln}: {red}", file=sys.stderr)
         
-        # Write machine-readable output
-        sys.stdout.write(f'FOUND={len(found)}\n')
+        sys.stdout.write(f'FOUND={len(real_findings)}\n')
+        sys.stdout.write('ALLOWLISTED=0\n')
         sys.stdout.write('RESULT=FOUND\n')
         
-        # NOTE: Return 0 (not 2) to avoid failing CI jobs
-        # Secrets scanner is informational only, not a hard gate
-        print(f"[INFO] Found {len(found)} potential secret(s)", file=sys.stderr)
-        print("[INFO] Review findings above and add false positives to tools/ci/allowlist.txt", file=sys.stderr)
-        return 0  # Changed from 2 to 0 - informational only
+        print(f"[ERROR] Found {len(real_findings)} real secret(s)", file=sys.stderr)
+        return 1  # Always fail on real secrets
+    
+    elif allowlisted_findings:
+        # All findings are allowlisted
+        if strict_mode:
+            print("[WARN] Allowlisted findings detected (strict mode):", file=sys.stderr)
+            for (p, ln, s) in allowlisted_findings[:10]:  # Limit output
+                red = redact(s, patterns)
+                print(f"  {p}:{ln}: {red}", file=sys.stderr)
+            if len(allowlisted_findings) > 10:
+                print(f"  ... and {len(allowlisted_findings) - 10} more", file=sys.stderr)
+            
+            sys.stdout.write(f'FOUND=0\n')
+            sys.stdout.write(f'ALLOWLISTED={len(allowlisted_findings)}\n')
+            sys.stdout.write('RESULT=ALLOWLISTED_STRICT\n')
+            
+            print(f"[WARN] {len(allowlisted_findings)} allowlisted finding(s) (strict mode: exit 1)", file=sys.stderr)
+            return 1  # Fail in strict mode
+        else:
+            print(f"[INFO] {len(allowlisted_findings)} allowlisted finding(s) (ignored)", file=sys.stderr)
+            
+            sys.stdout.write(f'FOUND=0\n')
+            sys.stdout.write(f'ALLOWLISTED={len(allowlisted_findings)}\n')
+            sys.stdout.write('RESULT=ALLOWLISTED\n')
+            
+            return 0  # Success: all findings are allowlisted
+    
     else:
-        sys.stdout.write('[OK] no secrets found\n')
+        # No findings at all
         sys.stdout.write('FOUND=0\n')
+        sys.stdout.write('ALLOWLISTED=0\n')
         sys.stdout.write('RESULT=OK\n')
+        
+        print("[OK] No secrets found", file=sys.stderr)
         return 0
 
 

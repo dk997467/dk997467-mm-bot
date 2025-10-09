@@ -1,39 +1,64 @@
 # Secrets Scanner Allowlist
-# ===========================
-#
-# This file contains patterns that should be excluded from secrets scanning.
-# Use this to whitelist false positives that are not actual secrets.
-#
-# Format:
-#   - One pattern per line
-#   - Supports regex patterns (e.g., test_.*_key)
-#   - Supports plain string matches (e.g., example_api_key)
-#   - Lines starting with # are comments
-#   - Empty lines are ignored
-#
-# Examples:
-#   test_api_key_.*
-#   dummy_secret_.*
-#   example_password
-#
+# Patterns to ignore (glob and regex supported)
 
-# Test/CI credentials (already built-in, but listed here for documentation)
+# Masked secrets (common placeholders)
+****
+\*\*\*\*
+PLACEHOLDER
+DUMMY
+REDACTED
+EXAMPLE
+TEST_SECRET
+test_secret
+dummy_key
+placeholder_key
+
+# Test/example paths (glob patterns)
+tests/**
+test_*
+**/test_*.py
+**/test_*.json
+docs/**
+examples/**
+artifacts/**
+temp_*/**
+dummy/**
+
+# Tuning/sweep paths (synthetic configs)
+tools/**
+sweep/**
+*.sweep.yaml
+*_sweep.yaml
+
+# Source code with redacted names (security measure)
+src/**
+cli/**
+
+# CI test credentials (non-real)
 test_api_key_for_ci_only
 test_api_secret_for_ci_only
 test_pg_password_for_ci_only
 
-# Example/documentation credentials
-example_api_key
-example_secret
-dummy_.*
+# Common false positives
+lorem_ipsum
+sample_data
+demo_key
+example_token
 
-# Version strings that may trigger false positives
-ci-0\.0\.0
-v\d+\.\d+\.\d+
+# Git/build artifacts
+.git/**
+.pytest_cache/**
+__pycache__/**
+*.pyc
+node_modules/**
+dist/**
+build/**
 
-# Redacted placeholders
-\*\*\*\*
+# Documentation examples
+Example:.*
+Sample:.*
 
-# Add custom patterns below this line:
-# -----------------------------------
-
+# Regex patterns for masked values (must start with ^ or end with $)
+^[*]{4,}$
+^X{4,}$
+^-{4,}$
