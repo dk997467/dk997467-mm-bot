@@ -6,6 +6,10 @@ Creates a release ZIP with VERSION, deploy configs, docs, and manifests.
 
 Usage:
     python -m tools.release.make_bundle
+    
+    # With environment variables for determinism:
+    MM_VERSION=test-1.0.0 MM_FREEZE_UTC_ISO=2025-01-01T00:00:00Z \
+        python -m tools.release.make_bundle
 """
 
 import hashlib
@@ -28,11 +32,24 @@ def calculate_sha256(file_path: Path) -> str:
 
 
 def read_version() -> str:
-    """Read version from VERSION file."""
+    """Read version from MM_VERSION env var or VERSION file."""
+    # Priority: MM_VERSION env var > VERSION file > default
+    if 'MM_VERSION' in os.environ:
+        return os.environ['MM_VERSION']
+    
     version_file = Path("VERSION")
     if version_file.exists():
         return version_file.read_text().strip()
+    
     return "0.1.0"
+
+
+def get_utc_timestamp() -> str:
+    """Get UTC timestamp, respecting MM_FREEZE_UTC_ISO for determinism."""
+    if 'MM_FREEZE_UTC_ISO' in os.environ:
+        return os.environ['MM_FREEZE_UTC_ISO']
+    
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def collect_files() -> List[Dict[str, str]]:
@@ -63,7 +80,9 @@ def collect_files() -> List[Dict[str, str]]:
     for pattern in deploy_patterns:
         path = Path(pattern)
         if path.exists():
-            files.append({"path": str(path), "dest": str(path), "desc": f"Deploy config: {path.name}"})
+            # Normalize to forward slashes for cross-platform consistency
+            dest_path = str(path).replace('\\', '/')
+            files.append({"path": str(path), "dest": dest_path, "desc": f"Deploy config: {path.name}"})
     
     # Optional: recent reports (if they exist)
     report_patterns = [
@@ -75,20 +94,28 @@ def collect_files() -> List[Dict[str, str]]:
     for pattern in report_patterns:
         path = Path(pattern)
         if path.exists():
-            files.append({"path": str(path), "dest": f"reports/{path.name}", "desc": f"Report: {path.name}"})
+            # Normalize to forward slashes for cross-platform consistency
+            dest_path = f"reports/{path.name}".replace('\\', '/')
+            files.append({"path": str(path), "dest": dest_path, "desc": f"Report: {path.name}"})
     
     return files
 
 
-def create_manifest(files: List[Dict[str, str]], version: str) -> Dict[str, Any]:
+def create_manifest(files: List[Dict[str, str]], version: str, utc: str) -> Dict[str, Any]:
     """Create manifest with SHA256 hashes."""
     manifest = {
-        "version": version,
-        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "bundle": {
+            "version": version,
+            "utc": utc
+        },
+        "result": "READY",  # Can be READY or PARTIAL
         "files": []
     }
     
-    for file_info in files:
+    # Sort files by path for deterministic ordering
+    sorted_files = sorted(files, key=lambda f: f["dest"])
+    
+    for file_info in sorted_files:
         path = Path(file_info["path"])
         if path.exists():
             manifest["files"].append({
@@ -98,73 +125,99 @@ def create_manifest(files: List[Dict[str, str]], version: str) -> Dict[str, Any]
                 "description": file_info["desc"]
             })
     
+    # Set result based on file collection
+    if not manifest["files"]:
+        manifest["result"] = "PARTIAL"
+    
     return manifest
 
 
-def create_bundle(output_path: str) -> int:
+def create_bundle() -> int:
     """Create release bundle ZIP."""
     version = read_version()
+    utc = get_utc_timestamp()
     
     print("\n" + "="*60)
     print(f"CREATING RELEASE BUNDLE (v{version})")
     print("="*60 + "\n")
     
     # Collect files
-    print("[1/4] Collecting files...")
+    print("[1/5] Collecting files...")
     files = collect_files()
     print(f"       Found {len(files)} files\n")
     
     # Create manifest
-    print("[2/4] Creating manifest...")
-    manifest = create_manifest(files, version)
+    print("[2/5] Creating manifest...")
+    manifest = create_manifest(files, version, utc)
     print(f"       Generated manifest with {len(manifest['files'])} entries\n")
     
-    # Create ZIP
-    print("[3/4] Creating ZIP archive...")
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    # Write manifest to artifacts/
+    print("[3/5] Writing manifest...")
+    manifest_path = Path("artifacts/RELEASE_BUNDLE_manifest.json")
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     
-    with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-        # Add collected files
-        for file_info in files:
-            path = Path(file_info["path"])
-            if path.exists():
-                zf.write(path, file_info["dest"])
-                print(f"       + {file_info['dest']}")
-        
-        # Add manifest
-        manifest_json = json.dumps(manifest, indent=2, sort_keys=True)
-        zf.writestr("MANIFEST.json", manifest_json)
-        print(f"       + MANIFEST.json")
+    with open(manifest_path, 'w', encoding='ascii') as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+    
+    print(f"       Manifest: {manifest_path}\n")
+    
+    # Create ZIP with deterministic filename
+    print("[4/5] Creating ZIP archive...")
+    
+    # Bundle filename: {safe_utc}-mm-bot.zip
+    safe_utc = utc.replace(':', '')
+    bundle_dir = Path("dist/release_bundle")
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    bundle_path = bundle_dir / f"{safe_utc}-mm-bot.zip"
+    
+    # Sort files by dest path for deterministic zip ordering
+    sorted_files = sorted(files, key=lambda f: f["dest"])
+    
+    with zipfile.ZipFile(bundle_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # Add files in sorted order to match manifest
+        for file_entry in manifest["files"]:
+            # Find original file info
+            orig_file = next((f for f in files if f["dest"] == file_entry["path"]), None)
+            if orig_file:
+                path = Path(orig_file["path"])
+                if path.exists():
+                    zf.write(path, file_entry["path"])
+                    print(f"       + {file_entry['path']}")
     
     print()
     
     # Calculate bundle hash
-    print("[4/4] Calculating bundle SHA256...")
-    bundle_hash = calculate_sha256(Path(output_path))
-    bundle_size = Path(output_path).stat().st_size
+    print("[5/5] Calculating bundle SHA256...")
+    bundle_hash = calculate_sha256(bundle_path)
+    bundle_size = bundle_path.stat().st_size
     
     print(f"       SHA256: {bundle_hash}")
     print(f"       Size: {bundle_size:,} bytes\n")
     
     # Write hash file
-    hash_file = output_path + ".sha256"
+    hash_file = str(bundle_path) + ".sha256"
     with open(hash_file, 'w') as f:
-        f.write(f"{bundle_hash}  {Path(output_path).name}\n")
+        f.write(f"{bundle_hash}  {bundle_path.name}\n")
     
     print("-"*60)
-    print(f"Bundle: {output_path}")
+    print(f"Bundle: {bundle_path}")
     print(f"Hash:   {hash_file}")
-    print("-"*60 + "\n")
+    print(f"Manifest: {manifest_path}")
+    print("-"*60)
+    
+    # Final marker for CI/CD parsing
+    print(f"\n| release_bundle | OK | RELEASE_BUNDLE={bundle_path} |\n")
     
     return 0
 
 
 def main() -> int:
     """Main entry point."""
-    version = read_version()
-    output_path = f"artifacts/release/mm-bot-v{version}.zip"
-    
-    return create_bundle(output_path)
+    try:
+        return create_bundle()
+    except Exception as e:
+        print(f"[ERROR] Failed to create release bundle: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
