@@ -27,3 +27,9 @@ docker-compose.override.yml
 # OS junk
 .DS_Store
 Thumbs.db
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+artifacts/**        # если не хотите коммитить артефакты
