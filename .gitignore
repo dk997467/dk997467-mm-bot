@@ -1,4 +1,41 @@
-# venv / IDE / cachevenv/.env/.env.pytest_cache/__pycache__/*.pyc# build & local outputsartifacts/artifacts/**# Auto-generated symlinks (created by conftest.py)# These point to tests/fixtures/ and tests/golden//fixtures//golden/# Secrets (NEVER commit!)secrets/*.secret*.key*.pem# Docker overrides (may contain sensitive config)docker-compose.override.yml# OS junk.DS_StoreThumbs.db__pycache__/*.pyc.pytest_cache/.mypy_cache/.ruff_cache/artifacts/**        # если не хотите коммитить артефакты# --- allow golden & fixtures under tests/ ---
+# venv / IDE / cache
+venv/
+.env/
+.env
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# build & local outputs
+artifacts/
+artifacts/**
+
+# Auto-generated symlinks (created by conftest.py)
+# These point to tests/fixtures/ and tests/golden/
+# Anchor repo-root ignores (do not affect tests/*)
+/fixtures/
+/golden/
+
+# Secrets (NEVER commit!)
+secrets/
+*.secret
+*.key
+*.pem
+
+# Docker overrides (may contain sensitive config)
+docker-compose.override.yml
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- allow golden & fixtures under tests/ ---
 !tests/fixtures/
 !tests/fixtures/**
 !tests/golden/
