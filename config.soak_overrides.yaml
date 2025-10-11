@@ -1,0 +1,52 @@
+# Pre-Soak Configuration Overrides
+# Apply these settings before running 24-72h soak test
+#
+# Usage:
+#   python main.py --config config.yaml --config-override config.soak_overrides.yaml
+
+# Pipeline Architecture (REQUIRED for stage metrics)
+pipeline:
+  enabled: true
+  sample_stage_tracing: 0.2
+
+# MD-Cache (REQUIRED for fetch_md latency budget)
+md_cache:
+  enabled: true
+  ttl_ms: 100
+  max_depth: 50
+  stale_ok: true
+  fresh_ms_for_pricing: 60
+  skip_pricing_on_stale: false
+  invalidate_on_ws_gap_ms: 300
+  max_inflight_refresh: 1
+
+# Taker Cap (REQUIRED: ≤ 9%)
+taker_cap:
+  enabled: true
+  max_taker_fills_per_hour: 50
+  max_taker_share_pct: 9.0  # Pre-soak requirement: ≤ 9%
+  rolling_window_sec: 3600
+
+# Verify other critical flags are enabled
+async_batch:
+  enabled: true
+  max_parallel_symbols: 10
+  coalesce_cancel: true
+  coalesce_place: true
+  max_batch_size: 20
+  tick_deadline_ms: 200
+
+trace:
+  enabled: true
+  sample_rate: 0.2  # 20% sampling (within [0.1, 0.3] range)
+  deadline_ms: 200.0
+  export_golden: true
+  golden_trace_interval: 100
+
+risk_guards:
+  enabled: true
+  # All guard thresholds inherited from config.yaml
+
+# Safety: Ensure logging is configured
+# (No config needed - handled by calibration_loggers.py)
+

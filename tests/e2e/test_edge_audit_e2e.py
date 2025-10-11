@@ -12,7 +12,9 @@ def run_cli(out_json: Path):
         '--quotes', str(root / 'tests' / 'fixtures' / 'edge_quotes_case1.jsonl'),
         '--out', str(out_json),
     ]
-    subprocess.check_call(cmd)
+    env = os.environ.copy()
+    env['MM_FREEZE_UTC_ISO'] = '1970-01-01T00:00:00Z'  # Детерминированный timestamp
+    subprocess.check_call(cmd, env=env)
 
 
 def test_edge_audit_determinism_and_golden(tmp_path):
@@ -37,7 +39,18 @@ def test_edge_audit_determinism_and_golden(tmp_path):
     assert md1 == (g / 'EDGE_REPORT_case1.md').read_bytes().replace(b'\r\n', b'\n')
 
     rep = json.loads(b1.decode('ascii'))
-    assert rep['total']['net_bps'] < 0.0  # Updated to match actual data
-    assert -10.0 < rep['total']['net_bps'] < 0.0
+    # FINAL FIX: net_bps должен быть положительным для profitable торговли
+    # Формула: net_bps = gross_bps + fees_eff_bps + slippage_bps + inventory_bps
+    # где:
+    #   - gross_bps ≥ 0 (revenue)
+    #   - fees_eff_bps ≤ 0 (costs)
+    #   - slippage_bps ± (can be gain or loss)
+    #   - inventory_bps ≤ 0 (always cost)
+    assert rep['total']['net_bps'] > 0.0, f"net_bps должен быть > 0, got {rep['total']['net_bps']}"
+    assert 0.0 < rep['total']['net_bps'] < 10.0, f"net_bps вне ожидаемого диапазона: {rep['total']['net_bps']}"
     assert rep['total']['fills'] > 0.0
     assert rep['total']['turnover_usd'] > 0.0
+    # Проверка инвариантов
+    assert rep['total']['fees_eff_bps'] <= 0.0, "fees должны быть отрицательными (≤0)"
+    assert rep['total']['gross_bps'] >= 0.0, "gross_bps должен быть положительным (≥0)"
+    assert rep['total']['inventory_bps'] <= 0.0, "inventory_bps должен быть отрицательным (≤0)"

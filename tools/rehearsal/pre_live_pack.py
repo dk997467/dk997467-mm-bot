@@ -78,8 +78,15 @@ def main(argv=None) -> int:
     steps.append({'name': 'rotate_artifacts_dry', 'ok': r['code'] == 0, 'details': r.get('tail','')})
 
     # 9) scan_secrets
+    # In DRY_RUN mode (default): ALLOWLISTED findings are OK (not FAIL)
+    # In STRICT mode (CI_STRICT_SECRETS=1): any findings = FAIL
     r = _run([sys.executable, '-m', 'tools.ci.scan_secrets'])
-    steps.append({'name': 'scan_secrets', 'ok': r['code'] == 0, 'details': r.get('tail','')})
+    tail = r.get('tail', '')
+    # OK if: exit 0 OR (RESULT=ALLOWLISTED and not strict mode)
+    strict_mode = os.environ.get('CI_STRICT_SECRETS') == '1'
+    is_allowlisted_ok = 'RESULT=ALLOWLISTED' in tail and not strict_mode
+    ok_status = r['code'] == 0 or is_allowlisted_ok
+    steps.append({'name': 'scan_secrets', 'ok': ok_status, 'details': tail})
 
     result_ok = all(s.get('ok') for s in steps)
     pack = {

@@ -1,0 +1,111 @@
+# Rollback Policy Configuration
+# Defines which alerts trigger auto-rollback and what actions to take
+
+version: "1.0"
+
+# Hard gates: Critical alerts that trigger immediate rollback
+hard_gates:
+  - name: SoakLatencyP95High
+    description: "Latency P95 exceeds 150ms for 10+ minutes"
+    severity: critical
+    action: rollback
+  
+  - name: SoakDeadlineMissRate
+    description: "Deadline miss rate > 2% for 10+ minutes"
+    severity: critical
+    action: rollback
+  
+  - name: SoakEdgeDegradation
+    description: "Edge BPS (24h EMA) < 2.0 for 30+ minutes"
+    severity: critical
+    action: rollback
+  
+  - name: SoakMDCacheHitRatio
+    description: "MD Cache hit ratio < 70% for 15+ minutes"
+    severity: critical
+    action: rollback
+  
+  - name: SoakCircuitBreakerOpen
+    description: "Circuit breaker open for 5+ minutes"
+    severity: critical
+    action: rollback
+  
+  - name: SoakGuardTrip
+    description: "Safety guard triggered"
+    severity: critical
+    action: rollback
+
+# Soft gates: Warning alerts that don't trigger rollback but send notifications
+soft_gates:
+  - name: SoakMakerTakerImbalance
+    description: "Maker share < 85% for 30+ minutes"
+    severity: warning
+    action: notify
+  
+  - name: SoakWSLagHigh
+    description: "WebSocket lag > 200ms for 15+ minutes"
+    severity: warning
+    action: notify
+
+# Auto-rollback configuration
+auto_rollback:
+  enabled: true
+  cooldown_minutes: 15
+  
+  # Actions to perform on rollback
+  actions:
+    - type: scale_strategy
+      params:
+        target: 0
+      description: "Scale strategy to 0 (stop trading)"
+    
+    - type: circuit_state
+      params:
+        state: OPEN
+      description: "Open circuit breaker (block new orders)"
+    
+    - type: freeze_orders
+      params:
+        enabled: true
+      description: "Freeze order placements"
+    
+    - type: notify
+      params:
+        channels: ["oncall", "slack"]
+        priority: critical
+      description: "Send critical notifications"
+  
+  # Post-rollback verification
+  verification:
+    wait_seconds: 60
+    checks:
+      - metric: mm_active_orders_total
+        condition: "== 0"
+        timeout_seconds: 300
+      - metric: mm_circuit_breaker_state
+        condition: "state == 'open'"
+        timeout_seconds: 30
+
+# Notification configuration
+notifications:
+  oncall:
+    enabled: true
+    method: pagerduty
+    escalation_policy: "sre-primary"
+  
+  slack:
+    enabled: true
+    channel: "#alerts-trading"
+    mention: "@here"
+  
+  email:
+    enabled: false
+    recipients: []
+
+# Logging and audit
+audit:
+  enabled: true
+  log_path: "/var/log/mm-bot/rollback_audit.jsonl"
+  include_metrics: true
+  include_stack_trace: false
+

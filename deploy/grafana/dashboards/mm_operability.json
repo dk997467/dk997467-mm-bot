@@ -1,0 +1,154 @@
+{
+  "dashboard": {
+    "title": "MM Bot Operability",
+    "tags": ["mm-bot", "operability", "soak"],
+    "timezone": "UTC",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Edge & PnL",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "mm_edge_bps_ema1h",
+            "legendFormat": "Edge BPS (1h EMA)",
+            "refId": "A"
+          },
+          {
+            "expr": "mm_edge_bps_ema24h",
+            "legendFormat": "Edge BPS (24h EMA)",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "BPS"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Latency P95",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(mm_stage_duration_ms_bucket{stage=\"tick_total\"}[5m]))",
+            "legendFormat": "Tick Total P95",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(mm_stage_duration_ms_bucket{stage=\"fetch_md\"}[5m]))",
+            "legendFormat": "Fetch MD P95",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "ms", "label": "Latency"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Maker/Taker Share",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "mm_maker_share_ratio",
+            "legendFormat": "Maker Share",
+            "refId": "A"
+          },
+          {
+            "expr": "1 - mm_maker_share_ratio",
+            "legendFormat": "Taker Share",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "percentunit", "label": "Share"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 4,
+        "title": "MD Cache Hit Ratio",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "rate(mm_md_cache_hit_total[5m]) / (rate(mm_md_cache_hit_total[5m]) + rate(mm_md_cache_miss_total[5m]))",
+            "legendFormat": "Hit Ratio",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "percentunit", "label": "Ratio", "min": 0, "max": 1},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Deadline Miss Rate",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "rate(mm_deadline_miss_total[5m])",
+            "legendFormat": "Deadline Miss Rate",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "percentunit", "label": "Rate"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 6,
+        "title": "WS Lag",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "mm_ws_lag_max_ms",
+            "legendFormat": "WS Lag Max",
+            "refId": "A"
+          },
+          {
+            "expr": "mm_ws_lag_p95_ms",
+            "legendFormat": "WS Lag P95",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "ms", "label": "Lag"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Circuit Breaker & Guards",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+        "targets": [
+          {
+            "expr": "mm_circuit_breaker_state",
+            "legendFormat": "Circuit Breaker State",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(mm_guard_trip_total[5m])",
+            "legendFormat": "Guard Trip Rate",
+            "refId": "B"
+          }
+        ]
+      }
+    ]
+  },
+  "overwrite": true
+}
+

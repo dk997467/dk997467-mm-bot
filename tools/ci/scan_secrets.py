@@ -197,11 +197,23 @@ def main(argv=None) -> int:
     if custom_allowlist:
         print(f"[INFO] Loaded {len(custom_allowlist)} custom allowlist patterns", file=sys.stderr)
     
+    # Determine work_dir and artifacts root for critical path checking
+    work_dir = Path(os.getenv("WORK_DIR", _repo_root)).resolve()
+    artifacts_root = (work_dir / "artifacts").resolve()
+    
     real_findings: List[Tuple[str, int, str]] = []
     allowlisted_findings: List[Tuple[str, int, str]] = []
+    critical_findings: List[Tuple[str, int, str]] = []  # Findings in artifacts/**
     scan_errors = []
     
-    for root in TARGET_DIRS:
+    # Scan target directories (src, cli, tools)
+    scan_dirs = list(TARGET_DIRS)
+    
+    # Also scan artifacts/ if it exists (for critical path detection)
+    if artifacts_root.exists():
+        scan_dirs.append(str(artifacts_root))
+    
+    for root in scan_dirs:
         if not os.path.exists(root):
             continue
         for dirpath, dirnames, filenames in os.walk(root):
@@ -214,17 +226,41 @@ def main(argv=None) -> int:
                 try:
                     real_hits, allowlisted_hits = _scan_file(path, patterns, custom_allowlist)
                     
+                    # Check if file is under artifacts/** (critical path)
+                    file_path_resolved = Path(path).resolve()
+                    is_in_artifacts = False
+                    try:
+                        # Check if file is under artifacts directory
+                        file_path_resolved.relative_to(artifacts_root)
+                        is_in_artifacts = True
+                    except ValueError:
+                        # Not under artifacts/
+                        is_in_artifacts = False
+                    
+                    # Classify findings
                     for (ln, s) in real_hits:
-                        real_findings.append((path.replace('\\', '/'), ln, s))
+                        normalized_path = path.replace('\\', '/')
+                        if is_in_artifacts:
+                            # Critical: any secret in artifacts/** → exit 2
+                            critical_findings.append((normalized_path, ln, s))
+                        else:
+                            # Regular finding in repo
+                            real_findings.append((normalized_path, ln, s))
                     
                     for (ln, s) in allowlisted_hits:
-                        allowlisted_findings.append((path.replace('\\', '/'), ln, s))
+                        normalized_path = path.replace('\\', '/')
+                        if is_in_artifacts:
+                            # Even allowlisted findings in artifacts are critical
+                            critical_findings.append((normalized_path, ln, s))
+                        else:
+                            allowlisted_findings.append((normalized_path, ln, s))
                 except Exception as e:
                     scan_errors.append(f"{path}: {e}")
 
     # Deterministic order (ASCII-only, stable sort)
     real_findings.sort(key=lambda x: (x[0], x[1]))
     allowlisted_findings.sort(key=lambda x: (x[0], x[1]))
+    critical_findings.sort(key=lambda x: (x[0], x[1]))
     
     # Report scan errors (non-fatal warnings)
     if scan_errors:
@@ -241,22 +277,32 @@ def main(argv=None) -> int:
         print("[WARN] Could not import redact function, showing raw findings", file=sys.stderr)
         redact = lambda s, p: s  # Fallback: no redaction
     
-    # Report findings
+    # PRIORITY 1: Critical findings in artifacts/** → exit 2
+    if critical_findings:
+        print("[CRITICAL] Secrets found in artifacts/** (bypasses allowlist):", file=sys.stderr)
+        for (p, ln, s) in critical_findings[:10]:  # Limit output
+            red = redact(s, patterns)
+            print(f"  {p}:{ln}: {red}", file=sys.stderr)
+        if len(critical_findings) > 10:
+            print(f"  ... and {len(critical_findings) - 10} more", file=sys.stderr)
+        
+        print("| scan_secrets | FAIL | RESULT=CRITICAL |")
+        print(f"[CRITICAL] Found {len(critical_findings)} secret(s) in artifacts/", file=sys.stderr)
+        return 2  # Exit 2 for critical findings
+    
+    # PRIORITY 2: Real findings in repo (not allowlisted) → exit 1
     if real_findings:
         print("[ERROR] Real secrets detected (NOT allowlisted):", file=sys.stderr)
         for (p, ln, s) in real_findings:
             red = redact(s, patterns)
             print(f"  {p}:{ln}: {red}", file=sys.stderr)
         
-        sys.stdout.write(f'FOUND={len(real_findings)}\n')
-        sys.stdout.write('ALLOWLISTED=0\n')
-        sys.stdout.write('RESULT=FOUND\n')
-        
+        print("| scan_secrets | FAIL | RESULT=FOUND |")
         print(f"[ERROR] Found {len(real_findings)} real secret(s)", file=sys.stderr)
-        return 1  # Always fail on real secrets
+        return 1  # Fail on real secrets
     
+    # PRIORITY 3: Allowlisted findings (strict mode check)
     elif allowlisted_findings:
-        # All findings are allowlisted
         if strict_mode:
             print("[WARN] Allowlisted findings detected (strict mode):", file=sys.stderr)
             for (p, ln, s) in allowlisted_findings[:10]:  # Limit output
@@ -265,27 +311,17 @@ def main(argv=None) -> int:
             if len(allowlisted_findings) > 10:
                 print(f"  ... and {len(allowlisted_findings) - 10} more", file=sys.stderr)
             
-            sys.stdout.write(f'FOUND=0\n')
-            sys.stdout.write(f'ALLOWLISTED={len(allowlisted_findings)}\n')
-            sys.stdout.write('RESULT=ALLOWLISTED_STRICT\n')
-            
+            print("| scan_secrets | FAIL | RESULT=ALLOWLISTED_STRICT |")
             print(f"[WARN] {len(allowlisted_findings)} allowlisted finding(s) (strict mode: exit 1)", file=sys.stderr)
             return 1  # Fail in strict mode
         else:
             print(f"[INFO] {len(allowlisted_findings)} allowlisted finding(s) (ignored)", file=sys.stderr)
-            
-            sys.stdout.write(f'FOUND=0\n')
-            sys.stdout.write(f'ALLOWLISTED={len(allowlisted_findings)}\n')
-            sys.stdout.write('RESULT=ALLOWLISTED\n')
-            
+            print("| scan_secrets | OK | RESULT=CLEAN |")
             return 0  # Success: all findings are allowlisted
     
+    # PRIORITY 4: No findings at all
     else:
-        # No findings at all
-        sys.stdout.write('FOUND=0\n')
-        sys.stdout.write('ALLOWLISTED=0\n')
-        sys.stdout.write('RESULT=OK\n')
-        
+        print("| scan_secrets | OK | RESULT=CLEAN |")
         print("[OK] No secrets found", file=sys.stderr)
         return 0
 

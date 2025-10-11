@@ -12,8 +12,9 @@ artifacts/**
 
 # Auto-generated symlinks (created by conftest.py)
 # These point to tests/fixtures/ and tests/golden/
-fixtures/
-golden/
+# Anchor repo-root ignores (do not affect tests/*)
+/fixtures/
+/golden/
 
 # Secrets (NEVER commit!)
 secrets/
@@ -27,3 +28,19 @@ docker-compose.override.yml
 # OS junk
 .DS_Store
 Thumbs.db
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- allow golden & fixtures under tests/ ---
+!tests/fixtures/
+!tests/fixtures/**
+!tests/golden/
+!tests/golden/**
+dist/
+artifacts/
+*.zip
+*.sha256
