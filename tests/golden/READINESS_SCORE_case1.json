@@ -1,1 +1,0 @@
-{"runtime":{"utc":"1970-01-01T00:00:00Z","version":"0.1.0"},"score":100.0,"sections":{"chaos":10.0,"edge":30.0,"guards":10.0,"latency":25.0,"taker":15.0,"tests":10.0},"verdict":"GO"}
