@@ -24,8 +24,8 @@ def test_edge_math_single_symbol():
     g3 = (100.1 - 100.0)/100.0*1e4
     gross = (g1+g2+g3)/3.0
 
-    # fees
-    f1, f2, f3 = 0.1, 0.2, 0.0
+    # fees (должны быть отрицательными - издержки)
+    f1, f2, f3 = -0.1, -0.2, -0.0
     fees = (f1+f2+f3)/3.0
 
     # adverse
@@ -40,17 +40,25 @@ def test_edge_math_single_symbol():
     s3 = (100.1 - 100.2)/100.2*1e4
     slippage = (s1+s2+s3)/3.0
 
-    # inventory proxy
+    # inventory proxy: SIGNED qty (buy=+, sell=-), then cost = -abs(avg/notional)
+    # Trade 1: B 1.0 → inv_signed = +1.0
+    # Trade 2: S 2.0 → inv_signed = -2.0
+    # Trade 3: B 1.5 → inv_signed = +1.5
+    # avg_inv_signed = (1.0 - 2.0 + 1.5) / 3 = 0.5/3 = 0.1667
     notional = [100.0*1.0, 99.8*2.0, 100.1*1.5]
-    inv = [1.0, 2.0, 1.5]
-    inv_bps = (sum(inv)/3.0) / (sum(notional)/3.0)
+    inv_signed = [1.0, -2.0, 1.5]  # Buy=+, Sell=-
+    avg_inv = sum(inv_signed)/3.0
+    avg_notional = sum(notional)/3.0
+    inv_bps = -1.0 * abs(avg_inv / avg_notional)  # Always negative (cost)
 
     assert abs(m['gross_bps'] - gross) <= 1e-12
     assert abs(m['fees_eff_bps'] - fees) <= 1e-12
     assert abs(m['adverse_bps'] - adverse) <= 1e-12
     assert abs(m['slippage_bps'] - slippage) <= 1e-12
     assert abs(m['inventory_bps'] - inv_bps) <= 1e-12
-    assert abs(m['net_bps'] - (gross - fees - adverse - slippage - inv_bps)) <= 1e-12
+    # FINAL FIX: net_bps = gross + fees + slippage + inventory
+    # All components already signed: fees≤0, inventory≤0, slippage±
+    assert abs(m['net_bps'] - (gross + fees + slippage + inv_bps)) <= 1e-12
     assert m['fills'] == 3.0
     assert m['turnover_usd'] > 0.0
 
