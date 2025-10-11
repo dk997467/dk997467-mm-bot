@@ -1,0 +1,1 @@
+{"cancel_batch_events":1.28,"fill_rate":0.040000000000000036,"notes":"baseline","order_age_p50_ms":300.0,"order_age_p95_ms":636.256,"order_age_p99_ms":828.384,"replace_rate_per_min":32.00000000000001,"runtime":{"utc":"1970-01-01T00:00:00Z","version":"0.1.0"}}

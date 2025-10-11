@@ -1,0 +1,14 @@
+CHAOS t=0 role=A state=leader lock=acq idem_hits=0
+CHAOS t=100 role=A state=leader lock=renew idem_hits=0
+CHAOS t=600 role=A state=leader lock=renew idem_hits=1
+CHAOS t=1100 role=A state=leader lock=renew idem_hits=1
+CHAOS t=1600 role=A state=leader lock=renew idem_hits=2
+CHAOS t=2100 role=A state=leader lock=renew idem_hits=3
+CHAOS t=2600 role=A state=leader lock=renew idem_hits=4
+CHAOS t=4100 role=B state=leader lock=acq idem_hits=5
+CHAOS t=4200 role=B state=leader lock=renew idem_hits=6
+CHAOS t=4700 role=B state=leader lock=renew idem_hits=7
+CHAOS t=5200 role=B state=leader lock=renew idem_hits=8
+CHAOS t=5700 role=B state=leader lock=renew idem_hits=9
+CHAOS_SUMMARY takeover_ms=1100 idem_hits_total=9 alert_storm_counter=0
+CHAOS_RESULT=OK

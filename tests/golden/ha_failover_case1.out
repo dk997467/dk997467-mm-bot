@@ -1,0 +1,8 @@
+t=0000 A=leader B=follower
+t=0500 A=leader B=follower
+t=1500 A=leader B=follower
+t=3000 A=follower B=leader
+t=3300 A=follower B=leader
+t=4000 A=follower B=leader
+t=4100 A=follower B=leader
+t=4400 A=follower B=leader

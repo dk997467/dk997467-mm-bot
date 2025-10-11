@@ -1,0 +1,4 @@
+{"fields":{"api_secret":"SeCrEt","delta":0.1},"kind":"ALLOC","prev_sha256":"GENESIS","sha256":"466e454bf54c9576d04a4209fdcbe48013ca745c075d4faac5804d0d841fbdb9","symbol":"BTCUSDT","ts":"1970-01-01T00:00:01Z"}
+{"fields":{"order_id":"abc","price":100.1},"kind":"REPLACE","prev_sha256":"466e454bf54c9576d04a4209fdcbe48013ca745c075d4faac5804d0d841fbdb9","sha256":"21bf0000cb1b2b83a8a661c930a6ee57de6309a80a070521eb3bdc099afb369f","symbol":"BTCUSDT","ts":"1970-01-01T00:01:00Z"}
+{"fields":{"order_id":"def"},"kind":"CANCEL","prev_sha256":"21bf0000cb1b2b83a8a661c930a6ee57de6309a80a070521eb3bdc099afb369f","sha256":"895040a11fce304e9eda1797fd189a3a5cef79a50927d014541eda9e9704dd57","symbol":"ETHUSDT","ts":"1970-01-01T00:02:00Z"}
+{"fields":{"reason":"DRIFT_EDGE"},"kind":"GUARD","prev_sha256":"895040a11fce304e9eda1797fd189a3a5cef79a50927d014541eda9e9704dd57","sha256":"77ac829f7fe91b060f696ce89a356a8155812b8f1d8425c8bc1df2c46146d3f8","symbol":"","ts":"1970-01-01T00:03:00Z"}
