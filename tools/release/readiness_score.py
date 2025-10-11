@@ -4,6 +4,8 @@ import json
 import os
 import sys
 from collections import OrderedDict
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 # Ensure src/ is in path for imports
@@ -11,7 +13,34 @@ _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
-from src.common.runtime import get_runtime_info
+
+def read_version() -> str:
+    """Read version from VERSION file, fallback to 0.1.0"""
+    version_file = Path(_repo_root) / "VERSION"
+    if version_file.exists():
+        return version_file.read_text().strip()
+    return "0.1.0"
+
+
+def get_deterministic_runtime() -> Dict[str, str]:
+    """
+    Get runtime info with support for CI_FAKE_UTC deterministic testing.
+    
+    Priority:
+    1. CI_FAKE_UTC (for this script's deterministic testing)
+    2. MM_FREEZE_UTC_ISO (for common runtime.py compatibility)
+    3. Real UTC time
+    """
+    utc = os.getenv("CI_FAKE_UTC") or os.getenv("MM_FREEZE_UTC_ISO")
+    if not utc:
+        utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    
+    version = read_version()
+    
+    return {
+        "utc": utc,
+        "version": version
+    }
 
 
 def _finite(x: Any) -> float:
@@ -135,30 +164,36 @@ def main(argv=None) -> int:
     reports = _read_reports(args.dir)
     sections, total = _section_scores(reports)
 
-    verdict = 'GO' if total >= 90.0 else ('WARN' if total >= 70.0 else 'NO-GO')
+    # Simplified verdict: GO if perfect score (100.0), otherwise HOLD
+    verdict = 'GO' if total == 100.0 else 'HOLD'
     
-    # Deterministic mode: use OrderedDict for guaranteed key order
-    # READINESS_DETERMINISTIC=1 or BUILD_UTC set → deterministic runtime
-    rep = OrderedDict([
-        ('runtime', get_runtime_info()),
-        ('score', round(total, 6)),
-        ('sections', sections),
-        ('verdict', verdict),
-    ])
-    _write_json_atomic(args.out_json, rep)
+    # Build deterministic payload
+    payload = {
+        "runtime": get_deterministic_runtime(),
+        "score": round(total, 6),
+        "sections": sections,
+        "verdict": verdict
+    }
+    
+    # Write to file (using existing atomic write)
+    _write_json_atomic(args.out_json, payload)
 
+    # Write markdown report
     md_path = os.path.splitext(args.out_json)[0] + '.md'
     lines: List[str] = []
     lines.append('READINESS SCORE\n')
     lines.append('\n')
-    lines.append('Result: ' + verdict + '  Score: ' + ('%.6f' % rep['score']) + '\n')
+    lines.append('Result: ' + verdict + '  Score: ' + ('%.6f' % payload['score']) + '\n')
     lines.append('\n')
     lines.append('| section | score |\n')
     lines.append('|---------|-------|\n')
     for sec in ['edge', 'latency', 'taker', 'guards', 'chaos', 'tests']:
         lines.append('| ' + sec + ' | ' + ('%.6f' % float(sections.get(sec, 0.0))) + ' |\n')
     _write_text_atomic(md_path, ''.join(lines))
-    print('READINESS', verdict)
+    
+    # Print deterministic JSON to stdout (no whitespace, sorted keys)
+    print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    
     return 0
 
 
