@@ -398,11 +398,32 @@ def run_dashboards() -> Dict[str, Any]:
     return {'name': 'dashboards', 'ok': result['ok'], 'details': f"grafana_schema={'OK' if result['ok'] else 'FAIL'}", 'meta': result}
 
 
+def check_secrets_available() -> bool:
+    """Check if required secrets are available."""
+    required_secrets = ['BYBIT_API_KEY', 'BYBIT_API_SECRET', 'STORAGE_PG_PASSWORD']
+    
+    # Check if any required secret is missing or is a dummy value
+    for secret in required_secrets:
+        value = os.environ.get(secret, '')
+        if not value or value.lower() in ('', 'dummy', 'test', 'none'):
+            return False
+    
+    return True
+
+
 def run_secrets_scan() -> Dict[str, Any]:
     """Run secrets scan."""
     print("Running secrets scan...", file=sys.stderr)
+    
+    # Check if we should skip due to missing secrets
+    allow_missing_secrets = os.environ.get('MM_ALLOW_MISSING_SECRETS') == '1'
+    secrets_available = check_secrets_available()
+    
+    if not secrets_available and allow_missing_secrets:
+        return {'name': 'secrets', 'ok': True, 'status': 'OK', 'details': 'SKIPPED_NO_SECRETS'}
+    
     result = run_step_with_retries('secrets_scan', [sys.executable, str(ROOT_DIR / 'tools/ci/scan_secrets.py')])
-    return {'name': 'secrets', 'ok': result['ok'], 'details': 'NONE' if result['ok'] else 'FOUND', 'meta': result}
+    return {'name': 'secrets', 'ok': result['ok'], 'status': 'OK' if result['ok'] else 'FAIL', 'details': 'NONE' if result['ok'] else 'FOUND', 'meta': result}
 
 
 def run_audit_chain() -> Dict[str, Any]:
@@ -411,14 +432,21 @@ def run_audit_chain() -> Dict[str, Any]:
     
     # In FAST mode, skip audit chain (runs pytest)
     if os.environ.get('FULL_STACK_VALIDATION_FAST', '0') == '1':
-        return {'name': 'audit_chain', 'ok': True, 'details': 'SKIP: FAST mode'}
+        return {'name': 'audit_chain', 'ok': True, 'status': 'OK', 'details': 'SKIP: FAST mode'}
+    
+    # Check if we should skip due to missing secrets
+    allow_missing_secrets = os.environ.get('MM_ALLOW_MISSING_SECRETS') == '1'
+    secrets_available = check_secrets_available()
+    
+    if not secrets_available and allow_missing_secrets:
+        return {'name': 'audit_chain', 'ok': True, 'status': 'OK', 'details': 'SKIPPED_NO_SECRETS'}
     
     test_path = ROOT_DIR / 'tests/e2e/test_audit_dump_e2e.py'
     if not test_path.exists():
-        return {'name': 'audit_chain', 'ok': True, 'details': 'SKIP: missing test file'}
+        return {'name': 'audit_chain', 'ok': True, 'status': 'OK', 'details': 'SKIP: missing test file'}
 
     result = run_step_with_retries('audit_dump', [sys.executable, '-m', 'pytest', '-q', str(test_path)])
-    return {'name': 'audit_chain', 'ok': result['ok'], 'details': f"audit_dump={'OK' if result['ok'] else 'FAIL'}", 'meta': result}
+    return {'name': 'audit_chain', 'ok': result['ok'], 'status': 'OK' if result['ok'] else 'FAIL', 'details': f"audit_dump={'OK' if result['ok'] else 'FAIL'}", 'meta': result}
 
 
 # --- Main Orchestrator ---

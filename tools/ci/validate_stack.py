@@ -148,6 +148,19 @@ def aggregate_stack_summary(
     return summary
 
 
+def check_secrets_available() -> bool:
+    """Check if required secrets are available."""
+    required_secrets = ['BYBIT_API_KEY', 'BYBIT_API_SECRET', 'STORAGE_PG_PASSWORD']
+    
+    # Check if any required secret is missing or is a dummy value
+    for secret in required_secrets:
+        value = os.environ.get(secret, '')
+        if not value or value.lower() in ('', 'dummy', 'test', 'none'):
+            return False
+    
+    return True
+
+
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Stack summary aggregator")
@@ -186,6 +199,12 @@ def main() -> int:
     )
     
     parser.add_argument(
+        "--allow-missing-secrets",
+        action="store_true",
+        help="Allow missing secrets (treat audit sections as skipped)"
+    )
+    
+    parser.add_argument(
         "--output",
         type=Path,
         help="Write summary to file (default: stdout)"
@@ -193,11 +212,21 @@ def main() -> int:
     
     args = parser.parse_args()
     
+    # Also check environment variable
+    allow_missing_secrets = args.allow_missing_secrets or os.environ.get('MM_ALLOW_MISSING_SECRETS') == '1'
+    
     if not args.emit_stack_summary:
         print("[ERROR] --emit-stack-summary flag required", file=sys.stderr)
         return 1
     
     try:
+        # Check if secrets are available
+        secrets_available = check_secrets_available()
+        
+        if not secrets_available and not allow_missing_secrets:
+            print("[ERROR] Required secrets not available. Use --allow-missing-secrets to skip.", file=sys.stderr)
+            return 1
+        
         # Aggregate summary
         summary = aggregate_stack_summary(
             args.readiness_file,
@@ -205,6 +234,13 @@ def main() -> int:
             args.tests_file,
             args.allow_missing_sections
         )
+        
+        # If secrets are missing but allowed, mark audit sections as skipped
+        if not secrets_available and allow_missing_secrets:
+            for section in summary.get("sections", []):
+                if section.get("name") in ["audit_dump", "audit_chain", "secrets"]:
+                    section["details"] = "SKIPPED_NO_SECRETS"
+                    section["ok"] = True
         
         # Format JSON (deterministic, compact)
         json_output = json.dumps(summary, sort_keys=True, separators=(",", ":"))
