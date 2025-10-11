@@ -3,6 +3,7 @@ import glob
 import json
 import os
 import sys
+from collections import OrderedDict
 from typing import Any, Dict, List, Tuple
 
 # Ensure src/ is in path for imports
@@ -135,12 +136,15 @@ def main(argv=None) -> int:
     sections, total = _section_scores(reports)
 
     verdict = 'GO' if total >= 90.0 else ('WARN' if total >= 70.0 else 'NO-GO')
-    rep = {
-        'runtime': get_runtime_info(),
-        'score': round(total, 6),
-        'sections': sections,
-        'verdict': verdict,
-    }
+    
+    # Deterministic mode: use OrderedDict for guaranteed key order
+    # READINESS_DETERMINISTIC=1 or BUILD_UTC set → deterministic runtime
+    rep = OrderedDict([
+        ('runtime', get_runtime_info()),
+        ('score', round(total, 6)),
+        ('sections', sections),
+        ('verdict', verdict),
+    ])
     _write_json_atomic(args.out_json, rep)
 
     md_path = os.path.splitext(args.out_json)[0] + '.md'
