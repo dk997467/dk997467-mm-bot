@@ -186,12 +186,13 @@ jobs:
         id: cache-cargo
         # Purpose: Cache Cargo dependencies to speed up Rust builds
         # Key: Based on Cargo.lock for stable hashing
+        # Note: Using forward slashes for cross-platform compatibility
         uses: actions/cache@v4
         with:
           path: |
-            ~\.cargo\registry\index
-            ~\.cargo\registry\cache
-            ~\.cargo\git\db
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
           key: ${{ runner.os }}-cargo-${{ hashFiles('rust/**/Cargo.lock', 'rust/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
@@ -199,9 +200,10 @@ jobs:
       - name: "[4/12] Cache Rust build artifacts"
         id: cache-rust-target
         # Purpose: Cache compiled Rust artifacts for faster rebuilds
+        # Note: Using forward slashes for cross-platform compatibility
         uses: actions/cache@v4
         with:
-          path: rust\target
+          path: rust/target
           key: ${{ runner.os }}-rust-target-${{ hashFiles('rust/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-rust-target-
@@ -219,10 +221,14 @@ jobs:
       - name: "[6/12] Cache pip dependencies"
         id: cache-pip
         # Purpose: Cache Python packages to speed up installation
+        # Note: Using forward slashes for cross-platform compatibility
+        # Windows: ~/AppData/Local/pip/Cache
         uses: actions/cache@v4
         with:
-          path: ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          path: |
+            ~/AppData/Local/pip/Cache
+            **/__pycache__
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
@@ -340,14 +346,13 @@ jobs:
           Write-Host "PRE-FLIGHT CHECKS PASSED"
           Write-Host "================================================"
 
-      - name: Initialize anti-sleep protection
+      - name: Keep runner awake (fallback)
         id: init-stay-awake
-        if: always()
+        shell: pwsh
         run: |
-          Write-Host ""
-          Write-Host "###############################################"
-          Write-Host "# ANTI-SLEEP INITIALIZATION"
-          Write-Host "###############################################"
+          Write-Host "================================================"
+          Write-Host "ANTI-SLEEP PROTECTION (FALLBACK)"
+          Write-Host "================================================"
           
           # Check if stay-awake is enabled
           $stayAwakeEnabled = $env:SOAK_STAY_AWAKE -eq "1"
@@ -355,52 +360,37 @@ jobs:
           if (-not $stayAwakeEnabled) {
             Write-Host "[INFO] SOAK_STAY_AWAKE=0 - Anti-sleep protection DISABLED"
             Write-Host "[WARN] System may enter sleep/hibernation during soak"
-            Write-Host "###############################################"
+            Write-Host "================================================"
             return
           }
           
-          Write-Host "[INFO] SOAK_STAY_AWAKE=1 - Anti-sleep protection ENABLED"
+          Write-Host "[INFO] SOAK_STAY_AWAKE=1 - Starting background keep-alive job"
           Write-Host ""
           
-          # Import keep_awake module
-          $keepAwakeScript = "${{ github.workspace }}\tools\soak\keep_awake.ps1"
-          
-          if (-not (Test-Path $keepAwakeScript)) {
-            Write-Host "[ERROR] keep_awake.ps1 not found at: $keepAwakeScript"
-            Write-Host "[WARN] Cannot arm anti-sleep protection"
-            Write-Host "###############################################"
-            return
+          # Start simple background job (no module imports, no Export-ModuleMember noise)
+          # This job just pings every 5 minutes to prevent runner idle timeout
+          $global:keepAwakeJob = Start-Job -ScriptBlock {
+            $iteration = 0
+            while ($true) {
+              $iteration++
+              Write-Host "[KEEP-AWAKE] Heartbeat #$iteration at $(Get-Date -Format 'HH:mm:ss')"
+              Start-Sleep -Seconds 300  # 5 minutes
+            }
           }
           
-          Write-Host "[INFO] Loading keep_awake module..."
-          try {
-            Import-Module $keepAwakeScript -Force -ErrorAction Stop
-            Write-Host "[OK] Module loaded successfully"
-          } catch {
-            Write-Host "[ERROR] Failed to load module: $($_.Exception.Message)"
-            Write-Host "[WARN] Continuing without anti-sleep protection"
-            Write-Host "###############################################"
-            return
+          if ($global:keepAwakeJob) {
+            Write-Host "[OK] Keep-awake job started (ID: $($global:keepAwakeJob.Id))"
+            
+            # Save job ID to environment for cleanup step
+            "KEEP_AWAKE_JOB_ID=$($global:keepAwakeJob.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } else {
+            Write-Host "[ERROR] Failed to start keep-awake job"
           }
           
           Write-Host ""
-          
-          # Step 1: Check runner service health
-          Test-RunnerService
-          
-          # Step 2: Pre-test diagnostics
-          Get-PowerHealthDiagnostics -PreTest
-          
-          # Step 3: Normalize power settings for soak
-          Set-PowerSettingsForSoak
-          
-          # Step 4: Arm WinAPI stay-awake
-          Enable-StayAwake
-          
-          Write-Host ""
-          Write-Host "###############################################"
-          Write-Host "# ANTI-SLEEP INITIALIZATION COMPLETE"
-          Write-Host "###############################################"
+          Write-Host "================================================"
+          Write-Host "ANTI-SLEEP PROTECTION ARMED"
+          Write-Host "================================================"
           Write-Host ""
 
       - name: Start resource monitoring (background)
@@ -642,58 +632,58 @@ jobs:
             Write-Host "[MONITOR] No resource data collected"
           }
 
-      - name: Cleanup anti-sleep protection
+      - name: Stop anti-sleep
         id: cleanup-stay-awake
         if: always()
+        shell: pwsh
         run: |
-          Write-Host ""
-          Write-Host "###############################################"
-          Write-Host "# ANTI-SLEEP CLEANUP"
-          Write-Host "###############################################"
+          Write-Host "================================================"
+          Write-Host "ANTI-SLEEP CLEANUP"
+          Write-Host "================================================"
           
           # Check if stay-awake was enabled
           $stayAwakeEnabled = $env:SOAK_STAY_AWAKE -eq "1"
           
           if (-not $stayAwakeEnabled) {
             Write-Host "[INFO] SOAK_STAY_AWAKE=0 - Nothing to cleanup"
-            Write-Host "###############################################"
+            Write-Host "================================================"
             return
           }
           
-          Write-Host "[INFO] SOAK_STAY_AWAKE=1 - Cleaning up anti-sleep protection"
-          Write-Host ""
+          Write-Host "[INFO] Stopping keep-awake background job..."
           
-          # Import keep_awake module
-          $keepAwakeScript = "${{ github.workspace }}\tools\soak\keep_awake.ps1"
+          # Try to get job ID from environment (set in init step)
+          $jobId = $env:KEEP_AWAKE_JOB_ID
           
-          if (-not (Test-Path $keepAwakeScript)) {
-            Write-Host "[WARN] keep_awake.ps1 not found - cannot run post-diagnostics"
-            Write-Host "###############################################"
-            return
+          if ($jobId) {
+            Write-Host "[INFO] Found job ID: $jobId"
+            
+            # Stop and remove the job
+            try {
+              Stop-Job -Id $jobId -Force -ErrorAction SilentlyContinue
+              Remove-Job -Id $jobId -Force -ErrorAction SilentlyContinue
+              Write-Host "[OK] Keep-awake job stopped and removed"
+            } catch {
+              Write-Host "[WARN] Failed to stop job: $($_.Exception.Message)"
+            }
+          } else {
+            Write-Host "[INFO] No job ID found in environment"
+            
+            # Fallback: try to stop any jobs with keep-awake pattern
+            $jobs = Get-Job | Where-Object { $_.State -eq 'Running' }
+            if ($jobs) {
+              Write-Host "[INFO] Stopping all running background jobs as fallback..."
+              $jobs | ForEach-Object {
+                Stop-Job -Id $_.Id -Force -ErrorAction SilentlyContinue
+                Remove-Job -Id $_.Id -Force -ErrorAction SilentlyContinue
+              }
+            }
           }
           
-          Write-Host "[INFO] Loading keep_awake module..."
-          try {
-            Import-Module $keepAwakeScript -Force -ErrorAction Stop
-            Write-Host "[OK] Module loaded successfully"
-          } catch {
-            Write-Host "[ERROR] Failed to load module: $($_.Exception.Message)"
-            Write-Host "###############################################"
-            return
-          }
-          
           Write-Host ""
-          
-          # Step 1: Post-test diagnostics (wake history, power events)
-          Get-PowerHealthDiagnostics -PostTest
-          
-          # Step 2: Disarm WinAPI stay-awake
-          Disable-StayAwake
-          
-          Write-Host ""
-          Write-Host "###############################################"
-          Write-Host "# ANTI-SLEEP CLEANUP COMPLETE"
-          Write-Host "###############################################"
+          Write-Host "================================================"
+          Write-Host "ANTI-SLEEP CLEANUP COMPLETE"
+          Write-Host "================================================"
           Write-Host ""
 
       - name: Finalize and snapshot
@@ -785,13 +775,15 @@ jobs:
         if: always()
         # Purpose: Upload all test artifacts (logs, metrics, summaries)
         # Note: Always runs (if: always()) to capture logs even on failure
+        # Note: actions/upload-artifact@v4 handles compression automatically
+        #       (no need for manual tar/gzip on Windows)
         # Retention: Configurable via workflow_dispatch input (default: 14 days)
         uses: actions/upload-artifact@v4
         with:
           name: soak-windows-${{ github.run_id }}
           path: |
-            ${{ env.ARTIFACTS_ROOT }}/**
-            ${{ github.workspace }}/.pytest_cache/**
+            artifacts/**
+            .pytest_cache/**
           if-no-files-found: ignore
           retention-days: ${{ inputs.artifact_retention_days || 14 }}
 

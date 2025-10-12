@@ -1,0 +1,53 @@
+fix(ci): Windows safe caching + anti-sleep fallback (Prompt A+B)
+
+Проблема A (cache):
+- На Windows self-hosted runner actions/cache пытался использовать tar -z
+- gzip.exe недоступен → "warning exit code 2" при post-processing
+- Backslashes в путях кэша вызывали проблемы с tar
+
+Проблема B (anti-sleep):
+- PowerShell модуль keep_awake.ps1 с Export-ModuleMember генерирует
+  красные строки при Import-Module в начале и cleanup
+- Шум в логах от модульной системы
+
+Решение A (cache):
+1. Исправлены все пути кэша на forward slashes (кросс-платформенно):
+   - ~/.cargo/registry/* (было ~\.cargo\registry\*)
+   - rust/target (было rust\target)
+   - ~/AppData/Local/pip/Cache (было ~\AppData\Local\pip\Cache)
+
+2. Расширен pip cache для включения __pycache__ (ускорение)
+
+3. Улучшены ключи кэша:
+   - **/requirements*.txt вместо requirements.txt (ловит все варианты)
+
+4. Упрощены пути в upload-artifact (относительные вместо ${{ env.* }})
+
+5. Добавлена документация про автоматическую компрессию в v4
+
+Решение B (anti-sleep):
+1. Заменен "Initialize anti-sleep protection" на "Keep runner awake (fallback)":
+   - Простой Start-Job с heartbeat loop (без Import-Module)
+   - Job ID сохраняется в $env:GITHUB_ENV
+   - Heartbeat каждые 5 минут
+
+2. Заменен "Cleanup anti-sleep protection" на "Stop anti-sleep":
+   - Простой Stop-Job/Remove-Job (без Import-Module)
+   - Fallback на остановку всех running jobs
+   - Чистые логи без шума
+
+Результат:
+✅ Prompt A: Больше нет tar.exe exit code 2 warnings
+✅ Prompt A: actions/cache сам выбирает оптимальный метод упаковки под ОС
+✅ Prompt A: Кэш работает корректно на Windows/Linux
+✅ Prompt B: Никаких красных строк об Export-ModuleMember
+✅ Prompt B: Пайплайн тише, логи чистые
+
+Файлы:
+- .github/workflows/soak-windows.yml — 6 шагов изменено
+- CI_WINDOWS_CACHE_FIX.md — детальная документация (переименована в CI_WINDOWS_CACHE_AND_ANTISLEEP_FIX.md)
+
+Тестирование:
+gh workflow run soak-windows.yml --ref feat/soak-ci-chaos-release-toolkit \
+  -f soak_hours=1 -f stay_awake=1
+
