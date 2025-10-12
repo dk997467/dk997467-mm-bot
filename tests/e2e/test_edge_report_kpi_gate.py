@@ -75,9 +75,9 @@ def test_edge_report_generation():
     # Check exit code
     assert result.returncode == 0, f"edge_report failed: {result.stderr}"
     
-    # Check marker in output
+    # Check marker in output (PROMPT H: updated to diagnostics)
     full_output = result.stdout + '\n' + result.stderr
-    assert '| edge_report | OK | FIELDS=extended |' in full_output, \
+    assert '| edge_report | OK | FIELDS=diagnostics |' in full_output, \
         "Expected edge_report marker not found"
     
     # Check output file exists and is valid JSON
@@ -98,6 +98,35 @@ def test_edge_report_generation():
     assert "slippage_bps_p95" in totals
     assert "cancel_ratio" in totals
     assert "blocked_ratio" in totals
+    
+    # PROMPT H: Validate diagnostics fields
+    assert "component_breakdown" in totals, "Missing component_breakdown (PROMPT H)"
+    assert "neg_edge_drivers" in totals, "Missing neg_edge_drivers (PROMPT H)"
+    assert "block_reasons" in totals, "Missing block_reasons (PROMPT H)"
+    
+    # Validate component_breakdown structure
+    breakdown = totals["component_breakdown"]
+    assert "gross_bps" in breakdown
+    assert "fees_eff_bps" in breakdown
+    assert "slippage_bps" in breakdown
+    assert "adverse_bps" in breakdown
+    assert "inventory_bps" in breakdown
+    assert "net_bps" in breakdown
+    
+    # Validate neg_edge_drivers is a list
+    assert isinstance(totals["neg_edge_drivers"], list), "neg_edge_drivers should be a list"
+    
+    # Validate block_reasons structure
+    block_reasons = totals["block_reasons"]
+    assert "min_interval" in block_reasons
+    assert "concurrency" in block_reasons
+    assert "risk" in block_reasons
+    assert "throttle" in block_reasons
+    
+    # Each block_reason should have count and ratio
+    for reason in ["min_interval", "concurrency", "risk", "throttle"]:
+        assert "count" in block_reasons[reason], f"{reason} missing count"
+        assert "ratio" in block_reasons[reason], f"{reason} missing ratio"
     assert "maker_share_pct" in totals
     
     # Check values
@@ -205,8 +234,8 @@ def test_kpi_gate_warn():
     
     result = run_command(cmd, env=env)
     
-    # Check exit code (should be 1 for WARN)
-    assert result.returncode == 1, "KPI Gate should exit 1 for WARN"
+    # Check exit code (should be 0 for WARN - PROMPT G fix)
+    assert result.returncode == 0, "KPI Gate should exit 0 for WARN (not a failure)"
     
     # Check marker
     full_output = result.stdout + '\n' + result.stderr
@@ -289,6 +318,143 @@ def test_kpi_gate_fail():
     print("[OK] KPI Gate FAIL test PASSED")
 
 
+def test_edge_report_negative_net_bps():
+    """Test EDGE_REPORT with negative net_bps (PROMPT H)."""
+    env = os.environ.copy()
+    env["MM_FREEZE_UTC_ISO"] = "2025-10-12T10:04:00Z"
+    env["MM_VERSION"] = "test-0.1.0"
+    
+    # Create mock EDGE_REPORT with negative net_bps
+    artifacts_dir = ROOT_DIR / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    
+    mock_edge_report = {
+        "total": {
+            "net_bps": -2.5,  # Negative!
+            "gross_bps": 5.0,
+            "fees_bps": 2.0,
+            "slippage_bps": 3.5,  # Largest contributor
+            "adverse_bps": 2.5,   # Second largest
+            "inventory_bps": 0.5,
+            "maker_share": 0.88,
+        }
+    }
+    
+    (artifacts_dir / "EDGE_REPORT.json").write_text(json.dumps(mock_edge_report))
+    
+    # Run edge_report generator
+    output_path = artifacts_dir / "reports" / "EDGE_REPORT_neg.json"
+    cmd = [
+        sys.executable,
+        '-m', 'tools.reports.edge_report',
+        '--inputs', str(artifacts_dir / "EDGE_REPORT.json"),
+        '--out-json', str(output_path)
+    ]
+    
+    result = run_command(cmd, env=env)
+    
+    assert result.returncode == 0, f"edge_report failed: {result.stderr}"
+    
+    # Load generated report
+    with open(output_path, 'r') as f:
+        extended_metrics = json.load(f)
+    
+    totals = extended_metrics["totals"]
+    
+    # Validate component_breakdown
+    breakdown = totals["component_breakdown"]
+    assert breakdown["net_bps"] == -2.5, "net_bps should be negative"
+    assert breakdown["slippage_bps"] == 3.5
+    assert breakdown["adverse_bps"] == 2.5
+    
+    # Validate neg_edge_drivers (should be non-empty for negative net_bps)
+    neg_drivers = totals["neg_edge_drivers"]
+    assert isinstance(neg_drivers, list), "neg_edge_drivers should be a list"
+    assert len(neg_drivers) > 0, "neg_edge_drivers should not be empty for negative net_bps"
+    assert len(neg_drivers) <= 2, "neg_edge_drivers should have max 2 elements"
+    
+    # Top driver should be slippage_bps (3.5)
+    assert neg_drivers[0] == "slippage_bps", f"Expected slippage_bps as top driver, got {neg_drivers[0]}"
+    # Second driver should be adverse_bps (2.5)
+    if len(neg_drivers) > 1:
+        assert neg_drivers[1] == "adverse_bps", f"Expected adverse_bps as second driver, got {neg_drivers[1]}"
+    
+    print("[OK] Negative net_bps test PASSED (PROMPT H)")
+
+
+def test_edge_report_with_block_reasons():
+    """Test EDGE_REPORT with audit data for block_reasons (PROMPT H)."""
+    env = os.environ.copy()
+    env["MM_FREEZE_UTC_ISO"] = "2025-10-12T10:05:00Z"
+    env["MM_VERSION"] = "test-0.1.0"
+    
+    # Create minimal EDGE_REPORT
+    artifacts_dir = ROOT_DIR / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    
+    mock_edge_report = {
+        "total": {
+            "net_bps": 3.0,
+            "gross_bps": 5.0,
+            "fees_bps": 1.0,
+            "maker_share": 0.90,
+        }
+    }
+    
+    (artifacts_dir / "EDGE_REPORT.json").write_text(json.dumps(mock_edge_report))
+    
+    # Create mock audit.jsonl with block reasons
+    audit_jsonl = artifacts_dir / "audit.jsonl"
+    audit_entries = [
+        {"action": "PLACE", "blocked_reason": "min_interval"},
+        {"action": "PLACE", "blocked_reason": "min_interval"},
+        {"action": "PLACE", "blocked_reason": "min_interval"},
+        {"action": "PLACE", "blocked_reason": "concurrency"},
+        {"action": "PLACE", "blocked_reason": "risk"},
+    ]
+    
+    with open(audit_jsonl, 'w') as f:
+        for entry in audit_entries:
+            f.write(json.dumps(entry) + '\n')
+    
+    # Run edge_report generator with audit data
+    output_path = artifacts_dir / "reports" / "EDGE_REPORT_blocked.json"
+    cmd = [
+        sys.executable,
+        '-m', 'tools.reports.edge_report',
+        '--inputs', str(artifacts_dir / "EDGE_REPORT.json"),
+        '--audit', str(audit_jsonl),
+        '--out-json', str(output_path)
+    ]
+    
+    result = run_command(cmd, env=env)
+    
+    assert result.returncode == 0, f"edge_report failed: {result.stderr}"
+    
+    # Load generated report
+    with open(output_path, 'r') as f:
+        extended_metrics = json.load(f)
+    
+    totals = extended_metrics["totals"]
+    
+    # Validate block_reasons structure
+    block_reasons = totals["block_reasons"]
+    
+    assert block_reasons["min_interval"]["count"] == 3, "Expected 3 min_interval blocks"
+    assert block_reasons["min_interval"]["ratio"] == pytest.approx(0.6, abs=0.01), "Expected 60% min_interval"
+    
+    assert block_reasons["concurrency"]["count"] == 1, "Expected 1 concurrency block"
+    assert block_reasons["concurrency"]["ratio"] == pytest.approx(0.2, abs=0.01), "Expected 20% concurrency"
+    
+    assert block_reasons["risk"]["count"] == 1, "Expected 1 risk block"
+    assert block_reasons["risk"]["ratio"] == pytest.approx(0.2, abs=0.01), "Expected 20% risk"
+    
+    assert block_reasons["throttle"]["count"] == 0, "Expected 0 throttle blocks"
+    assert block_reasons["throttle"]["ratio"] == 0.0, "Expected 0% throttle"
+    
+    print("[OK] Block reasons test PASSED (PROMPT H)")
+
+
 if __name__ == '__main__':
     print("=" * 60)
     print("Testing EDGE_REPORT generation...")
@@ -309,6 +475,16 @@ if __name__ == '__main__':
     print("Testing KPI Gate FAIL...")
     print("=" * 60)
     test_kpi_gate_fail()
+    
+    print("\n" + "=" * 60)
+    print("Testing negative net_bps...")
+    print("=" * 60)
+    test_edge_report_negative_net_bps()
+    
+    print("\n" + "=" * 60)
+    print("Testing block reasons...")
+    print("=" * 60)
+    test_edge_report_with_block_reasons()
     
     print("\n" + "=" * 60)
     print("ALL TESTS PASSED [OK]")

@@ -145,6 +145,15 @@ def compute_edge_metrics(inputs: Dict[str, Any]) -> Dict[str, Any]:
     # Extract base metrics from existing EDGE_REPORT
     totals = edge_report.get("total", {})
     
+    # Compute component breakdown (for diagnostics)
+    component_breakdown = compute_component_breakdown(totals)
+    
+    # Compute negative edge drivers (if net_bps < 0)
+    neg_edge_drivers = compute_neg_edge_drivers(component_breakdown)
+    
+    # Compute block reasons (from audit data)
+    block_reasons = compute_block_reasons(audit_data)
+    
     # Compute extended metrics
     extended_totals = {
         # Core metrics (from existing report)
@@ -168,6 +177,11 @@ def compute_edge_metrics(inputs: Dict[str, Any]) -> Dict[str, Any]:
         
         # Maker share
         "maker_share_pct": totals.get("maker_share", 0.0) * 100.0,
+        
+        # DIAGNOSTICS (PROMPT H): Component breakdown and drivers
+        "component_breakdown": component_breakdown,
+        "neg_edge_drivers": neg_edge_drivers,
+        "block_reasons": block_reasons,
     }
     
     # Compute per-symbol metrics (optional)
@@ -295,6 +309,120 @@ def compute_blocked_ratios(
         "concurrency": 0.0,
         "risk": 0.0,
         "throttle": 0.0,
+    }
+
+
+def compute_component_breakdown(totals: Dict[str, Any]) -> Dict[str, float]:
+    """
+    Compute component breakdown of net_bps.
+    
+    Formula (approximate):
+        net_bps = gross_bps - fees_eff_bps - slippage_bps - adverse_bps - inventory_bps
+    
+    Returns:
+        Dict with all component values (gross, fees, slippage, adverse, inventory, net)
+    """
+    # Extract components from totals (with defaults)
+    gross_bps = totals.get("gross_bps", 0.0)
+    fees_eff_bps = totals.get("fees_bps", 0.0)
+    slippage_bps = totals.get("slippage_bps", 0.0)
+    adverse_bps = totals.get("adverse_bps", 0.0)
+    inventory_bps = totals.get("inventory_bps", 0.0)
+    net_bps = totals.get("net_bps", 0.0)
+    
+    return {
+        "gross_bps": gross_bps,
+        "fees_eff_bps": fees_eff_bps,
+        "slippage_bps": slippage_bps,
+        "adverse_bps": adverse_bps,
+        "inventory_bps": inventory_bps,
+        "net_bps": net_bps,
+    }
+
+
+def compute_neg_edge_drivers(component_breakdown: Dict[str, float]) -> List[str]:
+    """
+    Identify top-2 components contributing to negative net_bps.
+    
+    Returns list of component names sorted by absolute contribution (descending).
+    Only returns if net_bps is negative.
+    """
+    net_bps = component_breakdown.get("net_bps", 0.0)
+    
+    # Only compute drivers if net_bps is negative
+    if net_bps >= 0:
+        return []
+    
+    # Negative contributors (costs): fees, slippage, adverse, inventory
+    # (gross_bps is positive, so we skip it)
+    negative_components = {
+        "fees_eff_bps": component_breakdown.get("fees_eff_bps", 0.0),
+        "slippage_bps": component_breakdown.get("slippage_bps", 0.0),
+        "adverse_bps": component_breakdown.get("adverse_bps", 0.0),
+        "inventory_bps": abs(component_breakdown.get("inventory_bps", 0.0)),  # abs for comparison
+    }
+    
+    # Sort by absolute value (descending)
+    sorted_components = sorted(
+        negative_components.items(),
+        key=lambda x: abs(x[1]),
+        reverse=True
+    )
+    
+    # Return top-2
+    return [comp[0] for comp in sorted_components[:2]]
+
+
+def compute_block_reasons(audit_data: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """
+    Compute block reasons statistics from audit.jsonl.
+    
+    Returns dict with structure:
+        {
+            "min_interval": {"count": N, "ratio": r},
+            "concurrency": {"count": N, "ratio": r},
+            "risk": {"count": N, "ratio": r},
+            "throttle": {"count": N, "ratio": r}
+        }
+    """
+    if not audit_data:
+        return {
+            "min_interval": {"count": 0, "ratio": 0.0},
+            "concurrency": {"count": 0, "ratio": 0.0},
+            "risk": {"count": 0, "ratio": 0.0},
+            "throttle": {"count": 0, "ratio": 0.0},
+        }
+    
+    # Count blocked actions by reason
+    blocked_counts = {
+        "min_interval": 0,
+        "concurrency": 0,
+        "risk": 0,
+        "throttle": 0,
+    }
+    
+    for entry in audit_data:
+        reason = entry.get("blocked_reason")
+        if reason in blocked_counts:
+            blocked_counts[reason] += 1
+    
+    # Calculate ratios
+    total_blocked = sum(blocked_counts.values())
+    
+    if total_blocked == 0:
+        return {
+            "min_interval": {"count": 0, "ratio": 0.0},
+            "concurrency": {"count": 0, "ratio": 0.0},
+            "risk": {"count": 0, "ratio": 0.0},
+            "throttle": {"count": 0, "ratio": 0.0},
+        }
+    
+    return {
+        reason: {
+            "count": count,
+            "ratio": count / total_blocked
+        }
+        for reason, count in blocked_counts.items()
     }
 
 

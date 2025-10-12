@@ -71,7 +71,7 @@ def generate_edge_report(
         print(json_output)
     
     # Print marker for CI/CD
-    print("\n| edge_report | OK | FIELDS=extended |", file=sys.stderr)
+    print("\n| edge_report | OK | FIELDS=diagnostics |", file=sys.stderr)
     
     return metrics
 
