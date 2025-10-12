@@ -133,6 +133,16 @@ jobs:
       HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
       
       # ========================================================================
+      # VALIDATION & KPI GATE (safe-mode for CI)
+      # ========================================================================
+      
+      # Allow validation steps to skip when secrets are missing
+      MM_ALLOW_MISSING_SECRETS: "1"
+      
+      # Fixtures directory for tests
+      FIXTURES_DIR: "tests/fixtures"
+      
+      # ========================================================================
       # ARTIFACT PATHS (centralized configuration)
       # ========================================================================
       

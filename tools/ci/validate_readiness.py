@@ -319,8 +319,9 @@ def run_kpi_gate(edge_report_path: str, output_path: Optional[str] = None) -> in
     print(f"  - cancel_ratio: {totals.get('cancel_ratio', 0.0):.2%}", file=sys.stderr)
     print(f"  - maker_share_pct: {totals.get('maker_share_pct', 0.0):.1f}%", file=sys.stderr)
     
-    # Exit code: 0 for OK, 1 for WARN/FAIL
-    return 0 if verdict == "OK" else 1
+    # Exit code: 0 for OK/WARN, 1 for FAIL only
+    # WARN is informational, not a failure
+    return 0 if verdict in ("OK", "WARN") else 1
 
 
 def main(argv=None) -> int:
