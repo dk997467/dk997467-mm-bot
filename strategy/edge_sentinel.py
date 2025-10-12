@@ -47,6 +47,7 @@ class EdgeSentinel:
         "base_spread_bps_delta": (0.0, 0.6),
         "impact_cap_ratio": (0.04, 0.12),
         "tail_age_ms": (400, 1000),
+        "max_delta_ratio": (0.10, 0.20),
     }
     
     def __init__(self, config: Optional[Dict[str, Any]] = None, profile_name: Optional[str] = None):
@@ -357,6 +358,7 @@ class EdgeSentinel:
             "profile": self.profile_name or "unknown",
             "base": self.base_profile_values or {},
             "overrides_runtime": self.runtime_overrides,
+            "runtime_overrides_applied": len(self.runtime_overrides) > 0,
             "runtime_adjustments": self.runtime_adjustments,
             "applied": self.applied_profile
         }

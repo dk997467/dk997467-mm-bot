@@ -342,6 +342,23 @@ def save_runtime_overrides(overrides: Dict[str, Any], path: str = "artifacts/soa
         json.dump(overrides, f, sort_keys=True, separators=(',', ':'), indent=2)
 
 
+def get_default_best_cell_overrides() -> Dict[str, Any]:
+    """
+    Return default runtime overrides from best parameter sweep cell.
+    
+    These values represent the best-performing configuration from parameter sweep,
+    used as starting point for soak tests when no explicit overrides are provided.
+    """
+    return {
+        "min_interval_ms": 60,
+        "replace_rate_per_min": 300,
+        "base_spread_bps_delta": 0.05,
+        "tail_age_ms": 600,
+        "impact_cap_ratio": 0.10,
+        "max_delta_ratio": 0.15
+    }
+
+
 def main(argv=None) -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Soak test runner and reporter")
@@ -372,8 +389,24 @@ def main(argv=None) -> int:
     if args.iterations and args.auto_tune:
         print(f"[INFO] Running mini-soak with auto-tuning: {args.iterations} iterations")
         
-        # Initialize runtime overrides
-        current_overrides = {}
+        # Initialize runtime overrides from best cell if not already present
+        overrides_path = Path("artifacts/soak/runtime_overrides.json")
+        env_overrides = os.environ.get("MM_RUNTIME_OVERRIDES_JSON")
+        
+        if env_overrides:
+            # Env var takes precedence
+            current_overrides = json.loads(env_overrides)
+            print(f"| overrides | OK | source=env |")
+        elif overrides_path.exists():
+            # Load existing file
+            with open(overrides_path, 'r', encoding='utf-8') as f:
+                current_overrides = json.load(f)
+            print(f"| overrides | OK | source=file |")
+        else:
+            # Use default best cell values
+            current_overrides = get_default_best_cell_overrides()
+            save_runtime_overrides(current_overrides)
+            print(f"| overrides | OK | source=default_best_cell |")
         
         # Iterate with auto-tuning
         for iteration in range(args.iterations):
@@ -477,6 +510,27 @@ def main(argv=None) -> int:
     # Mini-soak mode (for testing with iterations, no auto-tune)
     if args.iterations:
         print(f"[INFO] Running mini-soak: {args.iterations} iterations")
+        
+        # Apply default best cell overrides if not already present
+        overrides_path = Path("artifacts/soak/runtime_overrides.json")
+        env_overrides = os.environ.get("MM_RUNTIME_OVERRIDES_JSON")
+        
+        if env_overrides:
+            current_overrides = json.loads(env_overrides)
+            save_runtime_overrides(current_overrides)
+            print(f"| overrides | OK | source=env |")
+        elif overrides_path.exists():
+            print(f"| overrides | OK | source=file_existing |")
+        else:
+            current_overrides = get_default_best_cell_overrides()
+            save_runtime_overrides(current_overrides)
+            print(f"| overrides | OK | source=default_best_cell |")
+        
+        # Reload sentinel with overrides
+        if sentinel:
+            sentinel.load_runtime_overrides()
+            sentinel.save_applied_profile()
+        
         duration_hours = 0  # Mini-soak doesn't track hours
     else:
         duration_hours = args.hours
