@@ -1,0 +1,42 @@
+ci(windows): prefer Windows bsdtar for cache; replace anti-sleep module with background job
+
+This commit implements two fixes to clean up Windows CI logs:
+
+PROMPT 1 - Windows cache tar/gzip fix:
+- Added step [3/13] to prepend C:\Windows\System32 to PATH
+- Ensures actions/cache uses Windows bsdtar instead of Git Bash tar
+- Eliminates "gzip: command not found" warnings
+- Renumbered workflow steps (1-12 → 1-13)
+
+PROMPT 2 - Anti-sleep simplification:
+- Removed module-based anti-sleep protection
+- Replaced with simple background job (Start-Job/Stop-Job)
+- Eliminates "Export-ModuleMember" errors
+- Simplified both init and cleanup steps (-79 lines)
+- Changed heartbeat format to ISO 8601
+- Removed keep_awake.ps1 from critical files check
+
+Changes:
+- .github/workflows/soak-windows.yml
+  * New step [3/13]: "Prefer Windows tar (bsdtar) for actions/cache"
+  * Renamed: "Keep runner awake (fallback)" → "Start keep-awake background job"
+  * Renamed: "Stop anti-sleep" → "Stop keep-awake job"
+  * Removed: tools\soak\keep_awake.ps1 from critical files
+
+Impact:
+✅ Eliminates tar/gzip warnings in Post job cleanup
+✅ Eliminates module-related errors in anti-sleep steps
+✅ Cleaner, more concise CI logs
+✅ No changes to cache or anti-sleep functionality
+✅ Net simplification: ~70 lines removed
+
+Expected log output:
+- Cache steps: No "gzip: command not found" errors
+- Init: "[OK] Keep-awake job started. ID=42"
+- Heartbeat: "[KEEP-AWAKE] Heartbeat at 2025-10-12T12:00:00.000Z"
+- Cleanup: "[OK] Keep-awake job 42 stopped and removed"
+
+Refs:
+- WINDOWS_CACHE_TAR_FIX.md
+- ANTI_SLEEP_SIMPLIFY_COMPLETE.md
+

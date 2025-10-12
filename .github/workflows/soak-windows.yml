@@ -320,8 +320,7 @@ jobs:
           Write-Host "[CHECK] Critical files..."
           $criticalFiles = @(
             "tools\ci\full_stack_validate.py",
-            "tools\soak\resource_monitor.py",
-            "tools\soak\keep_awake.ps1"
+            "tools\soak\resource_monitor.py"
           )
           foreach ($file in $criticalFiles) {
             $path = "${{ github.workspace }}\$file"
@@ -364,52 +363,21 @@ jobs:
           Write-Host "PRE-FLIGHT CHECKS PASSED"
           Write-Host "================================================"
 
-      - name: Keep runner awake (fallback)
+      - name: Start keep-awake background job
         id: init-stay-awake
+        if: env.SOAK_STAY_AWAKE == '1'
         shell: pwsh
         run: |
-          Write-Host "================================================"
-          Write-Host "ANTI-SLEEP PROTECTION (FALLBACK)"
-          Write-Host "================================================"
-          
-          # Check if stay-awake is enabled
-          $stayAwakeEnabled = $env:SOAK_STAY_AWAKE -eq "1"
-          
-          if (-not $stayAwakeEnabled) {
-            Write-Host "[INFO] SOAK_STAY_AWAKE=0 - Anti-sleep protection DISABLED"
-            Write-Host "[WARN] System may enter sleep/hibernation during soak"
-            Write-Host "================================================"
-            return
-          }
-          
-          Write-Host "[INFO] SOAK_STAY_AWAKE=1 - Starting background keep-alive job"
-          Write-Host ""
-          
-          # Start simple background job (no module imports, no Export-ModuleMember noise)
-          # This job just pings every 5 minutes to prevent runner idle timeout
-          $global:keepAwakeJob = Start-Job -ScriptBlock {
-            $iteration = 0
+          $script = {
             while ($true) {
-              $iteration++
-              Write-Host "[KEEP-AWAKE] Heartbeat #$iteration at $(Get-Date -Format 'HH:mm:ss')"
-              Start-Sleep -Seconds 300  # 5 minutes
+              Write-Host "[KEEP-AWAKE] Heartbeat at $(Get-Date -Format o)"
+              Start-Sleep -Seconds 300
             }
           }
-          
-          if ($global:keepAwakeJob) {
-            Write-Host "[OK] Keep-awake job started (ID: $($global:keepAwakeJob.Id))"
-            
-            # Save job ID to environment for cleanup step
-            "KEEP_AWAKE_JOB_ID=$($global:keepAwakeJob.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          } else {
-            Write-Host "[ERROR] Failed to start keep-awake job"
-          }
-          
-          Write-Host ""
-          Write-Host "================================================"
-          Write-Host "ANTI-SLEEP PROTECTION ARMED"
-          Write-Host "================================================"
-          Write-Host ""
+          $job = Start-Job -ScriptBlock $script
+          # Publish job ID to env for cleanup step
+          "KEEP_AWAKE_JOB_ID=$($job.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "[OK] Keep-awake job started. ID=$($job.Id)"
 
       - name: Start resource monitoring (background)
         id: start-monitoring
@@ -650,59 +618,29 @@ jobs:
             Write-Host "[MONITOR] No resource data collected"
           }
 
-      - name: Stop anti-sleep
+      - name: Stop keep-awake job
         id: cleanup-stay-awake
-        if: always()
+        if: env.SOAK_STAY_AWAKE == '1'
         shell: pwsh
         run: |
-          Write-Host "================================================"
-          Write-Host "ANTI-SLEEP CLEANUP"
-          Write-Host "================================================"
-          
-          # Check if stay-awake was enabled
-          $stayAwakeEnabled = $env:SOAK_STAY_AWAKE -eq "1"
-          
-          if (-not $stayAwakeEnabled) {
-            Write-Host "[INFO] SOAK_STAY_AWAKE=0 - Nothing to cleanup"
-            Write-Host "================================================"
-            return
-          }
-          
-          Write-Host "[INFO] Stopping keep-awake background job..."
-          
-          # Try to get job ID from environment (set in init step)
-          $jobId = $env:KEEP_AWAKE_JOB_ID
-          
-          if ($jobId) {
-            Write-Host "[INFO] Found job ID: $jobId"
-            
-            # Stop and remove the job
-            try {
-              Stop-Job -Id $jobId -Force -ErrorAction SilentlyContinue
-              Remove-Job -Id $jobId -Force -ErrorAction SilentlyContinue
-              Write-Host "[OK] Keep-awake job stopped and removed"
-            } catch {
-              Write-Host "[WARN] Failed to stop job: $($_.Exception.Message)"
+          if ($env:KEEP_AWAKE_JOB_ID) {
+            $id = [int]$env:KEEP_AWAKE_JOB_ID
+            $j = Get-Job -Id $id -ErrorAction SilentlyContinue
+            if ($j) {
+              Stop-Job -Id $id -Force -ErrorAction SilentlyContinue
+              Remove-Job -Id $id -Force -ErrorAction SilentlyContinue
+              Write-Host "[OK] Keep-awake job $id stopped and removed"
+            } else {
+              Write-Host "[WARN] Keep-awake job $id not found (already finished?)"
             }
           } else {
-            Write-Host "[INFO] No job ID found in environment"
-            
-            # Fallback: try to stop any jobs with keep-awake pattern
-            $jobs = Get-Job | Where-Object { $_.State -eq 'Running' }
-            if ($jobs) {
-              Write-Host "[INFO] Stopping all running background jobs as fallback..."
-              $jobs | ForEach-Object {
-                Stop-Job -Id $_.Id -Force -ErrorAction SilentlyContinue
-                Remove-Job -Id $_.Id -Force -ErrorAction SilentlyContinue
-              }
+            # Fallback: stop any running jobs from current session
+            Get-Job | Where-Object { $_.State -eq 'Running' } | ForEach-Object {
+              Stop-Job -Id $_.Id -Force -ErrorAction SilentlyContinue
+              Remove-Job -Id $_.Id -Force -ErrorAction SilentlyContinue
             }
+            Write-Host "[INFO] No job id in env, cleaned any running jobs"
           }
-          
-          Write-Host ""
-          Write-Host "================================================"
-          Write-Host "ANTI-SLEEP CLEANUP COMPLETE"
-          Write-Host "================================================"
-          Write-Host ""
 
       - name: Finalize and snapshot
         id: finalize
@@ -817,3 +755,4 @@ jobs:
             chat_id = "$env:TELEGRAM_CHAT_ID"
             text    = $msg
           } | Out-Null
+
