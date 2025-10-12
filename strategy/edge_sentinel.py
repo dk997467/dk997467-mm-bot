@@ -40,6 +40,15 @@ class EdgeSentinel:
         "base_spread_bps": 0.5,
     }
     
+    # Runtime override limits (field -> (min, max))
+    RUNTIME_LIMITS = {
+        "min_interval_ms": (50, 300),
+        "replace_rate_per_min": (120, 360),
+        "base_spread_bps_delta": (0.0, 0.6),
+        "impact_cap_ratio": (0.04, 0.12),
+        "tail_age_ms": (400, 1000),
+    }
+    
     def __init__(self, config: Optional[Dict[str, Any]] = None, profile_name: Optional[str] = None):
         """
         Initialize edge sentinel.
@@ -74,6 +83,9 @@ class EdgeSentinel:
         # Profile system additions
         self.profile_name = profile_name
         self.applied_profile = None
+        self.base_profile_values = None  # Store base profile before overrides
+        self.runtime_overrides = {}  # Current runtime overrides
+        self.runtime_adjustments = []  # History of adjustments
         self.blocked_by = {
             "min_interval": 0,
             "concurrency": 0,
@@ -85,6 +97,9 @@ class EdgeSentinel:
         # Load and apply profile if specified
         if profile_name:
             self.load_and_apply_profile(profile_name)
+        
+        # Load runtime overrides if available
+        self.load_runtime_overrides()
     
     def load_profile_from_file(self, profile_name: str) -> Dict[str, Any]:
         """
@@ -154,14 +169,125 @@ class EdgeSentinel:
         # Apply delta fields to base profile
         applied = self.apply_delta_fields(self.BASE_PROFILE, profile_data)
         
-        # Store applied profile
+        # Store applied profile and base values
         self.applied_profile = applied
+        self.base_profile_values = applied.copy()  # Store before runtime overrides
         self.profile_name = profile_name
         
         # Log marker
         print(f"| profile_apply | OK | PROFILE={profile_name} |")
         
         return applied
+    
+    def load_runtime_overrides(self) -> Dict[str, Any]:
+        """
+        Load runtime overrides from ENV or file.
+        
+        Priority:
+        1. MM_RUNTIME_OVERRIDES_JSON environment variable (JSON string)
+        2. artifacts/soak/runtime_overrides.json file
+        
+        Returns:
+            Runtime overrides dict (empty if none found)
+        """
+        overrides = {}
+        source = None
+        
+        # Try ENV first
+        env_json = os.environ.get("MM_RUNTIME_OVERRIDES_JSON")
+        if env_json:
+            try:
+                overrides = json.loads(env_json)
+                source = "env"
+            except json.JSONDecodeError:
+                print("| runtime_overrides | ERROR | Invalid JSON in MM_RUNTIME_OVERRIDES_JSON |")
+                return {}
+        
+        # Try file if ENV not found
+        if not overrides:
+            current_file = Path(__file__).resolve()
+            workspace_root = current_file.parent.parent
+            overrides_path = workspace_root / "artifacts" / "soak" / "runtime_overrides.json"
+            
+            if overrides_path.exists():
+                try:
+                    with open(overrides_path, "r", encoding="utf-8") as f:
+                        overrides = json.load(f)
+                    source = "file"
+                except Exception as e:
+                    print(f"| runtime_overrides | ERROR | Failed to read {overrides_path}: {e} |")
+                    return {}
+        
+        # Apply overrides if found
+        if overrides:
+            self.apply_runtime_overrides(overrides)
+            print(f"| runtime_overrides | OK | SOURCE={source} |")
+        
+        return overrides
+    
+    def apply_runtime_overrides(self, overrides: Dict[str, Any]):
+        """
+        Apply runtime overrides to applied_profile with limits enforcement.
+        
+        Args:
+            overrides: Dict of field -> value overrides
+        """
+        if not self.applied_profile:
+            print("| runtime_overrides | SKIP | No profile loaded |")
+            return
+        
+        for field, new_value in overrides.items():
+            # Skip if field not in allowed runtime overrides
+            if field not in self.RUNTIME_LIMITS:
+                print(f"| runtime_override | SKIP | FIELD={field} REASON=not_allowed |")
+                continue
+            
+            # Get old value
+            old_value = self.applied_profile.get(field)
+            
+            # Enforce limits
+            min_val, max_val = self.RUNTIME_LIMITS[field]
+            clamped_value = max(min_val, min(max_val, new_value))
+            
+            if clamped_value != new_value:
+                print(f"| runtime_override | CLAMP | FIELD={field} FROM={new_value} TO={clamped_value} |")
+            
+            # Apply override
+            self.applied_profile[field] = clamped_value
+            self.runtime_overrides[field] = clamped_value
+            
+            # Track adjustment
+            if old_value is not None and old_value != clamped_value:
+                self.track_runtime_adjustment(field, old_value, clamped_value, "manual_override")
+    
+    def track_runtime_adjustment(self, field: str, from_value: Any, to_value: Any, reason: str):
+        """
+        Track a runtime adjustment in history.
+        
+        Args:
+            field: Field name that was adjusted
+            from_value: Previous value
+            to_value: New value
+            reason: Reason for adjustment
+        """
+        # Get timestamp
+        if 'MM_FREEZE_UTC_ISO' in os.environ:
+            ts = os.environ['MM_FREEZE_UTC_ISO']
+        else:
+            ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        
+        adjustment = {
+            "ts": ts,
+            "field": field,
+            "from": from_value,
+            "to": to_value,
+            "reason": reason
+        }
+        
+        self.runtime_adjustments.append(adjustment)
+        
+        # Print marker
+        print(f"| runtime_adjust | OK | FIELD={field} FROM={from_value} TO={to_value} REASON={reason} |")
     
     def record_block(self, block_type: str):
         """
@@ -201,6 +327,13 @@ class EdgeSentinel:
         """
         Save applied profile to artifacts/soak/applied_profile.json
         
+        Includes:
+        - profile: Profile name (e.g. "S1")
+        - base: Base profile values (before runtime overrides)
+        - overrides_runtime: Current runtime overrides
+        - runtime_adjustments: History of runtime adjustments
+        - applied: Final applied profile (with all overrides)
+        
         Args:
             output_path: Custom output path (default: artifacts/soak/applied_profile.json)
         """
@@ -219,14 +352,24 @@ class EdgeSentinel:
         # Ensure directory exists
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
+        # Build comprehensive profile data
+        profile_data = {
+            "profile": self.profile_name or "unknown",
+            "base": self.base_profile_values or {},
+            "overrides_runtime": self.runtime_overrides,
+            "runtime_adjustments": self.runtime_adjustments,
+            "applied": self.applied_profile
+        }
+        
         # Save with deterministic formatting
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(
-                self.applied_profile,
+                profile_data,
                 f,
                 sort_keys=True,
                 separators=(',', ':'),
-                ensure_ascii=False
+                ensure_ascii=False,
+                indent=2  # Pretty format for readability
             )
         
         print(f"| save_applied_profile | OK | {output_path} |")

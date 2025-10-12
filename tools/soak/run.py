@@ -199,6 +199,149 @@ def generate_markdown_report(metrics: Dict[str, Any], gates: Dict[str, Dict[str,
     return "".join(lines)
 
 
+# ==============================================================================
+# AUTO-TUNING: Runtime Profile Adjustment
+# ==============================================================================
+
+def load_edge_report(path: str = "artifacts/reports/EDGE_REPORT.json") -> Dict[str, Any]:
+    """
+    Load extended EDGE_REPORT.json.
+    
+    Returns:
+        EDGE_REPORT data dict (or empty if not found)
+    """
+    report_path = Path(path)
+    if not report_path.exists():
+        return {}
+    
+    try:
+        with open(report_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def compute_tuning_adjustments(
+    edge_report: Dict[str, Any],
+    current_overrides: Dict[str, Any]
+) -> Tuple[Dict[str, Any], List[str], bool]:
+    """
+    Compute tuning adjustments based on EDGE_REPORT metrics.
+    
+    Returns:
+        (new_overrides, reasons, multi_fail_guard_triggered)
+    """
+    totals = edge_report.get("totals", {})
+    new_overrides = current_overrides.copy()
+    reasons = []
+    fail_count = 0
+    
+    # Get runtime limits from EdgeSentinel
+    LIMITS = {
+        "min_interval_ms": (50, 300),
+        "replace_rate_per_min": (120, 360),
+        "base_spread_bps_delta": (0.0, 0.6),
+        "impact_cap_ratio": (0.04, 0.12),
+        "tail_age_ms": (400, 1000),
+    }
+    
+    # Track field change counts for max-2-changes guard
+    field_changes = {}
+    
+    def apply_adjustment(field: str, delta: float, reason: str):
+        """Apply adjustment with limits and tracking."""
+        nonlocal new_overrides, field_changes, reasons
+        
+        # Track changes per field
+        if field not in field_changes:
+            field_changes[field] = 0
+        
+        # Guard: max 2 changes per field per iteration
+        if field_changes[field] >= 2:
+            return False
+        
+        # Get current value (or 0 for delta fields)
+        current = new_overrides.get(field, 0.0 if "_delta" in field else 50)
+        new_value = current + delta
+        
+        # Enforce limits
+        if field in LIMITS:
+            min_val, max_val = LIMITS[field]
+            new_value = max(min_val, min(max_val, new_value))
+        
+        # Apply if changed
+        if new_value != current:
+            new_overrides[field] = new_value
+            field_changes[field] += 1
+            reasons.append(reason)
+            return True
+        
+        return False
+    
+    # Trigger 1: cancel_ratio > 0.55
+    cancel_ratio = totals.get("cancel_ratio", 0.0)
+    if cancel_ratio > 0.55:
+        fail_count += 1
+        apply_adjustment("min_interval_ms", 20, "cancel_ratio>0.55")
+        apply_adjustment("replace_rate_per_min", -30, "cancel_ratio>0.55")
+    
+    # Trigger 2: adverse_bps_p95 > 4 or slippage_bps_p95 > 3
+    adverse = totals.get("adverse_bps_p95", 0.0)
+    slippage = totals.get("slippage_bps_p95", 0.0)
+    if adverse > 4.0 or slippage > 3.0:
+        fail_count += 1
+        apply_adjustment("base_spread_bps_delta", 0.05, "adverse/slippage>threshold")
+    
+    # Trigger 3: order_age_p95_ms > 330
+    order_age = totals.get("order_age_p95_ms", 0.0)
+    if order_age > 330:
+        fail_count += 1
+        apply_adjustment("replace_rate_per_min", -30, "order_age>330")
+        apply_adjustment("tail_age_ms", 50, "order_age>330")
+    
+    # Trigger 4: ws_lag_p95_ms > 120
+    ws_lag = totals.get("ws_lag_p95_ms", 0.0)
+    if ws_lag > 120:
+        fail_count += 1
+        apply_adjustment("min_interval_ms", 20, "ws_lag>120")
+    
+    # Trigger 5: net_bps < 2.5 (only if no other triggers)
+    net_bps = totals.get("net_bps", 0.0)
+    if net_bps < 2.5 and fail_count == 0:
+        apply_adjustment("base_spread_bps_delta", 0.02, "net_bps<2.5")
+    
+    # Multi-fail guard: if 3+ independent triggers, only calm down
+    multi_fail_guard = fail_count >= 3
+    if multi_fail_guard:
+        # Override to only calming adjustments
+        new_overrides = current_overrides.copy()
+        reasons = ["multi_fail_guard"]
+        
+        # Only increase spread, min_interval, decrease replace_rate
+        apply_adjustment("base_spread_bps_delta", 0.05, "multi_fail_guard")
+        apply_adjustment("min_interval_ms", 20, "multi_fail_guard")
+        apply_adjustment("replace_rate_per_min", -30, "multi_fail_guard")
+    
+    # Guard: max total spread_delta adjustment per iteration <= 0.1
+    spread_delta_key = "base_spread_bps_delta"
+    if spread_delta_key in new_overrides and spread_delta_key in current_overrides:
+        delta_change = new_overrides[spread_delta_key] - current_overrides[spread_delta_key]
+        if delta_change > 0.1:
+            new_overrides[spread_delta_key] = current_overrides[spread_delta_key] + 0.1
+            reasons.append("spread_delta_capped_at_0.1")
+    
+    return new_overrides, reasons, multi_fail_guard
+
+
+def save_runtime_overrides(overrides: Dict[str, Any], path: str = "artifacts/soak/runtime_overrides.json"):
+    """Save runtime overrides to file."""
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(overrides, f, sort_keys=True, separators=(',', ':'), indent=2)
+
+
 def main(argv=None) -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Soak test runner and reporter")
@@ -208,6 +351,7 @@ def main(argv=None) -> int:
     parser.add_argument("--export-md", type=str, help="Export markdown report path")
     parser.add_argument("--gate-summary", type=str, help="Export gates summary JSON path")
     parser.add_argument("--mock", action="store_true", help="Use mock data for testing")
+    parser.add_argument("--auto-tune", action="store_true", help="Enable runtime auto-tuning between iterations")
     args = parser.parse_args(argv)
     
     # Check for MM_PROFILE env var and load profile
@@ -224,7 +368,113 @@ def main(argv=None) -> int:
             print(f"[WARN] Failed to load profile {profile_name}: {e}")
             sentinel = None
     
-    # Mini-soak mode (for testing with iterations)
+    # Mini-soak mode with auto-tuning
+    if args.iterations and args.auto_tune:
+        print(f"[INFO] Running mini-soak with auto-tuning: {args.iterations} iterations")
+        
+        # Initialize runtime overrides
+        current_overrides = {}
+        
+        # Iterate with auto-tuning
+        for iteration in range(args.iterations):
+            print(f"\n{'='*60}")
+            print(f"[ITER {iteration + 1}/{args.iterations}] Starting iteration")
+            print(f"{'='*60}")
+            
+            # Save current overrides for this iteration
+            if current_overrides:
+                save_runtime_overrides(current_overrides)
+                
+                # Reload sentinel with new overrides
+                if sentinel:
+                    sentinel.load_runtime_overrides()
+                    sentinel.save_applied_profile()
+            
+            # Simulate iteration (in real scenario, run strategy here)
+            # For testing, generate mock EDGE_REPORT
+            if args.mock:
+                # Generate problematic metrics at first, then improve
+                # This ensures auto-tuning logic is triggered
+                if iteration == 0:
+                    # First iteration: problematic metrics
+                    mock_edge_report = {
+                        "totals": {
+                            "net_bps": 2.2,  # Low
+                            "adverse_bps_p95": 5.0,  # High
+                            "slippage_bps_p95": 3.5,  # High
+                            "cancel_ratio": 0.60,  # High
+                            "order_age_p95_ms": 340,  # High
+                            "ws_lag_p95_ms": 130,  # High
+                            "maker_share_pct": 88.0
+                        },
+                        "symbols": {},
+                        "runtime": {"utc": "2025-10-12T12:00:00Z", "version": "test"}
+                    }
+                else:
+                    # Subsequent iterations: metrics improve
+                    mock_edge_report = {
+                        "totals": {
+                            "net_bps": 2.8 + (iteration * 0.1),
+                            "adverse_bps_p95": 3.5 - (iteration * 0.2),
+                            "slippage_bps_p95": 2.5 - (iteration * 0.15),
+                            "cancel_ratio": 0.48 - (iteration * 0.05),
+                            "order_age_p95_ms": 320 - (iteration * 10),
+                            "ws_lag_p95_ms": 95 + (iteration * 5),
+                            "maker_share_pct": 90.0 + (iteration * 0.5)
+                        },
+                        "symbols": {},
+                        "runtime": {"utc": "2025-10-12T12:00:00Z", "version": "test"}
+                    }
+                # Save mock EDGE_REPORT
+                edge_report_path = Path("artifacts/reports/EDGE_REPORT.json")
+                edge_report_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(edge_report_path, 'w') as f:
+                    json.dump(mock_edge_report, f, indent=2)
+            
+            # Load EDGE_REPORT from previous iteration
+            edge_report = load_edge_report()
+            
+            if edge_report:
+                # Compute tuning adjustments
+                new_overrides, reasons, multi_fail_guard = compute_tuning_adjustments(
+                    edge_report, current_overrides
+                )
+                
+                # Print tuning results
+                totals = edge_report.get("totals", {})
+                adjustments_count = len([r for r in reasons if r != "multi_fail_guard"])
+                
+                if multi_fail_guard:
+                    print("| soak_iter_tune | SKIP | REASON=multi_fail_guard |")
+                elif adjustments_count > 0:
+                    print(f"| soak_iter_tune | OK | ADJUSTMENTS={adjustments_count} " +
+                          f"net_bps={totals.get('net_bps', 0):.2f} " +
+                          f"cancel={totals.get('cancel_ratio', 0):.2f} " +
+                          f"age_p95={totals.get('order_age_p95_ms', 0):.0f} " +
+                          f"lag_p95={totals.get('ws_lag_p95_ms', 0):.0f} |")
+                    
+                    # Log individual reasons
+                    for reason in reasons:
+                        if reason != "multi_fail_guard":
+                            print(f"  - {reason}")
+                else:
+                    print("| soak_iter_tune | OK | ADJUSTMENTS=0 metrics_stable |")
+                
+                # Update overrides for next iteration
+                current_overrides = new_overrides
+            else:
+                print("[WARN] No EDGE_REPORT found, skipping auto-tuning for this iteration")
+        
+        # After all iterations, print summary
+        print(f"\n{'='*60}")
+        print(f"[MINI-SOAK COMPLETE] {args.iterations} iterations with auto-tuning")
+        print(f"{'='*60}")
+        print(f"Final overrides: {json.dumps(current_overrides, indent=2)}")
+        print(f"{'='*60}\n")
+        
+        return 0
+    
+    # Mini-soak mode (for testing with iterations, no auto-tune)
     if args.iterations:
         print(f"[INFO] Running mini-soak: {args.iterations} iterations")
         duration_hours = 0  # Mini-soak doesn't track hours
