@@ -62,26 +62,124 @@ def test_trigger_adverse_slippage():
     assert not multi_fail
 
 
-def test_trigger_order_age():
-    """Test order_age_p95_ms > 330 trigger."""
+def test_trigger_age_relief_applied():
+    """Test Age Relief trigger (order_age > 330 with good adverse/slippage)."""
     edge_report = {
         "totals": {
             "net_bps": 3.0,
             "cancel_ratio": 0.30,
-            "adverse_bps_p95": 2.0,
-            "slippage_bps_p95": 1.0,
+            "adverse_bps_p95": 3.0,  # Good (≤ 4)
+            "slippage_bps_p95": 2.0,  # Good (≤ 3)
             "order_age_p95_ms": 350,  # > 330
             "ws_lag_p95_ms": 100,
         }
     }
     
-    current_overrides = {}
+    current_overrides = {
+        "min_interval_ms": 60,
+        "replace_rate_per_min": 300,
+    }
     new_overrides, reasons, multi_fail = compute_tuning_adjustments(edge_report, current_overrides)
     
-    # Should adjust replace_rate_per_min and tail_age_ms
-    assert "replace_rate_per_min" in new_overrides or "tail_age_ms" in new_overrides
-    assert "order_age>330" in reasons
+    # Age Relief should apply
+    # - min_interval_ms should decrease by 10 (60 -> 50)
+    # - replace_rate_per_min should increase by 30 (300 -> 330)
+    assert "min_interval_ms" in new_overrides
+    assert new_overrides["min_interval_ms"] == 50  # 60 - 10
+    
+    assert "replace_rate_per_min" in new_overrides
+    assert new_overrides["replace_rate_per_min"] == 330  # 300 + 30
+    
+    # Check reasons contain age_relief markers
+    age_relief_reasons = [r for r in reasons if "age_relief" in r]
+    assert len(age_relief_reasons) >= 1  # At least one age relief adjustment
+    
+    # Should NOT trigger multi-fail (age relief doesn't count as failure)
     assert not multi_fail
+
+
+def test_trigger_age_relief_not_applied_bad_adverse():
+    """Test Age Relief NOT applied when adverse_bps_p95 > 4."""
+    edge_report = {
+        "totals": {
+            "net_bps": 3.0,
+            "cancel_ratio": 0.30,
+            "adverse_bps_p95": 5.0,  # BAD (> 4)
+            "slippage_bps_p95": 2.0,  # Good (≤ 3)
+            "order_age_p95_ms": 350,  # > 330
+            "ws_lag_p95_ms": 100,
+        }
+    }
+    
+    current_overrides = {
+        "min_interval_ms": 60,
+        "replace_rate_per_min": 300,
+    }
+    new_overrides, reasons, multi_fail = compute_tuning_adjustments(edge_report, current_overrides)
+    
+    # Age Relief should NOT apply due to high adverse
+    # Instead, adverse trigger should fire (increasing spread)
+    age_relief_reasons = [r for r in reasons if "age_relief" in r]
+    assert len(age_relief_reasons) == 0  # No age relief
+    
+    # But adverse/slippage trigger should fire
+    assert "adverse/slippage>threshold" in reasons or any("adverse" in r for r in reasons)
+
+
+def test_trigger_age_relief_not_applied_bad_slippage():
+    """Test Age Relief NOT applied when slippage_bps_p95 > 3."""
+    edge_report = {
+        "totals": {
+            "net_bps": 3.0,
+            "cancel_ratio": 0.30,
+            "adverse_bps_p95": 2.0,  # Good (≤ 4)
+            "slippage_bps_p95": 4.0,  # BAD (> 3)
+            "order_age_p95_ms": 350,  # > 330
+            "ws_lag_p95_ms": 100,
+        }
+    }
+    
+    current_overrides = {
+        "min_interval_ms": 60,
+        "replace_rate_per_min": 300,
+    }
+    new_overrides, reasons, multi_fail = compute_tuning_adjustments(edge_report, current_overrides)
+    
+    # Age Relief should NOT apply due to high slippage
+    age_relief_reasons = [r for r in reasons if "age_relief" in r]
+    assert len(age_relief_reasons) == 0  # No age relief
+    
+    # But adverse/slippage trigger should fire
+    assert "adverse/slippage>threshold" in reasons or any("slippage" in r for r in reasons)
+
+
+def test_trigger_age_relief_respects_limits():
+    """Test Age Relief respects min/max limits."""
+    edge_report = {
+        "totals": {
+            "net_bps": 3.0,
+            "cancel_ratio": 0.30,
+            "adverse_bps_p95": 3.0,
+            "slippage_bps_p95": 2.0,
+            "order_age_p95_ms": 350,
+            "ws_lag_p95_ms": 100,
+        }
+    }
+    
+    # Start with values at limits
+    current_overrides = {
+        "min_interval_ms": 50,  # Already at min
+        "replace_rate_per_min": 310,  # Close to cap (330)
+    }
+    new_overrides, reasons, multi_fail = compute_tuning_adjustments(edge_report, current_overrides)
+    
+    # min_interval_ms should NOT go below 50
+    if "min_interval_ms" in new_overrides:
+        assert new_overrides["min_interval_ms"] >= 50
+    
+    # replace_rate_per_min should be capped at 330
+    if "replace_rate_per_min" in new_overrides:
+        assert new_overrides["replace_rate_per_min"] <= 330
 
 
 def test_trigger_ws_lag():

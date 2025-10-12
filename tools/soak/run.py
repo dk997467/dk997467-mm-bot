@@ -278,35 +278,62 @@ def compute_tuning_adjustments(
         
         return False
     
-    # Trigger 1: cancel_ratio > 0.55
+    # Extract key metrics
     cancel_ratio = totals.get("cancel_ratio", 0.0)
+    adverse = totals.get("adverse_bps_p95", 0.0)
+    slippage = totals.get("slippage_bps_p95", 0.0)
+    order_age = totals.get("order_age_p95_ms", 0.0)
+    ws_lag = totals.get("ws_lag_p95_ms", 0.0)
+    net_bps = totals.get("net_bps", 0.0)
+    
+    # Trigger 1: cancel_ratio > 0.55
     if cancel_ratio > 0.55:
         fail_count += 1
         apply_adjustment("min_interval_ms", 20, "cancel_ratio>0.55")
         apply_adjustment("replace_rate_per_min", -30, "cancel_ratio>0.55")
     
     # Trigger 2: adverse_bps_p95 > 4 or slippage_bps_p95 > 3
-    adverse = totals.get("adverse_bps_p95", 0.0)
-    slippage = totals.get("slippage_bps_p95", 0.0)
     if adverse > 4.0 or slippage > 3.0:
         fail_count += 1
         apply_adjustment("base_spread_bps_delta", 0.05, "adverse/slippage>threshold")
     
-    # Trigger 3: order_age_p95_ms > 330
-    order_age = totals.get("order_age_p95_ms", 0.0)
-    if order_age > 330:
-        fail_count += 1
-        apply_adjustment("replace_rate_per_min", -30, "order_age>330")
-        apply_adjustment("tail_age_ms", 50, "order_age>330")
+    # Trigger 3: Age Relief (order_age_p95_ms > 330, but only if adverse/slippage in healthy range)
+    # This is NOT a failure - it's an optimization to reduce order age without harming execution quality
+    
+    if order_age > 330 and adverse <= 4.0 and slippage <= 3.0:
+        # Age relief: make strategy more aggressive (but safely)
+        # - Decrease min_interval to allow faster order updates
+        # - Increase replace_rate to allow more frequent replacements
+        age_relief_applied = False
+        
+        # Adjust min_interval_ms (decrease by 10, but not below 50)
+        current_interval = new_overrides.get("min_interval_ms", 60)
+        new_interval = max(50, current_interval - 10)
+        if new_interval != current_interval:
+            new_overrides["min_interval_ms"] = new_interval
+            print(f"| autotune | AGE_RELIEF | min_interval_ms from={current_interval} to={new_interval} |")
+            reasons.append(f"age_relief_interval_{current_interval}->{new_interval}")
+            age_relief_applied = True
+        
+        # Adjust replace_rate_per_min (increase by 30, but not above 330)
+        current_replace = new_overrides.get("replace_rate_per_min", 300)
+        new_replace = min(330, current_replace + 30)
+        if new_replace != current_replace:
+            new_overrides["replace_rate_per_min"] = new_replace
+            print(f"| autotune | AGE_RELIEF | replace_rate_per_min from={current_replace} to={new_replace} |")
+            reasons.append(f"age_relief_replace_{current_replace}->{new_replace}")
+            age_relief_applied = True
+        
+        # Note: Age relief does NOT increase fail_count (it's optimization, not failure)
+        if age_relief_applied:
+            print(f"| autotune | AGE_RELIEF | order_age={order_age:.0f}ms adverse={adverse:.2f} slippage={slippage:.2f} |")
     
     # Trigger 4: ws_lag_p95_ms > 120
-    ws_lag = totals.get("ws_lag_p95_ms", 0.0)
     if ws_lag > 120:
         fail_count += 1
         apply_adjustment("min_interval_ms", 20, "ws_lag>120")
     
     # Trigger 5: net_bps < 2.5 (only if no other triggers)
-    net_bps = totals.get("net_bps", 0.0)
     if net_bps < 2.5 and fail_count == 0:
         apply_adjustment("base_spread_bps_delta", 0.02, "net_bps<2.5")
     
@@ -444,14 +471,14 @@ def main(argv=None) -> int:
                         "runtime": {"utc": "2025-10-12T12:00:00Z", "version": "test"}
                     }
                 else:
-                    # Subsequent iterations: metrics improve
+                    # Subsequent iterations: metrics improve (but order_age stays high to trigger Age Relief)
                     mock_edge_report = {
                         "totals": {
                             "net_bps": 2.8 + (iteration * 0.1),
-                            "adverse_bps_p95": 3.5 - (iteration * 0.2),
-                            "slippage_bps_p95": 2.5 - (iteration * 0.15),
+                            "adverse_bps_p95": 3.5 - (iteration * 0.2),  # Improves to < 4
+                            "slippage_bps_p95": 2.5 - (iteration * 0.15),  # Improves to < 3
                             "cancel_ratio": 0.48 - (iteration * 0.05),
-                            "order_age_p95_ms": 320 - (iteration * 10),
+                            "order_age_p95_ms": 350,  # Keep high to trigger Age Relief
                             "ws_lag_p95_ms": 95 + (iteration * 5),
                             "maker_share_pct": 90.0 + (iteration * 0.5)
                         },
