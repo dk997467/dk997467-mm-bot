@@ -393,6 +393,217 @@ def test_incremental_adjustment():
         assert new_overrides["replace_rate_per_min"] <= current_overrides["replace_rate_per_min"]
 
 
+# MEGA-PROMPT: Tests for fallback and driver-aware tuning
+
+def test_autotune_fallback_triggers_conservative_package():
+    """Test that fallback_mode triggers conservative package."""
+    edge_report = {
+        "totals": {
+            "net_bps": -2.0,  # Negative (but fallback triggered externally)
+            "cancel_ratio": 0.30,
+            "adverse_bps_p95": 3.0,
+            "slippage_bps_p95": 2.0,
+            "order_age_p95_ms": 300,
+            "ws_lag_p95_ms": 100,
+            "neg_edge_drivers": [],
+            "block_reasons": {}
+        }
+    }
+    
+    current_overrides = {
+        "min_interval_ms": 50,
+        "replace_rate_per_min": 270,
+        "base_spread_bps_delta": 0.15,
+        "impact_cap_ratio": 0.10,
+        "tail_age_ms": 600
+    }
+    
+    new_overrides, reasons, multi_fail = compute_tuning_adjustments(
+        edge_report, current_overrides, fallback_mode=True
+    )
+    
+    # Fallback should apply conservative package
+    assert "fallback_conservative" in reasons
+    assert not multi_fail  # Fallback doesn't set multi_fail
+    
+    # Check adjustments
+    assert new_overrides["min_interval_ms"] >= current_overrides["min_interval_ms"]  # +20
+    assert new_overrides["replace_rate_per_min"] <= current_overrides["replace_rate_per_min"]  # -60
+    assert new_overrides["base_spread_bps_delta"] >= current_overrides["base_spread_bps_delta"]  # +0.02
+    assert new_overrides["tail_age_ms"] >= 700  # max(700, current)
+
+
+def test_autotune_driver_slippage():
+    """Test driver-aware tuning for slippage_bps in neg_edge_drivers."""
+    edge_report = {
+        "totals": {
+            "net_bps": -1.5,
+            "cancel_ratio": 0.30,
+            "adverse_bps_p95": 3.0,
+            "slippage_bps_p95": 3.5,
+            "order_age_p95_ms": 300,
+            "ws_lag_p95_ms": 100,
+            "neg_edge_drivers": ["slippage_bps", "fees_eff_bps"],
+            "block_reasons": {
+                "min_interval": {"count": 5, "ratio": 0.2},
+                "concurrency": {"count": 3, "ratio": 0.12},
+                "risk": {"count": 17, "ratio": 0.68},
+                "throttle": {"count": 0, "ratio": 0.0}
+            }
+        }
+    }
+    
+    current_overrides = {
+        "base_spread_bps_delta": 0.10,
+        "tail_age_ms": 600
+    }
+    
+    new_overrides, reasons, multi_fail = compute_tuning_adjustments(
+        edge_report, current_overrides, fallback_mode=False
+    )
+    
+    # Should increase spread and tail_age
+    assert new_overrides["base_spread_bps_delta"] > current_overrides["base_spread_bps_delta"]
+    assert new_overrides["tail_age_ms"] > current_overrides["tail_age_ms"]
+    assert "driver_slippage_spread" in reasons or "driver_slippage_tail" in reasons
+
+
+def test_autotune_driver_adverse():
+    """Test driver-aware tuning for adverse_bps in neg_edge_drivers."""
+    edge_report = {
+        "totals": {
+            "net_bps": -1.0,
+            "cancel_ratio": 0.30,
+            "adverse_bps_p95": 4.5,
+            "slippage_bps_p95": 2.0,
+            "order_age_p95_ms": 300,
+            "ws_lag_p95_ms": 100,
+            "neg_edge_drivers": ["adverse_bps", "fees_eff_bps"],
+            "block_reasons": {
+                "min_interval": {"count": 5, "ratio": 0.2},
+                "concurrency": {"count": 3, "ratio": 0.12},
+                "risk": {"count": 17, "ratio": 0.68},
+                "throttle": {"count": 0, "ratio": 0.0}
+            }
+        }
+    }
+    
+    current_overrides = {
+        "impact_cap_ratio": 0.10,
+        "max_delta_ratio": 0.15
+    }
+    
+    new_overrides, reasons, multi_fail = compute_tuning_adjustments(
+        edge_report, current_overrides, fallback_mode=False
+    )
+    
+    # Should decrease impact_cap and max_delta
+    assert new_overrides["impact_cap_ratio"] < current_overrides["impact_cap_ratio"]
+    assert new_overrides["max_delta_ratio"] < current_overrides["max_delta_ratio"]
+    assert "driver_adverse_impact" in reasons or "driver_adverse_delta" in reasons
+
+
+def test_autotune_block_reasons_min_interval():
+    """Test driver-aware tuning for high block_reasons.min_interval.ratio."""
+    edge_report = {
+        "totals": {
+            "net_bps": 2.5,
+            "cancel_ratio": 0.30,
+            "adverse_bps_p95": 3.0,
+            "slippage_bps_p95": 2.0,
+            "order_age_p95_ms": 300,
+            "ws_lag_p95_ms": 100,
+            "neg_edge_drivers": [],
+            "block_reasons": {
+                "min_interval": {"count": 12, "ratio": 0.5},  # > 0.4
+                "concurrency": {"count": 3, "ratio": 0.125},
+                "risk": {"count": 9, "ratio": 0.375},
+                "throttle": {"count": 0, "ratio": 0.0}
+            }
+        }
+    }
+    
+    current_overrides = {
+        "min_interval_ms": 60
+    }
+    
+    new_overrides, reasons, multi_fail = compute_tuning_adjustments(
+        edge_report, current_overrides, fallback_mode=False
+    )
+    
+    # Should increase min_interval_ms
+    assert new_overrides["min_interval_ms"] > current_overrides["min_interval_ms"]
+    assert "driver_block_minint" in reasons
+
+
+def test_autotune_block_reasons_concurrency():
+    """Test driver-aware tuning for high block_reasons.concurrency.ratio."""
+    edge_report = {
+        "totals": {
+            "net_bps": 2.5,
+            "cancel_ratio": 0.30,
+            "adverse_bps_p95": 3.0,
+            "slippage_bps_p95": 2.0,
+            "order_age_p95_ms": 300,
+            "ws_lag_p95_ms": 100,
+            "neg_edge_drivers": [],
+            "block_reasons": {
+                "min_interval": {"count": 8, "ratio": 0.27},
+                "concurrency": {"count": 10, "ratio": 0.33},  # > 0.3
+                "risk": {"count": 12, "ratio": 0.4},
+                "throttle": {"count": 0, "ratio": 0.0}
+            }
+        }
+    }
+    
+    current_overrides = {
+        "replace_rate_per_min": 300
+    }
+    
+    new_overrides, reasons, multi_fail = compute_tuning_adjustments(
+        edge_report, current_overrides, fallback_mode=False
+    )
+    
+    # Should decrease replace_rate_per_min
+    assert new_overrides["replace_rate_per_min"] < current_overrides["replace_rate_per_min"]
+    assert "driver_concurrency" in reasons
+
+
+def test_autotune_fallback_respects_limits():
+    """Test that fallback respects field limits."""
+    edge_report = {
+        "totals": {
+            "net_bps": -3.0,
+            "cancel_ratio": 0.30,
+            "adverse_bps_p95": 3.0,
+            "slippage_bps_p95": 2.0,
+            "order_age_p95_ms": 300,
+            "ws_lag_p95_ms": 100,
+            "neg_edge_drivers": [],
+            "block_reasons": {}
+        }
+    }
+    
+    # Start with values near limits
+    current_overrides = {
+        "min_interval_ms": 110,  # Near max 120
+        "replace_rate_per_min": 160,  # Near min 150
+        "base_spread_bps_delta": 0.55,  # Near max 0.6
+        "impact_cap_ratio": 0.07,  # Near min 0.06
+        "tail_age_ms": 950  # Near max 1000
+    }
+    
+    new_overrides, reasons, multi_fail = compute_tuning_adjustments(
+        edge_report, current_overrides, fallback_mode=True
+    )
+    
+    # All values should stay within limits
+    assert new_overrides["min_interval_ms"] <= 120  # Cap
+    assert new_overrides["replace_rate_per_min"] >= 150  # Floor
+    assert new_overrides["base_spread_bps_delta"] <= 0.6  # Cap
+    assert new_overrides["tail_age_ms"] <= 1000  # Cap
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

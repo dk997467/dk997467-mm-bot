@@ -223,10 +223,16 @@ def load_edge_report(path: str = "artifacts/reports/EDGE_REPORT.json") -> Dict[s
 
 def compute_tuning_adjustments(
     edge_report: Dict[str, Any],
-    current_overrides: Dict[str, Any]
+    current_overrides: Dict[str, Any],
+    fallback_mode: bool = False
 ) -> Tuple[Dict[str, Any], List[str], bool]:
     """
     Compute tuning adjustments based on EDGE_REPORT metrics.
+    
+    Args:
+        edge_report: Extended EDGE_REPORT with diagnostics
+        current_overrides: Current runtime overrides
+        fallback_mode: If True, apply conservative fallback adjustments
     
     Returns:
         (new_overrides, reasons, multi_fail_guard_triggered)
@@ -285,6 +291,114 @@ def compute_tuning_adjustments(
     order_age = totals.get("order_age_p95_ms", 0.0)
     ws_lag = totals.get("ws_lag_p95_ms", 0.0)
     net_bps = totals.get("net_bps", 0.0)
+    
+    # MEGA-PROMPT: Conservative Fallback (triggered externally when 2 consecutive net_bps < 0)
+    if fallback_mode:
+        print("| autotune | FALLBACK_CONSERVATIVE | triggered=1 |")
+        
+        # Apply conservative package (respecting all limits and guardrails)
+        # Don't increment fail_count (similar to AGE_RELIEF)
+        fallback_applied = []
+        
+        # min_interval_ms += 20 (cap ≤ 120)
+        current_interval = new_overrides.get("min_interval_ms", 60)
+        new_interval = min(120, current_interval + 20)
+        if new_interval != current_interval:
+            new_overrides["min_interval_ms"] = new_interval
+            fallback_applied.append(f"min_interval_ms={current_interval}->{new_interval}")
+        
+        # replace_rate_per_min -= 60 (floor ≥ 150)
+        current_replace = new_overrides.get("replace_rate_per_min", 300)
+        new_replace = max(150, current_replace - 60)
+        if new_replace != current_replace:
+            new_overrides["replace_rate_per_min"] = new_replace
+            fallback_applied.append(f"replace_rate_per_min={current_replace}->{new_replace}")
+        
+        # base_spread_bps_delta += 0.02 (respecting iteration cap +0.10)
+        current_spread = new_overrides.get("base_spread_bps_delta", 0.05)
+        new_spread = min(current_spread + 0.02, 0.6)  # Cap at absolute max
+        if new_spread != current_spread:
+            new_overrides["base_spread_bps_delta"] = new_spread
+            fallback_applied.append(f"spread_delta={current_spread:.2f}->{new_spread:.2f}")
+        
+        # impact_cap_ratio = max(0.08, current)
+        current_impact = new_overrides.get("impact_cap_ratio", 0.10)
+        new_impact = max(0.08, current_impact)
+        if new_impact != current_impact:
+            new_overrides["impact_cap_ratio"] = new_impact
+            fallback_applied.append(f"impact_cap={current_impact:.2f}->{new_impact:.2f}")
+        
+        # tail_age_ms = max(700, current)
+        current_tail = new_overrides.get("tail_age_ms", 600)
+        new_tail = max(700, current_tail)
+        if new_tail != current_tail:
+            new_overrides["tail_age_ms"] = new_tail
+            fallback_applied.append(f"tail_age={current_tail}->{new_tail}")
+        
+        if fallback_applied:
+            print(f"| autotune | FALLBACK_CONSERVATIVE | applied=1 | {' '.join(fallback_applied)} |")
+            reasons.append("fallback_conservative")
+        
+        # Return early - fallback overrides regular tuning
+        return new_overrides, reasons, False
+    
+    # MEGA-PROMPT: Driver-Aware Tuning (based on diagnostics from EDGE_REPORT)
+    neg_edge_drivers = totals.get("neg_edge_drivers", [])
+    block_reasons = totals.get("block_reasons", {})
+    
+    # Driver 1: slippage_bps in neg_edge_drivers
+    if "slippage_bps" in neg_edge_drivers:
+        # Increase spread and tail_age to reduce slippage
+        current_spread = new_overrides.get("base_spread_bps_delta", 0.05)
+        new_spread = min(0.6, current_spread + 0.02)
+        if new_spread != current_spread:
+            new_overrides["base_spread_bps_delta"] = new_spread
+            reasons.append("driver_slippage_spread")
+            print(f"| autotune | DRIVER:slippage_bps | field=base_spread_bps_delta from={current_spread:.2f} to={new_spread:.2f} |")
+        
+        current_tail = new_overrides.get("tail_age_ms", 600)
+        new_tail = min(900, current_tail + 50)
+        if new_tail != current_tail:
+            new_overrides["tail_age_ms"] = new_tail
+            reasons.append("driver_slippage_tail")
+            print(f"| autotune | DRIVER:slippage_bps | field=tail_age_ms from={current_tail} to={new_tail} |")
+    
+    # Driver 2: adverse_bps in neg_edge_drivers
+    if "adverse_bps" in neg_edge_drivers:
+        # Decrease impact_cap and max_delta to reduce adverse selection
+        current_impact = new_overrides.get("impact_cap_ratio", 0.10)
+        new_impact = max(0.06, current_impact - 0.02)
+        if new_impact != current_impact:
+            new_overrides["impact_cap_ratio"] = new_impact
+            reasons.append("driver_adverse_impact")
+            print(f"| autotune | DRIVER:adverse_bps | field=impact_cap_ratio from={current_impact:.2f} to={new_impact:.2f} |")
+        
+        current_max_delta = new_overrides.get("max_delta_ratio", 0.15)
+        new_max_delta = max(0.10, current_max_delta - 0.02)
+        if new_max_delta != current_max_delta:
+            new_overrides["max_delta_ratio"] = new_max_delta
+            reasons.append("driver_adverse_delta")
+            print(f"| autotune | DRIVER:adverse_bps | field=max_delta_ratio from={current_max_delta:.2f} to={new_max_delta:.2f} |")
+    
+    # Driver 3: High block_reasons.min_interval.ratio
+    min_interval_ratio = block_reasons.get("min_interval", {}).get("ratio", 0.0)
+    if min_interval_ratio > 0.4:
+        current_interval = new_overrides.get("min_interval_ms", 60)
+        new_interval = min(120, current_interval + 20)
+        if new_interval != current_interval:
+            new_overrides["min_interval_ms"] = new_interval
+            reasons.append("driver_block_minint")
+            print(f"| autotune | DRIVER:block_minint | field=min_interval_ms from={current_interval} to={new_interval} |")
+    
+    # Driver 4: High block_reasons.concurrency.ratio
+    concurrency_ratio = block_reasons.get("concurrency", {}).get("ratio", 0.0)
+    if concurrency_ratio > 0.3:
+        current_replace = new_overrides.get("replace_rate_per_min", 300)
+        new_replace = max(150, current_replace - 30)
+        if new_replace != current_replace:
+            new_overrides["replace_rate_per_min"] = new_replace
+            reasons.append("driver_concurrency")
+            print(f"| autotune | DRIVER:concurrency | field=replace_rate_per_min from={current_replace} to={new_replace} |")
     
     # Trigger 1: cancel_ratio > 0.55
     if cancel_ratio > 0.55:
@@ -435,6 +549,10 @@ def main(argv=None) -> int:
             save_runtime_overrides(current_overrides)
             print(f"| overrides | OK | source=default_best_cell |")
         
+        # State for negative streak detector (MEGA-PROMPT: fallback logic)
+        neg_streak = 0  # Count of consecutive iterations with net_bps < 0
+        fallback_applied_at_iter = None  # Track when fallback was last applied
+        
         # Iterate with auto-tuning
         for iteration in range(args.iterations):
             print(f"\n{'='*60}")
@@ -454,33 +572,94 @@ def main(argv=None) -> int:
             # For testing, generate mock EDGE_REPORT
             if args.mock:
                 # Generate problematic metrics at first, then improve
-                # This ensures auto-tuning logic is triggered
+                # MEGA-PROMPT: Include diagnostics fields for driver-aware tuning
                 if iteration == 0:
-                    # First iteration: problematic metrics
+                    # First iteration: problematic metrics, negative net_bps, driver triggers
                     mock_edge_report = {
                         "totals": {
-                            "net_bps": 2.2,  # Low
+                            "net_bps": -1.5,  # Negative! (to trigger fallback after 2 consecutive)
                             "adverse_bps_p95": 5.0,  # High
                             "slippage_bps_p95": 3.5,  # High
                             "cancel_ratio": 0.60,  # High
                             "order_age_p95_ms": 340,  # High
                             "ws_lag_p95_ms": 130,  # High
-                            "maker_share_pct": 88.0
+                            "maker_share_pct": 88.0,
+                            # DIAGNOSTICS (PROMPT H + MEGA-PROMPT):
+                            "component_breakdown": {
+                                "gross_bps": 5.0,
+                                "fees_eff_bps": 2.0,
+                                "slippage_bps": 3.5,
+                                "adverse_bps": 2.0,
+                                "inventory_bps": 1.0,
+                                "net_bps": -1.5
+                            },
+                            "neg_edge_drivers": ["slippage_bps", "adverse_bps"],  # Trigger driver-aware
+                            "block_reasons": {
+                                "min_interval": {"count": 15, "ratio": 0.5},  # Trigger driver
+                                "concurrency": {"count": 10, "ratio": 0.33},  # Trigger driver
+                                "risk": {"count": 5, "ratio": 0.17},
+                                "throttle": {"count": 0, "ratio": 0.0}
+                            }
+                        },
+                        "symbols": {},
+                        "runtime": {"utc": "2025-10-12T12:00:00Z", "version": "test"}
+                    }
+                elif iteration == 1:
+                    # Second iteration: still negative (will trigger fallback on iteration 2)
+                    mock_edge_report = {
+                        "totals": {
+                            "net_bps": -0.8,  # Still negative
+                            "adverse_bps_p95": 4.5,
+                            "slippage_bps_p95": 3.2,
+                            "cancel_ratio": 0.55,
+                            "order_age_p95_ms": 335,
+                            "ws_lag_p95_ms": 125,
+                            "maker_share_pct": 89.0,
+                            "component_breakdown": {
+                                "gross_bps": 5.0,
+                                "fees_eff_bps": 2.0,
+                                "slippage_bps": 2.8,
+                                "adverse_bps": 1.5,
+                                "inventory_bps": 0.5,
+                                "net_bps": -0.8
+                            },
+                            "neg_edge_drivers": ["slippage_bps", "fees_eff_bps"],
+                            "block_reasons": {
+                                "min_interval": {"count": 12, "ratio": 0.4},
+                                "concurrency": {"count": 8, "ratio": 0.27},
+                                "risk": {"count": 10, "ratio": 0.33},
+                                "throttle": {"count": 0, "ratio": 0.0}
+                            }
                         },
                         "symbols": {},
                         "runtime": {"utc": "2025-10-12T12:00:00Z", "version": "test"}
                     }
                 else:
-                    # Subsequent iterations: metrics improve (but order_age stays high to trigger Age Relief)
+                    # Subsequent iterations: metrics improve after fallback
                     mock_edge_report = {
                         "totals": {
-                            "net_bps": 2.8 + (iteration * 0.1),
+                            "net_bps": 2.8 + (iteration * 0.1),  # Positive after fallback
                             "adverse_bps_p95": 3.5 - (iteration * 0.2),  # Improves to < 4
                             "slippage_bps_p95": 2.5 - (iteration * 0.15),  # Improves to < 3
                             "cancel_ratio": 0.48 - (iteration * 0.05),
                             "order_age_p95_ms": 350,  # Keep high to trigger Age Relief
                             "ws_lag_p95_ms": 95 + (iteration * 5),
-                            "maker_share_pct": 90.0 + (iteration * 0.5)
+                            "maker_share_pct": 90.0 + (iteration * 0.5),
+                            "component_breakdown": {
+                                "gross_bps": 8.0,
+                                "fees_eff_bps": 2.0,
+                                "slippage_bps": 2.0,
+                                "adverse_bps": 1.5,
+                                "inventory_bps": 0.5,
+                                "net_bps": 2.8 + (iteration * 0.1)
+                            },
+                            "neg_edge_drivers": [],  # Empty for positive net_bps
+                            "block_reasons": {
+                                "min_interval": {"count": 5, "ratio": 0.2},
+                                "concurrency": {"count": 3, "ratio": 0.12},
+                                "risk": {"count": 17, "ratio": 0.68},
+                                "throttle": {"count": 0, "ratio": 0.0}
+                            }
                         },
                         "symbols": {},
                         "runtime": {"utc": "2025-10-12T12:00:00Z", "version": "test"}
@@ -495,14 +674,36 @@ def main(argv=None) -> int:
             edge_report = load_edge_report()
             
             if edge_report:
-                # Compute tuning adjustments
+                # MEGA-PROMPT: Check for negative streak (2 consecutive net_bps < 0)
+                totals = edge_report.get("totals", {})
+                current_net_bps = totals.get("net_bps", 0.0)
+                
+                # Update negative streak counter
+                if current_net_bps < 0:
+                    neg_streak += 1
+                    print(f"[DETECT] neg_streak={neg_streak} (net_bps={current_net_bps:.2f})")
+                else:
+                    if neg_streak > 0:
+                        print(f"[DETECT] neg_streak reset (net_bps={current_net_bps:.2f} >= 0)")
+                    neg_streak = 0
+                
+                # Determine if fallback mode should be triggered
+                # Trigger fallback if: 2 consecutive negatives AND fallback not recently applied
+                fallback_mode = (neg_streak >= 2) and (fallback_applied_at_iter is None or 
+                                                        (iteration - fallback_applied_at_iter) > 1)
+                
+                if fallback_mode:
+                    print(f"[FALLBACK] Triggering conservative fallback (neg_streak={neg_streak})")
+                    fallback_applied_at_iter = iteration
+                    neg_streak = 0  # Reset streak after fallback
+                
+                # Compute tuning adjustments (with fallback if triggered)
                 new_overrides, reasons, multi_fail_guard = compute_tuning_adjustments(
-                    edge_report, current_overrides
+                    edge_report, current_overrides, fallback_mode=fallback_mode
                 )
                 
                 # Print tuning results
-                totals = edge_report.get("totals", {})
-                adjustments_count = len([r for r in reasons if r != "multi_fail_guard"])
+                adjustments_count = len([r for r in reasons if r != "multi_fail_guard" and r != "fallback_conservative"])
                 
                 if multi_fail_guard:
                     print("| soak_iter_tune | SKIP | REASON=multi_fail_guard |")

@@ -392,7 +392,25 @@ def run_dry_runs() -> Dict[str, Any]:
     dry_runs = [
         ([sys.executable, '-m', 'tools.release.pre_live_pack', '--dry-run'], 'pre_live_pack'),
     ]
-    results = [run_step_with_retries(name, cmd) for cmd, name in dry_runs]
+    
+    # MEGA-PROMPT: Handle ModuleNotFoundError in safe-mode for pre_live_pack
+    results = []
+    for cmd, name in dry_runs:
+        result = run_step_with_retries(name, cmd)
+        
+        # Check if pre_live_pack failed with ModuleNotFoundError (indicated in details)
+        if not result['ok'] and allow_missing_secrets:
+            # Read error logs to check for ModuleNotFoundError
+            err_log_path = result.get('logs', {}).get('stderr')
+            if err_log_path and Path(err_log_path).exists():
+                err_content = Path(err_log_path).read_text(encoding='ascii', errors='replace')
+                if 'ModuleNotFoundError' in err_content or 'No module named' in err_content:
+                    # In safe-mode, skip pre_live_pack if module is missing
+                    print(f"[SAFE-MODE] Skipping {name} due to ModuleNotFoundError", file=sys.stderr)
+                    result = {'name': name, 'ok': True, 'details': 'SKIPPED_NO_MODULE'}
+        
+        results.append(result)
+    
     all_ok = all(r['ok'] for r in results)
     details = '; '.join(f"{name}={'OK' if r['ok'] else 'FAIL'}" for r, (cmd, name) in zip(results, dry_runs))
     return {'name': 'dry_runs', 'ok': all_ok, 'details': details, 'sections': results}

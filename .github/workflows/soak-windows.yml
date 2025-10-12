@@ -142,6 +142,9 @@ jobs:
       # Fixtures directory for tests
       FIXTURES_DIR: "tests/fixtures"
       
+      # PYTHONPATH for validation scripts (Windows: semicolon separator)
+      PYTHONPATH: "${{ github.workspace }};${{ github.workspace }}\\src"
+      
       # ========================================================================
       # ARTIFACT PATHS (centralized configuration)
       # ========================================================================
