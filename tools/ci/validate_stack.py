@@ -92,8 +92,18 @@ def extract_gates_section(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def extract_tests_section(data: Dict[str, Any]) -> Dict[str, Any]:
+def extract_tests_section(data: Dict[str, Any], allow_missing_secrets: bool = False) -> Dict[str, Any]:
     """Extract section info from tests_summary.json."""
+    # Check if secrets are missing and allowed to skip
+    secrets_available = check_secrets_available()
+    
+    if not secrets_available and allow_missing_secrets:
+        return {
+            "name": "tests_whitelist",
+            "ok": True,
+            "details": "SKIPPED_NO_SECRETS"
+        }
+    
     if not data:
         return {"name": "tests_whitelist", "ok": True, "details": "SKIP: missing file"}
     
@@ -117,7 +127,8 @@ def aggregate_stack_summary(
     readiness_file: Path,
     gates_file: Path,
     tests_file: Path,
-    allow_missing: bool = False
+    allow_missing: bool = False,
+    allow_missing_secrets: bool = False
 ) -> Dict[str, Any]:
     """Aggregate stack summary from multiple sources."""
     # Load data from files
@@ -128,7 +139,7 @@ def aggregate_stack_summary(
     # Extract sections
     sections = [
         extract_readiness_section(readiness_data),
-        extract_tests_section(tests_data),
+        extract_tests_section(tests_data, allow_missing_secrets=allow_missing_secrets),
         extract_gates_section(gates_data),
     ]
     
@@ -232,7 +243,8 @@ def main() -> int:
             args.readiness_file,
             args.gates_file,
             args.tests_file,
-            args.allow_missing_sections
+            args.allow_missing_sections,
+            allow_missing_secrets
         )
         
         # If secrets are missing but allowed, mark audit sections as skipped

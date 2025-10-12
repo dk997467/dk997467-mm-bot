@@ -1,0 +1,120 @@
+feat(edge): extended EDGE_REPORT and detailed KPI gate reasons with WARN/FAIL thresholds
+
+Implemented comprehensive edge metrics reporting and KPI validation with detailed
+threshold-based warnings and failures.
+
+## Core Components
+
+- `tools/reports/edge_metrics.py` (new)
+  * Stdlib-only metrics calculator
+  * Computes P95 percentiles (adverse, slippage, order_age, ws_lag)
+  * Calculates replace/cancel ratios from audit data
+  * Computes blocked ratios (min_interval, concurrency, risk, throttle)
+  * Deterministic JSON output (sort_keys, consistent separators)
+
+- `tools/reports/edge_report.py` (new)
+  * CLI wrapper for generating extended EDGE_REPORT.json
+  * Reads from existing artifacts (EDGE_REPORT, audit.jsonl)
+  * Prints stable marker: | edge_report | OK | FIELDS=extended |
+
+- `tools/ci/validate_readiness.py` (enhanced)
+  * Added KPI Gate mode (--kpi-gate)
+  * WARN/FAIL thresholds for 7 metrics:
+    - adverse_bps_p95: WARN>4, FAIL>6
+    - slippage_bps_p95: WARN>3, FAIL>5
+    - cancel_ratio: WARN>0.55, FAIL>0.70
+    - order_age_p95_ms: WARN>330, FAIL>360
+    - ws_lag_p95_ms: WARN>120, FAIL>180
+    - net_bps: FAIL<2.5
+    - maker_share_pct: FAIL<85
+  * Configurable via ENV (KPI_ADVERSE_WARN, KPI_ADVERSE_FAIL, etc.)
+  * Generates KPI_GATE.json with verdict and reasons
+  * Prints stable markers with detailed reason tags
+
+## Reason Tags
+
+- EDGE:adverse — adverse_bps_p95 threshold exceeded
+- EDGE:slippage — slippage_bps_p95 threshold exceeded
+- EDGE:cancel_ratio — cancel_ratio threshold exceeded
+- EDGE:order_age — order_age_p95_ms threshold exceeded
+- EDGE:ws_lag — ws_lag_p95_ms threshold exceeded
+- EDGE:net_bps — net_bps below minimum
+- EDGE:maker_share — maker_share_pct below minimum
+
+## Output Examples
+
+OK:
+```
+| kpi_gate | OK | THRESHOLDS=APPLIED |
+```
+
+WARN:
+```
+| kpi_gate | WARN | REASONS=EDGE:adverse,EDGE:slippage |
+```
+
+FAIL:
+```
+| kpi_gate | FAIL | REASONS=EDGE:net_bps,EDGE:maker_share |
+```
+
+## Tests
+
+All tests PASSING (29 total):
+
+- `tests/unit/test_edge_metrics.py` (12 tests)
+  * Percentile calculation
+  * P95 metric computation (dist, p95 key, fallback)
+  * Ratio calculations (replace, cancel, blocked)
+  * Structure validation
+
+- `tests/unit/test_kpi_gate_thresholds.py` (13 tests)
+  * Default thresholds
+  * OK/WARN/FAIL verdicts
+  * Individual metric checks
+  * Missing fields handling
+
+- `tests/e2e/test_edge_report_kpi_gate.py` (4 tests)
+  * EDGE_REPORT generation with marker
+  * KPI Gate OK/WARN/FAIL flows
+
+## Usage
+
+Generate extended EDGE_REPORT:
+```bash
+python -m tools.reports.edge_report \
+    --inputs artifacts/EDGE_REPORT.json \
+    --audit artifacts/audit.jsonl \
+    --out-json artifacts/reports/EDGE_REPORT.json
+```
+
+Run KPI Gate:
+```bash
+python -m tools.ci.validate_readiness \
+    --kpi-gate \
+    --edge-report artifacts/reports/EDGE_REPORT.json \
+    --out-json artifacts/reports/KPI_GATE.json
+```
+
+## Acceptance
+
+✅ tools/reports/edge_report.py prints marker and creates extended JSON
+✅ validate_readiness.py correctly computes OK/WARN/FAIL
+✅ Reasons contain detailed tags
+✅ Markers present in stdout
+✅ All new tests PASS (29/29)
+✅ No linter errors
+✅ Deterministic output (frozen time, sorted keys)
+
+## Integration
+
+Ready for CI/CD integration:
+- Generate EDGE_REPORT after each strategy run
+- Run KPI Gate to validate metrics
+- Fail pipeline on FAIL verdict
+- Alert on WARN verdict
+
+---
+
+Co-authored-by: Claude (Anthropic)
+

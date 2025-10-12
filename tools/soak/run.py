@@ -19,6 +19,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 
+# Import EdgeSentinel for profile support
+try:
+    from strategy.edge_sentinel import EdgeSentinel
+except ImportError:
+    EdgeSentinel = None
+
 
 def calculate_p95(values: List[float]) -> float:
     """Calculate 95th percentile."""
@@ -197,14 +203,36 @@ def main(argv=None) -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Soak test runner and reporter")
     parser.add_argument("--hours", type=int, default=72, help="Soak duration in hours")
+    parser.add_argument("--iterations", type=int, help="Number of iterations (mini-soak mode)")
     parser.add_argument("--export-json", type=str, help="Export JSON report path")
     parser.add_argument("--export-md", type=str, help="Export markdown report path")
     parser.add_argument("--gate-summary", type=str, help="Export gates summary JSON path")
     parser.add_argument("--mock", action="store_true", help="Use mock data for testing")
     args = parser.parse_args(argv)
     
+    # Check for MM_PROFILE env var and load profile
+    profile_name = os.environ.get("MM_PROFILE")
+    sentinel = None
+    
+    if profile_name and EdgeSentinel:
+        print(f"[INFO] Loading profile: {profile_name}")
+        try:
+            sentinel = EdgeSentinel(profile_name=profile_name)
+            sentinel.save_applied_profile()
+            print(f"[INFO] Profile {profile_name} applied successfully")
+        except Exception as e:
+            print(f"[WARN] Failed to load profile {profile_name}: {e}")
+            sentinel = None
+    
+    # Mini-soak mode (for testing with iterations)
+    if args.iterations:
+        print(f"[INFO] Running mini-soak: {args.iterations} iterations")
+        duration_hours = 0  # Mini-soak doesn't track hours
+    else:
+        duration_hours = args.hours
+    
     # Collect metrics
-    metrics = collect_metrics(args.hours, mock=args.mock)
+    metrics = collect_metrics(duration_hours, mock=args.mock)
     
     # Evaluate gates
     gates, overall_pass = evaluate_gates(metrics)

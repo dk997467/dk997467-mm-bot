@@ -1,0 +1,13 @@
+{
+  "min_interval_ms": 60,
+  "tail_age_ms": 700,
+  "max_delta_ratio": 0.15,
+  "impact_cap_ratio": 0.10,
+  "replace_rate_per_min": 300,
+  "concurrency_limit_delta": -0.1,
+  "slippage_penalty_coef_delta": 0.10,
+  "vip_tilt_cap_delta": 0.15,
+  "inventory_tilt_cap_delta": -0.10,
+  "base_spread_bps_delta": 0.35
+}
+
