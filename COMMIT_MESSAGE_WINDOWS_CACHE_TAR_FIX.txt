@@ -1,0 +1,30 @@
+fix(ci): Windows cache tar/gzip warnings - use bsdtar instead of Git Bash tar
+
+Problem:
+- actions/cache on Windows uses tar.exe from Git Bash
+- Git Bash tar requires external gzip which is not available
+- Causes "gzip: command not found" and "exit code 2" warnings in Post job cleanup
+
+Solution:
+- Add step [3/13] to prepend C:\Windows\System32 to PATH
+- This ensures actions/cache uses Windows bsdtar (C:\Windows\System32\tar.exe)
+- Windows bsdtar has built-in compression support (no external gzip needed)
+
+Changes:
+- .github/workflows/soak-windows.yml
+  * New step [3/13]: "Prefer Windows tar (bsdtar) for actions/cache"
+  * Renumbered all subsequent steps (1-12 → 1-13)
+
+Impact:
+✅ Eliminates gzip warnings in CI logs
+✅ Uses native Windows tar (faster, more reliable)
+✅ No changes to cache functionality or keys
+✅ All cache steps remain green
+
+Verification:
+- No "gzip: command not found" errors
+- No "tar.exe exit code 2" warnings
+- Cache hit/miss detection works correctly
+
+Refs: WINDOWS_CACHE_TAR_FIX.md
+
