@@ -24,31 +24,53 @@ on:
       soak_hours:
         description: "Duration in hours (24-72)"
         required: false
-        default: "24"
+        type: number
+        default: 3
+      iterations:
+        description: "Number of iterations (mini-soak mode)"
+        required: false
+        type: number
+        default: 6
+      auto_tune:
+        description: "Enable auto-tuning between iterations"
+        required: false
+        type: boolean
+        default: true
+      overrides_json:
+        description: "Runtime overrides JSON (leave empty for defaults)"
+        required: false
+        type: string
+        default: ""
       iteration_timeout_seconds:
         description: "Timeout per iteration (seconds)"
         required: false
-        default: "1200"
+        type: number
+        default: 1200
       heartbeat_interval_seconds:
         description: "Sleep between iterations (seconds)"
         required: false
-        default: "300"
+        type: number
+        default: 300
       validation_timeout_seconds:
         description: "Timeout for validation steps (seconds)"
         required: false
-        default: "900"
+        type: number
+        default: 900
       artifact_retention_days:
         description: "Artifact retention (days)"
         required: false
-        default: "14"
+        type: number
+        default: 14
       python_path:
         description: "Python executable path (default: auto-detect)"
         required: false
+        type: string
         default: "python"
       stay_awake:
         description: "Anti-sleep protection (1=enabled, 0=disabled)"
         required: false
-        default: "1"
+        type: number
+        default: 1
   schedule:
     - cron: "0 2 * * 1" # Понедельник в 02:00 UTC
 
@@ -76,6 +98,11 @@ jobs:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_PYTHON_VERSION_WARNING: "1"
+      
+      # MEGA-PROMPT: Runtime overrides and profile
+      MM_PROFILE: "S1"
+      MM_ALLOW_MISSING_SECRETS: "1"
+      MM_RUNTIME_OVERRIDES_JSON: ${{ inputs.overrides_json }}
       
       # ========================================================================
       # SOAK TEST PARAMETERS (configurable via workflow_dispatch)
@@ -129,15 +156,13 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       
       # Proxy configuration (optional - for restricted networks)
-      HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
-      HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
+      # Note: Uncomment and set in repository secrets if needed
+      # HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+      # HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
       
       # ========================================================================
       # VALIDATION & KPI GATE (safe-mode for CI)
       # ========================================================================
-      
-      # Allow validation steps to skip when secrets are missing
-      MM_ALLOW_MISSING_SECRETS: "1"
       
       # Fixtures directory for tests
       FIXTURES_DIR: "tests/fixtures"
@@ -392,8 +417,94 @@ jobs:
           "KEEP_AWAKE_JOB_ID=$($job.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "[OK] Keep-awake job started. ID=$($job.Id)"
 
+      - name: Seed default overrides if not provided
+        id: seed-overrides
+        run: |
+          Write-Host "================================================"
+          Write-Host "SEEDING RUNTIME OVERRIDES"
+          Write-Host "================================================"
+          
+          $overridesJson = "${{ inputs.overrides_json }}"
+          
+          if ([string]::IsNullOrWhiteSpace($overridesJson)) {
+            $defaultPath = "tools\soak\default_overrides.json"
+            if (Test-Path $defaultPath) {
+              Write-Host "[SEED] Using default_overrides.json"
+              $overridesJson = Get-Content $defaultPath -Raw
+              echo "MM_RUNTIME_OVERRIDES_JSON=$overridesJson" >> $env:GITHUB_ENV
+              Write-Host "| seed | overrides | default_overrides.json |"
+            } else {
+              Write-Host "[WARN] default_overrides.json not found, will use hardcoded defaults"
+              Write-Host "| seed | overrides | none |"
+            }
+          } else {
+            Write-Host "[SEED] Using overrides from workflow input"
+            Write-Host "| seed | overrides | workflow_input |"
+          }
+
+      - name: Run mini-soak with auto-tuning
+        id: mini-soak
+        if: ${{ inputs.iterations }}
+        run: |
+          Write-Host "================================================"
+          Write-Host "MINI-SOAK MODE: ${{ inputs.iterations }} iterations"
+          Write-Host "================================================"
+          
+          $iterations = [int]"${{ inputs.iterations }}"
+          $autotuneFlag = if ("${{ inputs.auto_tune }}" -eq "true") { "--auto-tune" } else { "" }
+          
+          Write-Host "Iterations: $iterations"
+          Write-Host "Auto-tune: ${{ inputs.auto_tune }}"
+          Write-Host "Profile: $env:MM_PROFILE"
+          Write-Host ""
+          
+          # Run soak with iterations
+          & $env:PYTHON_EXE -m tools.soak.run --iterations $iterations $autotuneFlag --mock
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Soak run failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+          
+          Write-Host "================================================"
+          Write-Host "MINI-SOAK COMPLETED"
+          Write-Host "================================================"
+
+      - name: Fail job on KPI_GATE FAIL
+        id: check-kpi-gate
+        if: ${{ inputs.iterations }}
+        run: |
+          Write-Host "================================================"
+          Write-Host "CHECKING KPI GATE VERDICT"
+          Write-Host "================================================"
+          
+          $kpiPath = "artifacts\soak\latest\artifacts\KPI_GATE.json"
+          
+          if (Test-Path $kpiPath) {
+            $kpi = Get-Content $kpiPath -Raw | ConvertFrom-Json
+            $verdict = $kpi.verdict
+            $reasons = $kpi.reasons -join ", "
+            
+            Write-Host "| kpi_gate | verdict=$verdict | reasons=[$reasons] |"
+            
+            if ($verdict -eq "FAIL") {
+              Write-Error "❌ KPI Gate: FAIL - Terminating job"
+              Write-Host "Reasons: $reasons"
+              exit 1
+            } elseif ($verdict -eq "WARN") {
+              Write-Warning "⚠️ KPI Gate: WARN - Continuing with warning"
+              Write-Host "Reasons: $reasons"
+            } else {
+              Write-Host "✅ KPI Gate: $verdict"
+            }
+          } else {
+            Write-Warning "KPI gate file not found at $kpiPath"
+            Write-Host "Skipping KPI gate check (may be in legacy long-soak mode)"
+          }
+
       - name: Start resource monitoring (background)
         id: start-monitoring
+        if: ${{ !inputs.iterations }}
         run: |
           Write-Host "--- Starting resource monitor in background ---"
           $monitorScript = "${{ github.workspace }}\tools\soak\resource_monitor.py"
@@ -408,7 +519,8 @@ jobs:
           Write-Host "[MONITOR] Background job started (ID: $($monitorJob.Id))"
           "monitor_job_id=$($monitorJob.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Run long soak loop
+      - name: Run long soak loop (legacy mode)
+        if: ${{ !inputs.iterations }}
         id: soak-loop
         run: |
           $durationHours = [int]$env:SOAK_HOURS
