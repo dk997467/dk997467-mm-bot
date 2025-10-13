@@ -420,27 +420,33 @@ jobs:
       - name: Seed default overrides if not provided
         id: seed-overrides
         run: |
-          Write-Host "================================================"
+          Write-Host "==============================================="
           Write-Host "SEEDING RUNTIME OVERRIDES"
-          Write-Host "================================================"
+          Write-Host "==============================================="
           
-          $overridesJson = "${{ inputs.overrides_json }}"
-          
-          if ([string]::IsNullOrWhiteSpace($overridesJson)) {
-            $defaultPath = "tools\soak\default_overrides.json"
-            if (Test-Path $defaultPath) {
-              Write-Host "[SEED] Using default_overrides.json"
-              $overridesJson = Get-Content $defaultPath -Raw
-              echo "MM_RUNTIME_OVERRIDES_JSON=$overridesJson" >> $env:GITHUB_ENV
-              Write-Host "| seed | overrides | default_overrides.json |"
-            } else {
-              Write-Host "[WARN] default_overrides.json not found, will use hardcoded defaults"
-              Write-Host "| seed | overrides | none |"
-            }
-          } else {
-            Write-Host "[SEED] Using overrides from workflow input"
-            Write-Host "| seed | overrides | workflow_input |"
+          # 1) Прочитать дефолтные оверрайды из репозитория
+          $defaultsPath = "tools/soak/default_overrides.json"
+          if (-not (Test-Path $defaultsPath)) {
+            Write-Error "Defaults file not found: $defaultsPath"
+            exit 1
           }
+          $defaultsJson = Get-Content $defaultsPath -Raw
+          
+          # 2) Записать рабочий файл артефактов
+          New-Item -Force -ItemType Directory "artifacts/soak" | Out-Null
+          $targetPath = "artifacts/soak/runtime_overrides.json"
+          $defaultsJson | Set-Content -Encoding utf8 $targetPath
+          
+          Write-Host "[SEED] Using default_overrides.json"
+          Write-Host "| seed | overrides | default_overrides.json |"
+          
+          # 3A) Экспорт: путь к файлу (простой и надёжный)
+          "MM_RUNTIME_OVERRIDES_FILE=$targetPath" | Out-File -Encoding utf8 -Append $env:GITHUB_ENV
+          
+          # 3B) Экспорт: многострочный JSON через here-doc
+          Add-Content -Path $env:GITHUB_ENV -Value "MM_RUNTIME_OVERRIDES_JSON<<EOF"
+          Add-Content -Path $env:GITHUB_ENV -Value $defaultsJson
+          Add-Content -Path $env:GITHUB_ENV -Value "EOF"
 
       - name: Run mini-soak with auto-tuning
         id: mini-soak
@@ -456,6 +462,14 @@ jobs:
           Write-Host "Iterations: $iterations"
           Write-Host "Auto-tune: ${{ inputs.auto_tune }}"
           Write-Host "Profile: $env:MM_PROFILE"
+          Write-Host ""
+          
+          # Preview runtime overrides
+          Write-Host "OVERRIDES_FILE=$env:MM_RUNTIME_OVERRIDES_FILE"
+          if (Test-Path $env:MM_RUNTIME_OVERRIDES_FILE) {
+            $preview = (Get-Content $env:MM_RUNTIME_OVERRIDES_FILE -Raw)
+            Write-Host "OVERRIDES_JSON_PREVIEW: $preview"
+          }
           Write-Host ""
           
           # Run soak with iterations
