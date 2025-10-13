@@ -41,6 +41,21 @@ __pycache__/
 !tests/golden/
 !tests/golden/**
 dist/
-artifacts/
 *.zip
 *.sha256
+
+# === ARTIFACTS VISIBILITY FOR ANALYSIS ===
+# Keep artifacts/ in .gitignore (don't commit to repo)
+# BUT allow IDE/Cursor to see and analyze them
+# NOTE: This only affects git tracking, not IDE visibility
+# (IDE visibility controlled by .cursorignore and .vscode/settings.json)
+artifacts/
+artifacts/**
+
+# Allow inspection of critical artifacts for development
+!artifacts/latest/
+!artifacts/latest/**
+!artifacts/reports/
+!artifacts/reports/**
+!artifacts/soak/
+!artifacts/soak/**

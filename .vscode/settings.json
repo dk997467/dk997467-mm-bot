@@ -1,19 +1,52 @@
 {
+  // === FULL PROJECT VISIBILITY CONFIGURATION ===
+  // Optimized for mm-bot: Cursor can see and analyze all artifacts
+  
+  // Files to exclude from file watcher (performance optimization only)
   "files.watcherExclude": {
-    "**/artifacts/**": true,
+    // Exclude only heavy/irrelevant directories
     "**/node_modules/**": true,
     "**/dist/**": true,
     "**/build/**": true,
     "**/.venv/**": true,
-    "**/venv/**": true
+    "**/venv/**": true,
+    "**/__pycache__/**": true,
+    "**/.pytest_cache/**": true,
+    "**/.mypy_cache/**": true,
+    "**/.ruff_cache/**": true
+    // NOTE: artifacts/ is NOT excluded - full visibility for analysis
   },
+  
+  // Search configuration - artifacts ARE searchable
   "search.exclude": {
-    "**/artifacts/**": true,
+    // Exclude only cache/build directories from search
     "**/node_modules/**": true,
     "**/dist/**": true,
     "**/build/**": true,
     "**/.venv/**": true,
-    "**/venv/**": true
+    "**/venv/**": true,
+    "**/__pycache__/**": true,
+    "**/.pytest_cache/**": true
+    // NOTE: artifacts/ is NOT excluded - searchable for debugging
+  },
+  
+  // Additional settings for full visibility
+  "files.exclude": {},  // Nothing hidden from Explorer
+  "search.useIgnoreFiles": false,  // Don't use .gitignore for search
+  "search.followSymlinks": true,  // Follow symlinks (fixtures, golden)
+  "explorer.excludeGitIgnore": false,  // Show files even if in .gitignore
+  "editor.largeFileOptimizations": false,  // Allow large JSON/MD files
+  
+  // Git decorations can be noisy with large artifacts
+  "git.decorations.enabled": false,
+  "git.autorefresh": false,
+  
+  // File associations for artifacts
+  "files.associations": {
+    "*.jsonl": "jsonl",
+    "EDGE_REPORT*.json": "json",
+    "KPI_GATE*.json": "json",
+    "AUDIT_*.json": "json"
   }
 }
 
