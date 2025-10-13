@@ -15,7 +15,8 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 
@@ -24,6 +25,12 @@ try:
     from strategy.edge_sentinel import EdgeSentinel
 except ImportError:
     EdgeSentinel = None
+
+# Import iteration watcher for per-iteration monitoring
+try:
+    from tools.soak import iter_watcher
+except ImportError:
+    iter_watcher = None
 
 
 def calculate_p95(values: List[float]) -> float:
@@ -528,6 +535,10 @@ def main(argv=None) -> int:
     
     # Mini-soak mode with auto-tuning
     if args.iterations and args.auto_tune:
+        # RISK-AWARE: Start wall-clock timer
+        t0 = time.time()
+        iter_done = 0
+        
         print(f"[INFO] Running mini-soak with auto-tuning: {args.iterations} iterations")
         
         # Initialize runtime overrides from best cell if not already present
@@ -721,17 +732,76 @@ def main(argv=None) -> int:
                 else:
                     print("| soak_iter_tune | OK | ADJUSTMENTS=0 metrics_stable |")
                 
+                # MEGA-PROMPT: Invoke iteration watcher for per-iteration monitoring
+                if iter_watcher:
+                    try:
+                        artifacts_dir = Path("artifacts/soak/latest/artifacts")
+                        output_dir = Path("artifacts/soak/latest")
+                        
+                        # Ensure artifacts directory exists
+                        artifacts_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        # Copy EDGE_REPORT to iteration artifacts dir
+                        edge_report_src = Path("artifacts/reports/EDGE_REPORT.json")
+                        edge_report_dst = artifacts_dir / "EDGE_REPORT.json"
+                        if edge_report_src.exists():
+                            import shutil
+                            shutil.copy2(edge_report_src, edge_report_dst)
+                        
+                        # Generate mock KPI_GATE for testing
+                        kpi_gate = {
+                            "verdict": "PASS" if current_net_bps >= 2.5 else "FAIL",
+                            "reasons": [] if current_net_bps >= 2.5 else ["EDGE"],
+                            "runtime": {"utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), "version": "test"}
+                        }
+                        with open(artifacts_dir / "KPI_GATE.json", 'w') as f:
+                            json.dump(kpi_gate, f, indent=2)
+                        
+                        # Process iteration with watcher
+                        iter_watcher.process_iteration(
+                            iteration_idx=iteration + 1,
+                            artifacts_dir=artifacts_dir,
+                            output_dir=output_dir,
+                            current_overrides=current_overrides,
+                            print_markers=True
+                        )
+                    except Exception as e:
+                        print(f"[WARN] iter_watcher failed: {e}")
+                
                 # Update overrides for next iteration
                 current_overrides = new_overrides
+                
+                # RISK-AWARE: Track completed iterations
+                iter_done += 1
             else:
                 print("[WARN] No EDGE_REPORT found, skipping auto-tuning for this iteration")
+        
+        # RISK-AWARE: Calculate wall-clock duration
+        wall_secs = int(time.time() - t0)
+        wall_str = str(timedelta(seconds=wall_secs))
         
         # After all iterations, print summary
         print(f"\n{'='*60}")
         print(f"[MINI-SOAK COMPLETE] {args.iterations} iterations with auto-tuning")
         print(f"{'='*60}")
         print(f"Final overrides: {json.dumps(current_overrides, indent=2)}")
+        print(f"{'='*60}")
+        print(f"REAL DURATION (wall-clock): {wall_str}")
+        print(f"ITERATIONS COMPLETED: {iter_done}")
         print(f"{'='*60}\n")
+        
+        # RISK-AWARE: Write wall-clock summary to file
+        soak_dir = Path("artifacts/soak/latest")
+        soak_dir.mkdir(parents=True, exist_ok=True)
+        summary_file = soak_dir / "summary.txt"
+        with open(summary_file, "a", encoding="utf-8") as f:
+            f.write(f"\nREAL DURATION (wall-clock): {wall_str}\n")
+            f.write(f"ITERATIONS COMPLETED: {iter_done}\n")
+        
+        # RISK-AWARE: Fail-safe - exit with error if no iterations completed
+        if iter_done == 0:
+            print("| soak | ERROR | no iterations completed |", flush=True)
+            sys.exit(2)
         
         return 0
     

@@ -470,7 +470,40 @@ jobs:
           Write-Host "MINI-SOAK COMPLETED"
           Write-Host "================================================"
 
-      - name: Fail job on KPI_GATE FAIL
+      - name: Verify mini-soak artifacts
+        id: verify-artifacts
+        if: ${{ inputs.iterations }}
+        run: |
+          Write-Host "================================================"
+          Write-Host "VERIFYING MINI-SOAK ARTIFACTS"
+          Write-Host "================================================"
+          
+          $missing = @()
+          
+          $iter1 = "artifacts\soak\latest\ITER_SUMMARY_1.json"
+          if (!(Test-Path $iter1)) {
+            $missing += $iter1
+            Write-Warning "Missing: $iter1"
+          } else {
+            Write-Host "✓ Found: $iter1"
+          }
+          
+          $tuning = "artifacts\soak\latest\TUNING_REPORT.json"
+          if (!(Test-Path $tuning)) {
+            $missing += $tuning
+            Write-Warning "Missing: $tuning"
+          } else {
+            Write-Host "✓ Found: $tuning"
+          }
+          
+          if ($missing.Count -gt 0) {
+            Write-Error "Missing $($missing.Count) required artifact(s)"
+            exit 1
+          }
+          
+          Write-Host "✅ All required artifacts present"
+
+      - name: Enforce KPI gate (fail on FAIL)
         id: check-kpi-gate
         if: ${{ inputs.iterations }}
         run: |
