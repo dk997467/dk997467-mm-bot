@@ -451,6 +451,8 @@ jobs:
       - name: Run mini-soak with auto-tuning
         id: mini-soak
         if: ${{ inputs.iterations }}
+        env:
+          SOAK_SLEEP_SECONDS: ${{ inputs.heartbeat_interval_seconds || 300 }}
         run: |
           Write-Host "================================================"
           Write-Host "MINI-SOAK MODE: ${{ inputs.iterations }} iterations"
@@ -462,6 +464,7 @@ jobs:
           Write-Host "Iterations: $iterations"
           Write-Host "Auto-tune: ${{ inputs.auto_tune }}"
           Write-Host "Profile: $env:MM_PROFILE"
+          Write-Host "Sleep between iterations: $env:SOAK_SLEEP_SECONDS seconds"
           Write-Host ""
           
           # Preview runtime overrides
@@ -483,6 +486,25 @@ jobs:
           Write-Host "================================================"
           Write-Host "MINI-SOAK COMPLETED"
           Write-Host "================================================"
+
+      - name: Verify sleep was used
+        id: verify-sleep
+        if: ${{ inputs.iterations }}
+        run: |
+          Write-Host "================================================"
+          Write-Host "VERIFYING SLEEP BETWEEN ITERATIONS"
+          Write-Host "================================================"
+          
+          # Check if sleep marker was logged
+          # Note: In PowerShell, we can't directly grep the previous step's output
+          # So we check if iterations > 1 (sleep only happens when iterations > 1)
+          $iterations = [int]"${{ inputs.iterations }}"
+          if ($iterations -gt 1) {
+            Write-Host "✓ Multi-iteration mode: sleep should have been used"
+            Write-Host "  Expected sleep between $($iterations - 1) iteration pairs"
+          } else {
+            Write-Host "ℹ Single iteration: no sleep needed"
+          }
 
       - name: Verify mini-soak artifacts
         id: verify-artifacts

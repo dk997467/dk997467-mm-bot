@@ -775,6 +775,12 @@ def main(argv=None) -> int:
                 iter_done += 1
             else:
                 print("[WARN] No EDGE_REPORT found, skipping auto-tuning for this iteration")
+            
+            # Sleep between iterations (respect environment variable)
+            sleep_seconds = int(os.getenv("SOAK_SLEEP_SECONDS", "300"))
+            if iteration < args.iterations - 1:  # Don't sleep after last iteration
+                print(f"| soak | SLEEP | {sleep_seconds}s |")
+                time.sleep(sleep_seconds)
         
         # RISK-AWARE: Calculate wall-clock duration
         wall_secs = int(time.time() - t0)

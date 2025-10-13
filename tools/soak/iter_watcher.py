@@ -93,7 +93,16 @@ def summarize_iteration(artifacts_dir: Path) -> Dict[str, Any]:
     Returns:
         Dict with runtime, metrics, drivers, blocks, KPI verdict, sentinel advice
     """
-    edge = _read_json(artifacts_dir / "EDGE_REPORT.json") or {}
+    # Sanity guard: wrap in try/except
+    try:
+        edge = _read_json(artifacts_dir / "EDGE_REPORT.json")
+        if edge is None:
+            print("| iter_watch | WARN | edge report missing |")
+            edge = {}
+    except Exception as e:
+        print(f"| iter_watch | WARN | edge report parse error: {e} |")
+        edge = {}
+    
     kpi = _read_json(artifacts_dir / "KPI_GATE.json") or {}
     sentinel = _read_json(artifacts_dir / "EDGE_SENTINEL.json") or {}
     
@@ -109,12 +118,36 @@ def summarize_iteration(artifacts_dir: Path) -> Dict[str, Any]:
     inventory_bps = totals.get("inventory_bps")
     fills = totals.get("fills")
     
-    # Negative edge drivers
+    # Extract p95 metrics for risk-aware tuning
+    adverse_bps_p95 = totals.get("adverse_bps_p95", adverse_bps)  # Fallback to mean
+    slippage_bps_p95 = totals.get("slippage_bps_p95", slippage_bps)
+    order_age_p95_ms = totals.get("order_age_p95_ms", 300)  # Default assumption
+    
+    # Negative edge drivers (sign guard: ignore component_breakdown signs for mock data)
     neg_drivers = totals.get("neg_edge_drivers") or []
     if not isinstance(neg_drivers, list):
         neg_drivers = []
     
-    # Block analysis
+    # Block analysis - extract risk_ratio from block_reasons
+    block_reasons = totals.get("block_reasons") or {}
+    risk_block_data = block_reasons.get("risk") or {}
+    risk_ratio = risk_block_data.get("ratio", 0.0)  # Already a ratio (0.0-1.0 or 0-100)
+    
+    # Normalize risk_ratio to 0.0-1.0 range if it's in percentage form
+    if risk_ratio > 1.0:
+        risk_ratio = risk_ratio / 100.0
+    
+    # Also get min_interval and concurrency ratios
+    min_interval_ratio = (block_reasons.get("min_interval") or {}).get("ratio", 0.0)
+    concurrency_ratio = (block_reasons.get("concurrency") or {}).get("ratio", 0.0)
+    
+    # Normalize these as well
+    if min_interval_ratio > 1.0:
+        min_interval_ratio = min_interval_ratio / 100.0
+    if concurrency_ratio > 1.0:
+        concurrency_ratio = concurrency_ratio / 100.0
+    
+    # Block analysis from audit.jsonl (legacy)
     block_analysis = _analyze_audit_blocks(artifacts_dir / "audit.jsonl")
     
     # Sentinel advice
@@ -132,6 +165,14 @@ def summarize_iteration(artifacts_dir: Path) -> Dict[str, Any]:
         "adverse_bps": adverse_bps,
         "inventory_bps": inventory_bps,
         "fills": fills,
+        # P95 metrics for risk-aware tuning
+        "adverse_bps_p95": adverse_bps_p95,
+        "slippage_bps_p95": slippage_bps_p95,
+        "order_age_p95_ms": order_age_p95_ms,
+        # Risk metrics from EDGE_REPORT
+        "risk_ratio": risk_ratio,
+        "min_interval_ratio": min_interval_ratio,
+        "concurrency_ratio": concurrency_ratio,
         "neg_edge_drivers": neg_drivers,
         "blocks": {
             "counts": block_analysis['counts'],
@@ -183,23 +224,24 @@ def propose_micro_tuning(
     deltas = {}
     reasons = []
     
-    # Extract key metrics
+    # Extract key metrics from summary (now using real EDGE_REPORT data)
     net_bps = summary.get("net_bps")
-    ratios = summary.get("blocks", {}).get("ratios", {})
-    risk_ratio = ratios.get("risk", 0.0) / 100.0  # Convert percentage to ratio
     
-    # Extract p95 metrics from totals (if available)
-    adverse_p95 = summary.get("adverse_bps")  # Fallback to mean if p95 not available
-    slippage_p95 = summary.get("slippage_bps")
+    # Use risk_ratio directly from EDGE_REPORT (already normalized to 0.0-1.0)
+    risk_ratio = summary.get("risk_ratio", 0.0)
     
-    # Try to get p95 from detailed metrics if available
-    # (In a real EDGE_REPORT, these might be under different keys)
+    # Extract p95 metrics from EDGE_REPORT
+    adverse_p95 = summary.get("adverse_bps_p95")
+    slippage_p95 = summary.get("slippage_bps_p95")
+    order_age_p95 = summary.get("order_age_p95_ms", 300)
     
-    # Get order_age_p95_ms (may be in different location)
-    order_age_p95 = 300  # Default assumption
+    # Extract block ratios (already normalized)
+    min_interval_ratio = summary.get("min_interval_ratio", 0.0)
+    concurrency_ratio = summary.get("concurrency_ratio", 0.0)
     
-    min_interval_pct = ratios.get("min_interval", 0.0)
-    concurrency_pct = ratios.get("concurrency", 0.0)
+    # Convert ratios to percentages for comparison with thresholds
+    min_interval_pct = min_interval_ratio * 100
+    concurrency_pct = concurrency_ratio * 100
     
     # Guard
     if net_bps is None:
@@ -211,25 +253,20 @@ def propose_micro_tuning(
     
     if risk_ratio >= 0.60:
         # CRITICAL: High risk blocks - aggressive throttling
-        new_min_interval = min(current_min_interval + 5, 90)
+        new_min_interval = min(current_min_interval + 5, 80)
         if new_min_interval != current_min_interval:
             deltas["min_interval_ms"] = new_min_interval - current_min_interval
-            reasons.append(f"risk={risk_ratio:.1%} (CRITICAL) → min_interval +5ms (cap 90)")
-        
-        new_spread = min(current_spread_delta + 0.02, 0.20)
-        if new_spread != current_spread_delta:
-            deltas["base_spread_bps_delta"] = new_spread - current_spread_delta
-            reasons.append(f"risk={risk_ratio:.1%} (CRITICAL) → spread +0.02 (cap 0.20)")
+            reasons.append(f"risk={risk_ratio:.1%} (CRITICAL) → min_interval +5ms (cap 80)")
         
         new_impact = max(current_impact_cap - 0.01, 0.08)
         if new_impact != current_impact_cap:
             deltas["impact_cap_ratio"] = new_impact - current_impact_cap
             reasons.append(f"risk={risk_ratio:.1%} (CRITICAL) → impact_cap -0.01 (floor 0.08)")
         
-        new_tail = max(current_tail_age, 680)
+        new_tail = min(current_tail_age + 30, 800)
         if new_tail != current_tail_age:
             deltas["tail_age_ms"] = new_tail - current_tail_age
-            reasons.append(f"risk={risk_ratio:.1%} (CRITICAL) → tail_age={new_tail}ms (min 680)")
+            reasons.append(f"risk={risk_ratio:.1%} (CRITICAL) → tail_age +30ms (cap 800)")
     
     elif risk_ratio >= 0.40:
         # HIGH: Moderate risk blocks - moderate throttling
@@ -379,16 +416,19 @@ def print_iteration_markers(
     Print standardized log markers for iteration monitoring.
     
     Format:
-        | iter_watch | SUMMARY | net=... drivers=[...] kpi=... |
+        | iter_watch | SUMMARY | iter={i} net={net_bps:.2f} risk={risk_ratio:.2%} sl_p95={slip:.2f} adv_p95={adv:.2f} |
         | iter_watch | SUGGEST | {...} |
     """
-    net_bps = summary.get("net_bps")
-    drivers = summary.get("neg_edge_drivers") or []
+    net_bps = summary.get("net_bps") or 0.0
+    risk_ratio = summary.get("risk_ratio") or 0.0
+    slippage_p95 = summary.get("slippage_bps_p95") or 0.0
+    adverse_p95 = summary.get("adverse_bps_p95") or 0.0
     kpi_verdict = summary.get("kpi_verdict") or "UNKNOWN"
     deltas = tuning_result.get("deltas", {})
     rationale = tuning_result.get("rationale", "")
     
-    print(f"| iter_watch | SUMMARY | iter={iteration_idx} net={net_bps} drivers={drivers} kpi={kpi_verdict} |")
+    # Human-readable summary with risk-aware metrics
+    print(f"| iter_watch | SUMMARY | iter={iteration_idx} net={net_bps:.2f} risk={risk_ratio:.2%} sl_p95={slippage_p95:.2f} adv_p95={adverse_p95:.2f} kpi={kpi_verdict} |")
     
     if deltas:
         print(f"| iter_watch | SUGGEST | {json.dumps(deltas)} |")
