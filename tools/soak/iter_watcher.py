@@ -80,6 +80,113 @@ def _analyze_audit_blocks(audit_path: Path) -> Dict[str, Any]:
     return {'counts': blocks, 'total': total, 'ratios': ratios}
 
 
+def _load_tuning_state() -> Dict[str, Any]:
+    """Load TUNING_STATE.json (helper for iter_watcher)."""
+    state_path = Path("artifacts/soak/latest/TUNING_STATE.json")
+    
+    if not state_path.exists():
+        return {
+            "last_applied_signature": None,
+            "frozen_until_iter": None,
+            "freeze_reason": None
+        }
+    
+    try:
+        with open(state_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {
+            "last_applied_signature": None,
+            "frozen_until_iter": None,
+            "freeze_reason": None
+        }
+
+
+def _save_tuning_state(state: Dict[str, Any]):
+    """Save TUNING_STATE.json (helper for iter_watcher)."""
+    state_path = Path("artifacts/soak/latest/TUNING_STATE.json")
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        with open(state_path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2, separators=(',', ':'))
+    except Exception as e:
+        print(f"| iter_watch | WARN | Failed to save TUNING_STATE.json: {e} |")
+
+
+def should_freeze(history: List[Dict[str, Any]], current_iter: int) -> bool:
+    """
+    Check if freeze should be activated (PROMPT 5.3).
+    
+    Freeze conditions:
+    - 2 consecutive iterations with risk_ratio <= 0.35 AND net_bps >= 2.9
+    
+    Args:
+        history: List of recent iteration summaries (last 2+)
+        current_iter: Current iteration number
+    
+    Returns:
+        True if freeze should be activated
+    """
+    if len(history) < 2:
+        return False
+    
+    # Check last 2 iterations
+    recent = history[-2:]
+    
+    for summary in recent:
+        metrics = summary.get("metrics", {})
+        risk_ratio = metrics.get("risk_ratio", 1.0)
+        net_bps = metrics.get("net_bps", 0.0)
+        
+        # If any iteration doesn't meet criteria, no freeze
+        if risk_ratio > 0.35 or net_bps < 2.9:
+            return False
+    
+    return True
+
+
+def enter_freeze(current_iter: int, reason: str = "steady_state_lock"):
+    """
+    Activate freeze mode (PROMPT 5.3).
+    
+    Args:
+        current_iter: Current iteration number
+        reason: Reason for freeze
+    """
+    state = _load_tuning_state()
+    
+    # Freeze for next 4 iterations
+    frozen_until = current_iter + 4
+    
+    state["frozen_until_iter"] = frozen_until
+    state["freeze_reason"] = reason
+    
+    _save_tuning_state(state)
+    
+    frozen_params = ["impact_cap_ratio", "max_delta_ratio"]
+    print(f"| iter_watch | FREEZE | from=iter_{current_iter} to=iter_{frozen_until} fields={frozen_params} |")
+
+
+def is_freeze_active(current_iter: int) -> bool:
+    """
+    Check if freeze is currently active (PROMPT 5.3).
+    
+    Args:
+        current_iter: Current iteration number
+    
+    Returns:
+        True if freeze is active
+    """
+    state = _load_tuning_state()
+    frozen_until = state.get("frozen_until_iter")
+    
+    if frozen_until is None:
+        return False
+    
+    return current_iter <= frozen_until
+
+
 def summarize_iteration(artifacts_dir: Path) -> Dict[str, Any]:
     """
     Summarize key metrics from artifacts after an iteration.
@@ -184,6 +291,14 @@ def summarize_iteration(artifacts_dir: Path) -> Dict[str, Any]:
         "sentinel_advice": advice
     }
     
+    # PROMPT 5.5: CONSISTENCY CHECK (verify risk_ratio matches EDGE_REPORT)
+    edge_risk_ratio = risk_ratio  # From EDGE_REPORT.totals.block_reasons.risk.ratio
+    summary_risk_ratio = summary.get("risk_ratio", 0.0)
+    
+    # Check for mismatch (tolerance: 0.005 = 0.5 percentage points)
+    if abs(edge_risk_ratio - summary_risk_ratio) > 0.005:
+        print(f"| iter_watch | WARN | risk_mismatch summary={summary_risk_ratio:.3f} edge={edge_risk_ratio:.3f} |")
+    
     return summary
 
 
@@ -194,152 +309,204 @@ def propose_micro_tuning(
     """
     Suggest micro parameter adjustments based on iteration summary.
     
-    RISK-AWARE LOGIC (PRIMARY):
-    - If risk blocks ≥ 60% → aggressive throttling (min_interval+5, spread+0.02, impact-0.01)
-    - If risk blocks 40-60% → moderate throttling (min_interval+5, impact-0.01)
-    - If risk blocks ≤ 40% AND order_age > 360ms → speed up (min_interval-5)
+    PROMPT 3: PRECISE RISK-AWARE LOGIC (PRIMARY):
+    - risk_ratio >= 0.60 -> AGGRESSIVE: min_interval +5, impact_cap -0.01 (floor 0.08), tail_age +30 (cap 800)
+    - 0.40 <= risk_ratio < 0.60 -> MODERATE: min_interval +5 (cap 75), impact_cap -0.005 (floor 0.09)
+    - risk_ratio < 0.35 AND net_bps >= 3.0 -> NORMALIZE: min_interval -3 (floor 50), impact_cap +0.005 (cap 0.10)
     
     DRIVER-AWARE LOGIC (SECONDARY):
-    - If adverse_p95 > 3.5 → reduce impact_cap, max_delta
-    - If slippage_p95 > 2.5 → widen spread, increase tail_age
-    - If net_bps < 3.2 → general adjustments
+    - adverse_p95 > 3.5 -> impact_cap -0.01, max_delta -0.01
+    - slippage_p95 > 2.5 -> base_spread +0.02, tail_age +30
     
     Args:
         summary: Output from summarize_iteration()
         current_overrides: Current runtime overrides (for caps/floors)
     
     Returns:
-        Dict with deltas, rationale, and applied suggestions
+        Dict with deltas, rationale, applied=False, conditions
     """
     # Initialize current overrides with defaults
     if current_overrides is None:
         current_overrides = {}
     
     current_min_interval = current_overrides.get("min_interval_ms", 60)
-    current_spread_delta = current_overrides.get("base_spread_bps_delta", 0.12)
-    current_impact_cap = current_overrides.get("impact_cap_ratio", 0.10)
-    current_max_delta = current_overrides.get("max_delta_ratio", 0.15)
+    current_spread_delta = current_overrides.get("base_spread_bps_delta", 0.14)
+    current_impact_cap = current_overrides.get("impact_cap_ratio", 0.09)
+    current_max_delta = current_overrides.get("max_delta_ratio", 0.14)
     current_tail_age = current_overrides.get("tail_age_ms", 650)
     
     deltas = {}
     reasons = []
     
-    # Extract key metrics from summary (now using real EDGE_REPORT data)
+    # Extract key metrics from summary (PROMPT 3: use real EDGE_REPORT data)
     net_bps = summary.get("net_bps")
     
     # Use risk_ratio directly from EDGE_REPORT (already normalized to 0.0-1.0)
     risk_ratio = summary.get("risk_ratio", 0.0)
     
-    # Extract p95 metrics from EDGE_REPORT
+    # Extract p95 metrics from EDGE_REPORT (PROMPT 3: precise thresholds)
     adverse_p95 = summary.get("adverse_bps_p95")
     slippage_p95 = summary.get("slippage_bps_p95")
     order_age_p95 = summary.get("order_age_p95_ms", 300)
     
-    # Extract block ratios (already normalized)
+    # Extract block ratios (already normalized to 0.0-1.0)
     min_interval_ratio = summary.get("min_interval_ratio", 0.0)
     concurrency_ratio = summary.get("concurrency_ratio", 0.0)
     
-    # Convert ratios to percentages for comparison with thresholds
-    min_interval_pct = min_interval_ratio * 100
-    concurrency_pct = concurrency_ratio * 100
-    
     # Guard
     if net_bps is None:
-        return {"deltas": deltas, "rationale": "No net_bps data available", "applied": False}
+        return {
+            "deltas": deltas, 
+            "rationale": "No net_bps data available", 
+            "applied": False,
+            "conditions": {"net_bps": None, "risk_ratio": risk_ratio}
+        }
     
     # ==========================================================================
-    # PRIORITY 1: RISK-AWARE TUNING
+    # PROMPT 3: PRIORITY 1 - PRECISE RISK-AWARE TUNING
     # ==========================================================================
     
     if risk_ratio >= 0.60:
-        # CRITICAL: High risk blocks - aggressive throttling
+        # ZONE 1: AGGRESSIVE throttling (risk_ratio >= 60%)
+        # Target: быстро снизить risk через консервативные параметры
+        
         new_min_interval = min(current_min_interval + 5, 80)
         if new_min_interval != current_min_interval:
             deltas["min_interval_ms"] = new_min_interval - current_min_interval
-            reasons.append(f"risk={risk_ratio:.1%} (CRITICAL) → min_interval +5ms (cap 80)")
+            reasons.append(f"AGGRESSIVE: risk={risk_ratio:.1%} >= 60% -> min_interval +5ms (cap 80)")
         
         new_impact = max(current_impact_cap - 0.01, 0.08)
         if new_impact != current_impact_cap:
             deltas["impact_cap_ratio"] = new_impact - current_impact_cap
-            reasons.append(f"risk={risk_ratio:.1%} (CRITICAL) → impact_cap -0.01 (floor 0.08)")
+            reasons.append(f"AGGRESSIVE: risk={risk_ratio:.1%} >= 60% -> impact_cap -0.01 (floor 0.08)")
         
         new_tail = min(current_tail_age + 30, 800)
         if new_tail != current_tail_age:
             deltas["tail_age_ms"] = new_tail - current_tail_age
-            reasons.append(f"risk={risk_ratio:.1%} (CRITICAL) → tail_age +30ms (cap 800)")
+            reasons.append(f"AGGRESSIVE: risk={risk_ratio:.1%} >= 60% -> tail_age +30ms (cap 800)")
     
     elif risk_ratio >= 0.40:
-        # HIGH: Moderate risk blocks - moderate throttling
-        new_min_interval = min(current_min_interval + 5, 80)
+        # ZONE 2: MODERATE throttling (40% <= risk_ratio < 60%)
+        # Target: плавное снижение risk без резких изменений
+        
+        new_min_interval = min(current_min_interval + 5, 75)  # PROMPT 3: cap 75 (vs 80)
         if new_min_interval != current_min_interval:
             deltas["min_interval_ms"] = new_min_interval - current_min_interval
-            reasons.append(f"risk={risk_ratio:.1%} (HIGH) → min_interval +5ms (cap 80)")
+            reasons.append(f"MODERATE: risk={risk_ratio:.1%} >= 40% -> min_interval +5ms (cap 75)")
         
-        new_impact = max(current_impact_cap - 0.01, 0.09)
+        new_impact = max(current_impact_cap - 0.005, 0.09)  # PROMPT 3: -0.005 (vs -0.01), floor 0.09
         if new_impact != current_impact_cap:
             deltas["impact_cap_ratio"] = new_impact - current_impact_cap
-            reasons.append(f"risk={risk_ratio:.1%} (HIGH) → impact_cap -0.01 (floor 0.09)")
+            reasons.append(f"MODERATE: risk={risk_ratio:.1%} >= 40% -> impact_cap -0.005 (floor 0.09)")
+    
+    elif risk_ratio < 0.35 and net_bps >= 3.0:
+        # ZONE 3: NORMALIZE (risk < 35% AND good edge)
+        # Target: немного увеличить агрессивность для улучшения edge
+        
+        new_min_interval = max(current_min_interval - 3, 50)  # PROMPT 3: -3ms (vs -5), floor 50
+        if new_min_interval != current_min_interval:
+            deltas["min_interval_ms"] = new_min_interval - current_min_interval
+            reasons.append(f"NORMALIZE: risk={risk_ratio:.1%} < 35% + net_bps={net_bps:.2f} >= 3.0 -> min_interval -3ms (floor 50)")
+        
+        new_impact = min(current_impact_cap + 0.005, 0.10)  # PROMPT 3: +0.005, cap 0.10
+        if new_impact != current_impact_cap:
+            deltas["impact_cap_ratio"] = new_impact - current_impact_cap
+            reasons.append(f"NORMALIZE: risk={risk_ratio:.1%} < 35% + net_bps={net_bps:.2f} >= 3.0 -> impact_cap +0.005 (cap 0.10)")
     
     # ==========================================================================
-    # PRIORITY 2: DRIVER-AWARE TUNING (if adverse or slippage high)
+    # PROMPT 3: PRIORITY 2 - DRIVER-AWARE TUNING (adverse/slippage drivers)
     # ==========================================================================
     
+    # Driver 1: High adverse_bps_p95 (PROMPT 3: threshold 3.5)
     if adverse_p95 is not None and adverse_p95 > 3.5:
+        # Reduce exposure to adverse selection
         new_impact = max(current_impact_cap - 0.01, 0.08)
         if new_impact != current_impact_cap and "impact_cap_ratio" not in deltas:
             deltas["impact_cap_ratio"] = new_impact - current_impact_cap
-            reasons.append(f"adverse_p95={adverse_p95:.2f} (high) → impact_cap -0.01")
+            reasons.append(f"DRIVER: adverse_p95={adverse_p95:.2f} > 3.5 -> impact_cap -0.01 (floor 0.08)")
         
-        new_max_delta = max(current_max_delta - 0.01, 0.12)
+        new_max_delta = max(current_max_delta - 0.01, 0.10)
         if new_max_delta != current_max_delta:
             deltas["max_delta_ratio"] = new_max_delta - current_max_delta
-            reasons.append(f"adverse_p95={adverse_p95:.2f} (high) → max_delta -0.01")
+            reasons.append(f"DRIVER: adverse_p95={adverse_p95:.2f} > 3.5 -> max_delta -0.01 (floor 0.10)")
     
+    # Driver 2: High slippage_bps_p95 (PROMPT 3: threshold 2.5)
     if slippage_p95 is not None and slippage_p95 > 2.5:
-        new_spread = min(current_spread_delta + 0.02, 0.20)
+        # Widen spread to reduce slippage
+        new_spread = min(current_spread_delta + 0.02, 0.25)  # PROMPT 3: cap 0.25 (from APPLY_BOUNDS)
         if new_spread != current_spread_delta and "base_spread_bps_delta" not in deltas:
             deltas["base_spread_bps_delta"] = new_spread - current_spread_delta
-            reasons.append(f"slippage_p95={slippage_p95:.2f} (high) → spread +0.02")
+            reasons.append(f"DRIVER: slippage_p95={slippage_p95:.2f} > 2.5 -> spread +0.02 (cap 0.25)")
         
+        # Increase tail_age to give orders more time
         new_tail = min(current_tail_age + 30, 800)
         if new_tail != current_tail_age and "tail_age_ms" not in deltas:
             deltas["tail_age_ms"] = new_tail - current_tail_age
-            reasons.append(f"slippage_p95={slippage_p95:.2f} (high) → tail +30ms")
+            reasons.append(f"DRIVER: slippage_p95={slippage_p95:.2f} > 2.5 -> tail_age +30ms (cap 800)")
     
     # ==========================================================================
-    # PRIORITY 3: SPEED UP if risk is low and order age is high
+    # PROMPT 3: DECISION - Apply suggestions based on risk/edge conditions
     # ==========================================================================
     
-    if risk_ratio <= 0.40 and order_age_p95 > 360:
-        new_min_interval = max(current_min_interval - 5, 50)
-        if new_min_interval != current_min_interval and "min_interval_ms" not in deltas:
-            deltas["min_interval_ms"] = new_min_interval - current_min_interval
-            reasons.append(f"risk={risk_ratio:.1%} (LOW) + order_age={order_age_p95}ms (high) → min_interval -5ms (faster)")
-    
-    # ==========================================================================
-    # DECISION: Apply suggestions only if needed
-    # ==========================================================================
-    
-    should_apply = (net_bps < 3.2) or (risk_ratio >= 0.50)
+    # PROMPT 3: Apply if риск высокий OR edge низкий
+    should_apply = (risk_ratio >= 0.40) or (net_bps < 3.0)
     
     if not should_apply:
+        # Low risk + good edge -> no changes needed
         deltas = {}
-        reasons = [f"net_bps={net_bps:.2f} OK + risk={risk_ratio:.1%} OK → no changes needed"]
+        reasons = [f"STABLE: risk={risk_ratio:.1%} < 40% + net_bps={net_bps:.2f} >= 3.0 -> no changes"]
     
+    # ==========================================================================
+    # PROMPT 5.4: GUARD - Conflict resolution (prefer risk priority)
+    # ==========================================================================
+    
+    # Check for conflicting actions: spread_widen (from slippage_p95) vs speedup (min_interval decrease)
+    has_spread_widen = "base_spread_bps_delta" in deltas and deltas["base_spread_bps_delta"] > 0
+    has_speedup = "min_interval_ms" in deltas and deltas["min_interval_ms"] < 0
+    
+    if has_spread_widen and has_speedup and risk_ratio >= 0.40:
+        # Conflict: spread widen (conservative) vs speedup (aggressive)
+        # Resolution: prefer risk priority (block speedup)
+        del deltas["min_interval_ms"]
+        reasons = [r for r in reasons if "min_interval" not in r or "NORMALIZE" not in r]
+        reasons.append(f"GUARD: conflict=spread_widen_vs_speedup resolved=prefer_risk (blocked min_interval decrease)")
+        print(f"| iter_watch | GUARD | conflict=spread_widen_vs_speedup resolved=prefer_risk |")
+    
+    # ==========================================================================
+    # PROMPT 5.3: FREEZE - Remove frozen params from deltas
+    # ==========================================================================
+    
+    # Check if freeze is active (handled in apply_tuning_deltas, but also filter here for clarity)
+    # Note: This is informational only; actual filtering happens in apply_tuning_deltas
+    # But we can remove them here to avoid confusing logs
+    
+    frozen_params = ["impact_cap_ratio", "max_delta_ratio"]
+    for param in frozen_params:
+        if param in deltas:
+            # Keep in deltas here; apply_tuning_deltas will filter based on freeze state
+            # (We don't have current_iter here, so we can't check freeze state)
+            pass
+    
+    # Generate rationale
     rationale = " | ".join(reasons) if reasons else "No micro-adjustments needed"
+    
+    # PROMPT 3: Log tuning action
+    if deltas:
+        action_summary = ", ".join([f"{k}={v:+.2f}" if isinstance(v, float) else f"{k}={v:+d}" for k, v in deltas.items()])
+        print(f"| iter_watch | TUNE | risk={risk_ratio:.2%} net={net_bps:.2f} action={{{action_summary}}} |")
     
     return {
         "deltas": deltas,
         "rationale": rationale,
-        "applied": False,  # Caller decides whether to apply
+        "applied": False,  # Caller decides whether to apply (via apply_tuning_deltas)
         "conditions": {
             "net_bps": net_bps,
             "risk_ratio": risk_ratio,
             "adverse_p95": adverse_p95,
             "slippage_p95": slippage_p95,
             "order_age_p95_ms": order_age_p95,
-            "min_interval_pct": min_interval_pct,
-            "concurrency_pct": concurrency_pct
+            "min_interval_ratio": min_interval_ratio,
+            "concurrency_ratio": concurrency_ratio
         }
     }
 
@@ -464,6 +631,24 @@ def process_iteration(
     
     if print_markers:
         print_iteration_markers(iteration_idx, summary, tuning_result)
+    
+    # PROMPT 5.3: FREEZE CHECK (activate freeze if steady state detected)
+    # Load history of recent iterations to check freeze conditions
+    if iteration_idx >= 2:
+        history = []
+        for i in range(max(1, iteration_idx - 1), iteration_idx + 1):
+            iter_summary_path = output_dir / f"ITER_SUMMARY_{i}.json"
+            if iter_summary_path.exists():
+                try:
+                    with open(iter_summary_path, 'r', encoding='utf-8') as f:
+                        iter_data = json.load(f)
+                        history.append(iter_data)
+                except Exception:
+                    pass
+        
+        # Check if freeze should be activated
+        if should_freeze(history, iteration_idx):
+            enter_freeze(iteration_idx)
     
     return {
         "summary": summary,

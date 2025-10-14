@@ -490,6 +490,308 @@ def save_runtime_overrides(overrides: Dict[str, Any], path: str = "artifacts/soa
         json.dump(overrides, f, sort_keys=True, separators=(',', ':'), indent=2)
 
 
+def compute_deltas_signature(deltas: Dict[str, Any]) -> str:
+    """
+    Compute deterministic signature for deltas to detect duplicate applications.
+    
+    Args:
+        deltas: Dict of parameter deltas
+    
+    Returns:
+        Hex signature (MD5 hash)
+    """
+    import hashlib
+    
+    # Sort keys and round floats to 5 decimal places for stability
+    normalized = {}
+    for key in sorted(deltas.keys()):
+        value = deltas[key]
+        if isinstance(value, float):
+            normalized[key] = round(value, 5)
+        else:
+            normalized[key] = value
+    
+    # Create deterministic string representation
+    sig_str = json.dumps(normalized, sort_keys=True, separators=(',', ':'))
+    
+    # Return MD5 hash
+    return hashlib.md5(sig_str.encode('utf-8')).hexdigest()
+
+
+def load_tuning_state() -> Dict[str, Any]:
+    """
+    Load tuning state from TUNING_STATE.json.
+    
+    Returns:
+        Dict with state or empty dict if not found
+    """
+    state_path = Path("artifacts/soak/latest/TUNING_STATE.json")
+    
+    if not state_path.exists():
+        return {
+            "last_applied_signature": None,
+            "frozen_until_iter": None,
+            "freeze_reason": None
+        }
+    
+    try:
+        with open(state_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"| iter_watch | WARN | Failed to load TUNING_STATE.json: {e} |")
+        return {
+            "last_applied_signature": None,
+            "frozen_until_iter": None,
+            "freeze_reason": None
+        }
+
+
+def save_tuning_state(state: Dict[str, Any]):
+    """
+    Save tuning state to TUNING_STATE.json.
+    
+    Args:
+        state: State dict to save
+    """
+    state_path = Path("artifacts/soak/latest/TUNING_STATE.json")
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        with open(state_path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2, separators=(',', ':'))
+    except Exception as e:
+        print(f"| iter_watch | WARN | Failed to save TUNING_STATE.json: {e} |")
+
+
+def apply_tuning_deltas(iter_idx: int, total_iterations: int = None) -> bool:
+    """
+    Apply tuning deltas from ITER_SUMMARY_{iter_idx}.json to runtime_overrides.json.
+    
+    This implements live-apply mechanism: recommendations from iter_watcher are
+    actually applied between iterations (not just recorded "on paper").
+    
+    STRICT BOUNDS (tighter than EdgeSentinel LIMITS for safety):
+        - min_interval_ms:        40 ≤ x ≤ 80
+        - impact_cap_ratio:     0.08 ≤ x ≤ 0.12
+        - max_delta_ratio:      0.10 ≤ x ≤ 0.16
+        - base_spread_bps_delta: 0.08 ≤ x ≤ 0.25
+        - tail_age_ms:           500 ≤ x ≤ 800
+        - replace_rate_per_min:  200 ≤ x ≤ 320
+    
+    Args:
+        iter_idx: Iteration number (1-based)
+    
+    Returns:
+        True if deltas were applied, False otherwise
+    """
+    # Define strict bounds for live-apply (more conservative than LIMITS)
+    APPLY_BOUNDS = {
+        "min_interval_ms": (40, 80),
+        "impact_cap_ratio": (0.08, 0.12),
+        "max_delta_ratio": (0.10, 0.16),
+        "base_spread_bps_delta": (0.08, 0.25),
+        "tail_age_ms": (500, 800),
+        "replace_rate_per_min": (200, 320),
+    }
+    
+    # Paths
+    iter_summary_path = Path(f"artifacts/soak/latest/ITER_SUMMARY_{iter_idx}.json")
+    overrides_path = Path("artifacts/soak/runtime_overrides.json")
+    
+    # Check if ITER_SUMMARY exists
+    if not iter_summary_path.exists():
+        print(f"| iter_watch | APPLY | SKIP | ITER_SUMMARY_{iter_idx}.json not found |")
+        return False
+    
+    # Load ITER_SUMMARY
+    try:
+        with open(iter_summary_path, 'r', encoding='utf-8') as f:
+            iter_summary = json.load(f)
+    except Exception as e:
+        print(f"| iter_watch | APPLY | ERROR | Failed to read ITER_SUMMARY_{iter_idx}.json: {e} |")
+        return False
+    
+    # Extract tuning section
+    tuning = iter_summary.get("tuning", {})
+    deltas = tuning.get("deltas", {})
+    already_applied = tuning.get("applied", False)
+    
+    # Skip if already applied or no deltas
+    if already_applied:
+        print(f"| iter_watch | APPLY | SKIP | iter={iter_idx} already_applied=true |")
+        return False
+    
+    if not deltas:
+        print(f"| iter_watch | APPLY | SKIP | iter={iter_idx} no deltas |")
+        return False
+    
+    # PROMPT 5.6: LATE-ITERATION GUARD (don't apply on final iteration)
+    if total_iterations and iter_idx == total_iterations:
+        print(f"| iter_watch | APPLY_SKIP | reason=final_iteration |")
+        # Mark as skipped in ITER_SUMMARY
+        tuning["applied"] = False
+        tuning["skipped_reason"] = "final_iteration"
+        with open(iter_summary_path, 'w', encoding='utf-8') as f:
+            json.dump(iter_summary, f, indent=2, separators=(',', ':'))
+        return False
+    
+    # PROMPT 5.1: IDEMPOTENT APPLY (check signature)
+    current_signature = compute_deltas_signature(deltas)
+    tuning_state = load_tuning_state()
+    last_signature = tuning_state.get("last_applied_signature")
+    
+    if current_signature == last_signature:
+        print(f"| iter_watch | APPLY_SKIP | reason=same_signature |")
+        # Mark as skipped in ITER_SUMMARY
+        tuning["applied"] = False
+        tuning["skipped_reason"] = "same_signature"
+        with open(iter_summary_path, 'w', encoding='utf-8') as f:
+            json.dump(iter_summary, f, indent=2, separators=(',', ':'))
+        return False
+    
+    # PROMPT 5.3: FREEZE CHECK (skip frozen params)
+    frozen_until_iter = tuning_state.get("frozen_until_iter")
+    if frozen_until_iter and iter_idx <= frozen_until_iter:
+        # Remove frozen params from deltas
+        frozen_params = ["impact_cap_ratio", "max_delta_ratio"]
+        original_deltas = deltas.copy()
+        for param in frozen_params:
+            if param in deltas:
+                del deltas[param]
+        
+        if len(deltas) != len(original_deltas):
+            removed_params = set(original_deltas.keys()) - set(deltas.keys())
+            print(f"| iter_watch | FREEZE | active until_iter={frozen_until_iter} removed={list(removed_params)} |")
+        
+        # If all deltas were frozen, skip apply
+        if not deltas:
+            print(f"| iter_watch | APPLY_SKIP | reason=all_params_frozen |")
+            tuning["applied"] = False
+            tuning["skipped_reason"] = "all_params_frozen"
+            with open(iter_summary_path, 'w', encoding='utf-8') as f:
+                json.dump(iter_summary, f, indent=2, separators=(',', ':'))
+            return False
+    
+    # Load current runtime overrides
+    if not overrides_path.exists():
+        print(f"| iter_watch | APPLY | ERROR | runtime_overrides.json not found |")
+        return False
+    
+    try:
+        with open(overrides_path, 'r', encoding='utf-8') as f:
+            current_overrides = json.load(f)
+    except Exception as e:
+        print(f"| iter_watch | APPLY | ERROR | Failed to read runtime_overrides.json: {e} |")
+        return False
+    
+    # SAFETY: Create backup before modifications (for diff diagnostics)
+    backup_overrides = current_overrides.copy()
+    
+    # Apply deltas with bounds checking
+    applied_changes = {}
+    for param, delta in deltas.items():
+        # Get current value (use default if not present)
+        current_value = current_overrides.get(param, 0.0)
+        
+        # Compute new value
+        new_value = current_value + delta
+        
+        # Apply bounds if parameter has limits
+        if param in APPLY_BOUNDS:
+            min_val, max_val = APPLY_BOUNDS[param]
+            capped_value = max(min_val, min(max_val, new_value))
+            
+            # Track if we hit bounds
+            hit_bound = (capped_value != new_value)
+            bound_type = None
+            if hit_bound:
+                if capped_value == min_val:
+                    bound_type = "floor"
+                elif capped_value == max_val:
+                    bound_type = "cap"
+            
+            # Update override
+            current_overrides[param] = capped_value
+            
+            # Record change for logging
+            applied_changes[param] = {
+                "old": current_value,
+                "delta": delta,
+                "new": capped_value,
+                "hit_bound": hit_bound,
+                "bound_type": bound_type
+            }
+        else:
+            # No bounds defined - apply delta as-is (should not happen in practice)
+            current_overrides[param] = new_value
+            applied_changes[param] = {
+                "old": current_value,
+                "delta": delta,
+                "new": new_value,
+                "hit_bound": False,
+                "bound_type": None
+            }
+    
+    # Save updated runtime_overrides.json
+    try:
+        save_runtime_overrides(current_overrides, path=str(overrides_path))
+    except Exception as e:
+        print(f"| iter_watch | APPLY | ERROR | Failed to save runtime_overrides.json: {e} |")
+        return False
+    
+    # Mark as applied in ITER_SUMMARY
+    try:
+        tuning["applied"] = True
+        iter_summary["tuning"] = tuning
+        
+        with open(iter_summary_path, 'w', encoding='utf-8') as f:
+            json.dump(iter_summary, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"| iter_watch | APPLY | ERROR | Failed to update ITER_SUMMARY_{iter_idx}.json: {e} |")
+        return False
+    
+    # PROMPT 5.1: Update signature in tuning_state (prevent duplicate apply)
+    tuning_state["last_applied_signature"] = current_signature
+    save_tuning_state(tuning_state)
+    
+    # Log applied changes (compact format)
+    print(f"| iter_watch | APPLY | iter={iter_idx} params={len(applied_changes)} |")
+    
+    for param, change in applied_changes.items():
+        old_val = change["old"]
+        new_val = change["new"]
+        delta_val = change["delta"]
+        
+        # Format based on param type (int vs float)
+        if param in ["min_interval_ms", "tail_age_ms", "replace_rate_per_min"]:
+            old_str = f"{old_val:.0f}"
+            new_str = f"{new_val:.0f}"
+            delta_str = f"{delta_val:+.0f}"
+        else:
+            old_str = f"{old_val:.2f}"
+            new_str = f"{new_val:.2f}"
+            delta_str = f"{delta_val:+.2f}"
+        
+        # Add bound indicator if hit
+        bound_suffix = ""
+        if change["hit_bound"]:
+            bound_suffix = f" [{change['bound_type']}]"
+        
+        print(f"  {param}: {old_str} -> {new_str} (delta={delta_str}){bound_suffix}")
+    
+    # Self-check: Print diff for diagnostics (first 2 iterations only to avoid spam)
+    if iter_idx <= 2:
+        print(f"\n| iter_watch | SELF_CHECK | Diff for runtime_overrides.json (iter {iter_idx}) |")
+        for param in sorted(set(backup_overrides.keys()) | set(current_overrides.keys())):
+            old_val = backup_overrides.get(param, "N/A")
+            new_val = current_overrides.get(param, "N/A")
+            if old_val != new_val:
+                print(f"  - {param}: {old_val} -> {new_val}")
+        print()
+    
+    return True
+
+
 def get_default_best_cell_overrides() -> Dict[str, Any]:
     """
     Return default runtime overrides from best parameter sweep cell.
@@ -559,6 +861,17 @@ def main(argv=None) -> int:
             current_overrides = get_default_best_cell_overrides()
             save_runtime_overrides(current_overrides)
             print(f"| overrides | OK | source=default_best_cell |")
+        
+        # PROMPT 2: Preview runtime overrides at startup
+        print(f"\n{'='*60}")
+        print(f"RUNTIME OVERRIDES (startup preview)")
+        print(f"{'='*60}")
+        for param, value in sorted(current_overrides.items()):
+            if isinstance(value, float):
+                print(f"  {param:30s} = {value:.2f}")
+            else:
+                print(f"  {param:30s} = {value}")
+        print(f"{'='*60}\n")
         
         # State for negative streak detector (MEGA-PROMPT: fallback logic)
         neg_streak = 0  # Count of consecutive iterations with net_bps < 0
@@ -765,11 +1078,25 @@ def main(argv=None) -> int:
                             current_overrides=current_overrides,
                             print_markers=True
                         )
+                        
+                        # PROMPT 1: Apply tuning deltas (live-apply mechanism)
+                        # This makes recommendations from iter_watcher actually take effect
+                        # PROMPT 5: Pass total_iterations for late-iteration guard
+                        apply_tuning_deltas(iteration + 1, total_iterations=args.iterations)
+                        
+                        # Reload overrides after live-apply (they might have changed)
+                        overrides_path_reload = Path("artifacts/soak/runtime_overrides.json")
+                        if overrides_path_reload.exists():
+                            with open(overrides_path_reload, 'r', encoding='utf-8') as f:
+                                current_overrides = json.load(f)
+                        
                     except Exception as e:
                         print(f"[WARN] iter_watcher failed: {e}")
                 
-                # Update overrides for next iteration
-                current_overrides = new_overrides
+                # Update overrides for next iteration (this is now overridden by live-apply above)
+                # Keep this line for backwards compatibility if iter_watcher is disabled
+                if not iter_watcher:
+                    current_overrides = new_overrides
                 
                 # RISK-AWARE: Track completed iterations
                 iter_done += 1
@@ -794,7 +1121,15 @@ def main(argv=None) -> int:
         print(f"{'='*60}")
         print(f"REAL DURATION (wall-clock): {wall_str}")
         print(f"ITERATIONS COMPLETED: {iter_done}")
-        print(f"{'='*60}\n")
+        print(f"{'='*60}")
+        
+        # PROMPT 1: Print live-apply summary
+        print(f"\n| iter_watch | SUMMARY | steady apply complete |")
+        print(f"  Total iterations: {iter_done}")
+        print(f"  Live-apply enabled: True")
+        print(f"  Final runtime overrides written to: artifacts/soak/runtime_overrides.json")
+        print(f"  Per-iteration summaries: artifacts/soak/latest/ITER_SUMMARY_*.json")
+        print()
         
         # RISK-AWARE: Write wall-clock summary to file
         soak_dir = Path("artifacts/soak/latest")
