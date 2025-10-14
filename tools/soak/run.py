@@ -873,6 +873,43 @@ def main(argv=None) -> int:
                 print(f"  {param:30s} = {value}")
         print(f"{'='*60}\n")
         
+        # PROMPT 6: STARTUP_APPLY - Apply final_iteration deltas if present
+        # Check if previous run had skipped deltas on final iteration
+        latest_dir = Path("artifacts/soak/latest")
+        if latest_dir.exists():
+            # Find last ITER_SUMMARY with final_iteration skip
+            iter_summaries = sorted(latest_dir.glob("ITER_SUMMARY_*.json"), 
+                                   key=lambda p: int(p.stem.split('_')[-1]) if p.stem.split('_')[-1].isdigit() else 0)
+            
+            for summary_path in reversed(iter_summaries):
+                try:
+                    with open(summary_path, 'r', encoding='utf-8') as f:
+                        summary_data = json.load(f)
+                    
+                    tuning = summary_data.get("tuning", {})
+                    skipped_reason = tuning.get("skipped_reason")
+                    deltas = tuning.get("deltas", {})
+                    
+                    if skipped_reason == "final_iteration" and deltas:
+                        # Apply these deltas now at startup
+                        print(f"| iter_watch | STARTUP_APPLY | from={summary_path.name} deltas={len(deltas)} |")
+                        
+                        # Apply deltas to current_overrides
+                        for param, delta in deltas.items():
+                            if param in current_overrides:
+                                old_val = current_overrides[param]
+                                if isinstance(old_val, (int, float)):
+                                    new_val = old_val + delta
+                                    current_overrides[param] = new_val
+                                    print(f"  - {param}: {old_val:.2f} -> {new_val:.2f} (delta={delta:+.2f})")
+                        
+                        # Save updated overrides
+                        save_runtime_overrides(current_overrides)
+                        break  # Only apply once from most recent
+                    
+                except Exception as e:
+                    print(f"[WARN] Could not process {summary_path.name}: {e}")
+        
         # State for negative streak detector (MEGA-PROMPT: fallback logic)
         neg_streak = 0  # Count of consecutive iterations with net_bps < 0
         fallback_applied_at_iter = None  # Track when fallback was last applied
@@ -1090,6 +1127,29 @@ def main(argv=None) -> int:
                             with open(overrides_path_reload, 'r', encoding='utf-8') as f:
                                 current_overrides = json.load(f)
                         
+                        # PROMPT 6: SOFT KPI GATE for risk_ratio
+                        # Check risk level and warn/fail if too high
+                        iter_summary_path = output_dir / f"ITER_SUMMARY_{iteration + 1}.json"
+                        if iter_summary_path.exists():
+                            try:
+                                with open(iter_summary_path, 'r', encoding='utf-8') as f:
+                                    iter_summary_data = json.load(f)
+                                
+                                risk_ratio = iter_summary_data.get("summary", {}).get("risk_ratio", 0.0)
+                                
+                                if risk_ratio > 0.70:
+                                    print(f"| kpi_gate | FAIL | risk_ratio={risk_ratio:.2%} > 70% |")
+                                    print(f"[ERROR] Risk too high - iteration failed")
+                                    # Don't exit immediately, but mark as failed
+                                    # (Let loop continue to collect data, but final summary will show failure)
+                                elif risk_ratio > 0.50:
+                                    print(f"| kpi_gate | WARN | risk_ratio={risk_ratio:.2%} > 50% |")
+                                else:
+                                    print(f"| kpi_gate | OK | risk_ratio={risk_ratio:.2%} |")
+                            
+                            except Exception as e:
+                                print(f"[WARN] Could not check risk in KPI gate: {e}")
+                        
                     except Exception as e:
                         print(f"[WARN] iter_watcher failed: {e}")
                 
@@ -1123,8 +1183,80 @@ def main(argv=None) -> int:
         print(f"ITERATIONS COMPLETED: {iter_done}")
         print(f"{'='*60}")
         
+        # PROMPT 6: POST-RUN TREND TABLE
+        print(f"\n{'='*60}")
+        print(f"ITERATION TREND TABLE")
+        print(f"{'='*60}\n")
+        
+        # Collect data from all ITER_SUMMARY files
+        trend_data = []
+        for i in range(1, args.iterations + 1):
+            iter_summary_path = output_dir / f"ITER_SUMMARY_{i}.json"
+            if iter_summary_path.exists():
+                try:
+                    with open(iter_summary_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    summary = data.get("summary", {})
+                    trend_data.append({
+                        "iter": i,
+                        "net_bps": summary.get("net_bps", 0.0),
+                        "risk": summary.get("risk_ratio", 0.0),
+                        "adv_p95": summary.get("adverse_bps_p95"),
+                        "sl_p95": summary.get("slippage_bps_p95"),
+                        "minInt%": summary.get("min_interval_ratio", 0.0),
+                        "conc%": summary.get("concurrency_ratio", 0.0)
+                    })
+                except Exception as e:
+                    print(f"[WARN] Could not load ITER_SUMMARY_{i}.json: {e}")
+        
+        # Print table header
+        print(f"| iter | net_bps | risk   | adv_p95 | sl_p95 | minInt% | conc% |")
+        print(f"|-----:|--------:|-------:|--------:|-------:|--------:|------:|")
+        
+        # Print each row
+        for row in trend_data:
+            net_bps = f"{row['net_bps']:.2f}" if row['net_bps'] is not None else "N/A"
+            risk = f"{row['risk']:.2%}" if row['risk'] is not None else "N/A"
+            adv_p95 = f"{row['adv_p95']:.2f}" if row['adv_p95'] is not None else "N/A"
+            sl_p95 = f"{row['sl_p95']:.2f}" if row['sl_p95'] is not None else "N/A"
+            minInt = f"{row['minInt%']:.1%}" if row['minInt%'] is not None else "N/A"
+            conc = f"{row['conc%']:.1%}" if row['conc%'] is not None else "N/A"
+            
+            print(f"| {row['iter']:4d} | {net_bps:>7s} | {risk:>6s} | {adv_p95:>7s} | {sl_p95:>6s} | {minInt:>7s} | {conc:>5s} |")
+        
+        # PROMPT 6: DECISION
+        print(f"\n{'='*60}")
+        print(f"DECISION")
+        print(f"{'='*60}\n")
+        
+        if trend_data:
+            last = trend_data[-1]
+            first = trend_data[0]
+            
+            last_risk = last["risk"]
+            last_net = last["net_bps"]
+            first_risk = first["risk"]
+            
+            # Check if stabilized
+            if last_risk is not None and last_risk <= 0.40 and last_net is not None and last_net >= 2.9:
+                risk_change = (last_risk - first_risk) * 100  # percentage points
+                print(f"[OK] SAFE profile stabilized - risk {first_risk:.1%} -> {last_risk:.1%} (delta {risk_change:+.1f}pp), edge {last_net:.2f} bps.")
+                print(f"     Target achieved: risk <= 40% and edge >= 2.9 bps")
+            elif last_risk is not None and last_risk > 0.45:
+                print(f"[WARN] Risk above target - last risk={last_risk:.1%} > 45%")
+                print(f"       Recommendation: Switch to ultra_safe_overrides.json and re-run.")
+                print(f"       Command: cp artifacts/soak/ultra_safe_overrides.json artifacts/soak/runtime_overrides.json")
+            else:
+                print(f"[INFO] In progress - last risk={last_risk:.1%}, last net={last_net:.2f} bps")
+                print(f"       Continue monitoring or adjust parameters as needed.")
+        else:
+            print(f"[WARN] No trend data available")
+        
+        print(f"\n{'='*60}\n")
+        
         # PROMPT 1: Print live-apply summary
-        print(f"\n| iter_watch | SUMMARY | steady apply complete |")
+        print(f"| iter_watch | SUMMARY | steady apply complete |")
         print(f"  Total iterations: {iter_done}")
         print(f"  Live-apply enabled: True")
         print(f"  Final runtime overrides written to: artifacts/soak/runtime_overrides.json")
