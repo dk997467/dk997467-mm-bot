@@ -116,10 +116,11 @@ def _save_tuning_state(state: Dict[str, Any]):
 
 def should_freeze(history: List[Dict[str, Any]], current_iter: int) -> bool:
     """
-    Check if freeze should be activated (PROMPT 5.3).
+    Check if freeze should be activated (PROMPT 7).
     
     Freeze conditions:
-    - 2 consecutive iterations with risk_ratio <= 0.35 AND net_bps >= 2.9
+    - 2 consecutive iterations with risk_ratio <= 0.35 AND net_bps >= 2.7
+    - Freeze lasts for 4 iterations (applied in enter_freeze)
     
     Args:
         history: List of recent iteration summaries (last 2+)
@@ -140,7 +141,7 @@ def should_freeze(history: List[Dict[str, Any]], current_iter: int) -> bool:
         net_bps = metrics.get("net_bps", 0.0)
         
         # If any iteration doesn't meet criteria, no freeze
-        if risk_ratio > 0.35 or net_bps < 2.9:
+        if risk_ratio > 0.35 or net_bps < 2.7:
             return False
     
     return True
@@ -148,15 +149,15 @@ def should_freeze(history: List[Dict[str, Any]], current_iter: int) -> bool:
 
 def enter_freeze(current_iter: int, reason: str = "steady_state_lock"):
     """
-    Activate freeze mode (PROMPT 5.3).
+    Activate freeze mode (PROMPT 7).
     
     Args:
         current_iter: Current iteration number
-        reason: Reason for freeze
+        reason: Reason for freeze (e.g., 'steady_state_lock', 'steady_safe')
     """
     state = _load_tuning_state()
     
-    # Freeze for next 4 iterations
+    # Freeze for next 4 iterations (PROMPT 7)
     frozen_until = current_iter + 4
     
     state["frozen_until_iter"] = frozen_until
@@ -166,6 +167,10 @@ def enter_freeze(current_iter: int, reason: str = "steady_state_lock"):
     
     frozen_params = ["impact_cap_ratio", "max_delta_ratio"]
     print(f"| iter_watch | FREEZE | from=iter_{current_iter} to=iter_{frozen_until} fields={frozen_params} |")
+    
+    # PROMPT 7: Special log for steady_safe mode
+    if "steady" in reason.lower() or "safe" in reason.lower():
+        print(f"| iter_watch | FREEZE | steady_safe active |")
 
 
 def is_freeze_active(current_iter: int) -> bool:

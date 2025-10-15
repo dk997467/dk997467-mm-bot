@@ -819,6 +819,7 @@ def main(argv=None) -> int:
     parser.add_argument("--gate-summary", type=str, help="Export gates summary JSON path")
     parser.add_argument("--mock", action="store_true", help="Use mock data for testing")
     parser.add_argument("--auto-tune", action="store_true", help="Enable runtime auto-tuning between iterations")
+    parser.add_argument("--profile", type=str, choices=["steady_safe"], help="Load predefined baseline profile")
     args = parser.parse_args(argv)
     
     # Check for MM_PROFILE env var and load profile
@@ -847,7 +848,20 @@ def main(argv=None) -> int:
         overrides_path = Path("artifacts/soak/runtime_overrides.json")
         env_overrides = os.environ.get("MM_RUNTIME_OVERRIDES_JSON")
         
-        if env_overrides:
+        # PROMPT 7: Load profile if --profile specified
+        if args.profile == "steady_safe":
+            profile_path = Path("artifacts/soak/steady_safe_overrides.json")
+            if profile_path.exists():
+                with open(profile_path, 'r', encoding='utf-8') as f:
+                    current_overrides = json.load(f)
+                # Save as active runtime overrides
+                save_runtime_overrides(current_overrides)
+                print(f"| overrides | OK | source=profile:steady_safe |")
+                print(f"| profile | STEADY-SAFE baseline active |")
+            else:
+                print(f"| overrides | ERROR | profile file not found: {profile_path} |")
+                return 1
+        elif env_overrides:
             # Env var takes precedence
             current_overrides = json.loads(env_overrides)
             print(f"| overrides | OK | source=env |")
@@ -1127,28 +1141,44 @@ def main(argv=None) -> int:
                             with open(overrides_path_reload, 'r', encoding='utf-8') as f:
                                 current_overrides = json.load(f)
                         
-                        # PROMPT 6: SOFT KPI GATE for risk_ratio
-                        # Check risk level and warn/fail if too high
+                        # PROMPT 7: SOFT KPI GATE for risk_ratio, adverse_p95, net_bps
+                        # WARN: risk > 0.40 OR adverse_p95 > 3.0
+                        # FAIL: risk > 0.50 OR net_bps < 2.0
                         iter_summary_path = output_dir / f"ITER_SUMMARY_{iteration + 1}.json"
                         if iter_summary_path.exists():
                             try:
                                 with open(iter_summary_path, 'r', encoding='utf-8') as f:
                                     iter_summary_data = json.load(f)
                                 
-                                risk_ratio = iter_summary_data.get("summary", {}).get("risk_ratio", 0.0)
+                                summary = iter_summary_data.get("summary", {})
+                                risk_ratio = summary.get("risk_ratio", 0.0)
+                                adverse_p95 = summary.get("adverse_bps_p95", 0.0)
+                                net_bps = summary.get("net_bps", 0.0)
                                 
-                                if risk_ratio > 0.70:
-                                    print(f"| kpi_gate | FAIL | risk_ratio={risk_ratio:.2%} > 70% |")
-                                    print(f"[ERROR] Risk too high - iteration failed")
-                                    # Don't exit immediately, but mark as failed
-                                    # (Let loop continue to collect data, but final summary will show failure)
-                                elif risk_ratio > 0.50:
-                                    print(f"| kpi_gate | WARN | risk_ratio={risk_ratio:.2%} > 50% |")
+                                # Check FAIL conditions (most severe)
+                                fail_reasons = []
+                                if risk_ratio > 0.50:
+                                    fail_reasons.append(f"risk={risk_ratio:.2%}>50%")
+                                if net_bps < 2.0:
+                                    fail_reasons.append(f"net_bps={net_bps:.2f}<2.0")
+                                
+                                # Check WARN conditions
+                                warn_reasons = []
+                                if risk_ratio > 0.40:
+                                    warn_reasons.append(f"risk={risk_ratio:.2%}>40%")
+                                if adverse_p95 > 3.0:
+                                    warn_reasons.append(f"adverse_p95={adverse_p95:.2f}>3.0")
+                                
+                                if fail_reasons:
+                                    print(f"| kpi_gate | FAIL | {', '.join(fail_reasons)} |")
+                                    print(f"[ERROR] KPI gate failed - iteration marked as failed")
+                                elif warn_reasons:
+                                    print(f"| kpi_gate | WARN | {', '.join(warn_reasons)} |")
                                 else:
-                                    print(f"| kpi_gate | OK | risk_ratio={risk_ratio:.2%} |")
+                                    print(f"| kpi_gate | OK | risk={risk_ratio:.2%}, net={net_bps:.2f}, adv_p95={adverse_p95:.2f} |")
                             
                             except Exception as e:
-                                print(f"[WARN] Could not check risk in KPI gate: {e}")
+                                print(f"[WARN] Could not check KPI gate: {e}")
                         
                     except Exception as e:
                         print(f"[WARN] iter_watcher failed: {e}")
