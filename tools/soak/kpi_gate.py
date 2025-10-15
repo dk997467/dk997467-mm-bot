@@ -351,10 +351,13 @@ def main():
         # Write KPI_GATE.json artifact
         from tools.common import jsonx
         
+        verdict = "PASS" if ok else "FAIL"
+        
         kpi_gate_output = {
             "mode": result_mode,
             "ok": bool(ok),
             "exit_code": 0 if ok else 1,
+            "verdict": verdict,
             "reason": reason or "",
             "source_path": str(target_path),
             "metrics": metrics_dict,

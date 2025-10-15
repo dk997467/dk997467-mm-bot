@@ -785,13 +785,17 @@ def write_iteration_outputs(
             iterations = []
     
     # Append current iteration
+    # CRITICAL: Always include proposed_deltas (even if empty) for smoke tests
+    proposed_deltas = tuning_result.get("deltas") or tuning_result.get("proposed_deltas") or {}
+    
     iterations.append({
         "iteration": iteration_idx,
         "runtime_utc": summary.get("runtime_utc"),
         "net_bps": summary.get("net_bps"),
         "kpi_verdict": summary.get("kpi_verdict"),
         "neg_edge_drivers": summary.get("neg_edge_drivers"),
-        "suggested_deltas": tuning_result.get("deltas", {}),
+        "proposed_deltas": proposed_deltas,  # Always present (smoke test requirement)
+        "suggested_deltas": tuning_result.get("deltas", {}),  # Backwards compat
         "rationale": tuning_result.get("rationale", ""),
         "applied": tuning_result.get("applied", False),
         # Add guard flags for debugging
