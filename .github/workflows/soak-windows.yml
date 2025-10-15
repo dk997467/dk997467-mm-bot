@@ -99,6 +99,10 @@ jobs:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_PYTHON_VERSION_WARNING: "1"
       
+      # Cache: Disabled on Windows due to tar/gzip issues
+      # Set to '1' to enable on Linux/macOS or after installing GNU tar+gzip
+      ENABLE_SOAK_CACHE: "0"
+      
       # MEGA-PROMPT: Runtime overrides and profile
       MM_PROFILE: "S1"
       MM_ALLOW_MISSING_SECRETS: "1"
@@ -240,9 +244,11 @@ jobs:
 
       - name: "[4/13] Cache Cargo registry"
         id: cache-cargo
+        if: ${{ env.ENABLE_SOAK_CACHE == '1' }}
         # Purpose: Cache Cargo dependencies to speed up Rust builds
         # Key: Based on Cargo.lock for stable hashing
         # Note: Using forward slashes for cross-platform compatibility
+        # NOTE: Disabled on Windows (ENABLE_SOAK_CACHE=0) due to tar/gzip issues
         uses: actions/cache@v4
         with:
           path: |
@@ -255,8 +261,10 @@ jobs:
 
       - name: "[5/13] Cache Rust build artifacts"
         id: cache-rust-target
+        if: ${{ env.ENABLE_SOAK_CACHE == '1' }}
         # Purpose: Cache compiled Rust artifacts for faster rebuilds
         # Note: Using forward slashes for cross-platform compatibility
+        # NOTE: Disabled on Windows (ENABLE_SOAK_CACHE=0) due to tar/gzip issues
         uses: actions/cache@v4
         with:
           path: rust/target
@@ -276,9 +284,11 @@ jobs:
 
       - name: "[7/13] Cache pip dependencies"
         id: cache-pip
+        if: ${{ env.ENABLE_SOAK_CACHE == '1' }}
         # Purpose: Cache Python packages to speed up installation
         # Note: Using forward slashes for cross-platform compatibility
         # Windows: ~/AppData/Local/pip/Cache
+        # NOTE: Disabled on Windows (ENABLE_SOAK_CACHE=0) due to tar/gzip issues
         uses: actions/cache@v4
         with:
           path: |
@@ -539,36 +549,66 @@ jobs:
           
           Write-Host "✅ All required artifacts present"
 
-      - name: Enforce KPI gate (fail on FAIL)
+      - name: Enforce KPI gate (soft/hard thresholds)
         id: check-kpi-gate
         if: ${{ inputs.iterations }}
         run: |
           Write-Host "================================================"
-          Write-Host "CHECKING KPI GATE VERDICT"
+          Write-Host "CHECKING KPI GATE VERDICT (soft/hard)"
           Write-Host "================================================"
           
-          $kpiPath = "artifacts\soak\latest\artifacts\KPI_GATE.json"
+          # Find latest ITER_SUMMARY to extract metrics
+          $latestDir = "artifacts\soak\latest"
+          if (!(Test-Path $latestDir)) {
+            Write-Warning "Latest dir not found, skipping KPI gate"
+            exit 0
+          }
           
-          if (Test-Path $kpiPath) {
-            $kpi = Get-Content $kpiPath -Raw | ConvertFrom-Json
-            $verdict = $kpi.verdict
-            $reasons = $kpi.reasons -join ", "
-            
-            Write-Host "| kpi_gate | verdict=$verdict | reasons=[$reasons] |"
-            
-            if ($verdict -eq "FAIL") {
-              Write-Error "❌ KPI Gate: FAIL - Terminating job"
-              Write-Host "Reasons: $reasons"
-              exit 1
-            } elseif ($verdict -eq "WARN") {
-              Write-Warning "⚠️ KPI Gate: WARN - Continuing with warning"
-              Write-Host "Reasons: $reasons"
-            } else {
-              Write-Host "✅ KPI Gate: $verdict"
-            }
-          } else {
-            Write-Warning "KPI gate file not found at $kpiPath"
-            Write-Host "Skipping KPI gate check (may be in legacy long-soak mode)"
+          $iterSummaries = Get-ChildItem "$latestDir\ITER_SUMMARY_*.json" -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+          if ($iterSummaries.Count -eq 0) {
+            Write-Warning "No ITER_SUMMARY files found, skipping KPI gate"
+            exit 0
+          }
+          
+          # Get last iteration summary
+          $lastSummary = Get-Content $iterSummaries[0].FullName -Raw | ConvertFrom-Json
+          $summary = $lastSummary.summary
+          
+          $risk = $summary.risk_ratio
+          $net = $summary.net_bps
+          $adv = $summary.adverse_bps_p95
+          $sl = $summary.slippage_bps_p95
+          
+          # SOFT/HARD THRESHOLDS
+          # Soft: WARN but continue
+          # Hard: FAIL and exit
+          $softRisk = 0.40
+          $hardRisk = 0.50
+          $minNetHard = 2.0
+          $maxAdvSoft = 3.0
+          
+          # Format risk as percentage for display
+          $riskPct = [math]::Round($risk * 100, 1)
+          
+          # Check HARD thresholds first (these cause exit)
+          if ($risk -gt $hardRisk -or $net -lt $minNetHard) {
+            Write-Host "| kpi_gate | status=FAIL | net=$net risk=$riskPct% adv_p95=$adv sl_p95=$sl |"
+            Write-Host "❌ KPI Gate: HARD FAIL"
+            if ($risk -gt $hardRisk) { Write-Host "  - risk $riskPct% > hard threshold $($hardRisk*100)%" }
+            if ($net -lt $minNetHard) { Write-Host "  - net_bps $net < hard threshold $minNetHard" }
+            exit 3
+          }
+          # Check SOFT thresholds (WARN but continue)
+          elseif ($risk -gt $softRisk -or $adv -gt $maxAdvSoft) {
+            Write-Host "| kpi_gate | status=WARN | net=$net risk=$riskPct% adv_p95=$adv sl_p95=$sl |"
+            Write-Warning "⚠️ KPI Gate: SOFT WARN (continuing)"
+            if ($risk -gt $softRisk) { Write-Host "  - risk $riskPct% > soft threshold $($softRisk*100)%" }
+            if ($adv -gt $maxAdvSoft) { Write-Host "  - adverse_p95 $adv > soft threshold $maxAdvSoft" }
+          }
+          # All clear
+          else {
+            Write-Host "| kpi_gate | status=OK | net=$net risk=$riskPct% adv_p95=$adv sl_p95=$sl |"
+            Write-Host "✅ KPI Gate: PASS"
           }
 
       - name: Start resource monitoring (background)

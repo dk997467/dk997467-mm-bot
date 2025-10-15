@@ -872,6 +872,14 @@ def main(argv=None) -> int:
                 print(f"| overrides | OK | source=profile:steady_safe |")
                 print(f"| profile | STEADY-SAFE baseline active |")
                 print(f"| profile | STEADY-SAFE baseline applied before iter=1 |")
+                # POLISH: Print profile parameters in readable format
+                minInt = current_overrides.get('min_interval_ms', 'N/A')
+                tail = current_overrides.get('tail_age_ms', 'N/A')
+                impact = current_overrides.get('impact_cap_ratio', 'N/A')
+                maxDelta = current_overrides.get('max_delta_ratio', 'N/A')
+                repl = current_overrides.get('replace_rate_per_min', 'N/A')
+                spread = current_overrides.get('base_spread_bps_delta', 'N/A')
+                print(f"| profile | STEADY-SAFE active | minInt={minInt} tail={tail} impact={impact} maxDelta={maxDelta} repl={repl} spread={spread} |")
             else:
                 print(f"| overrides | ERROR | profile file not found: {profile_path} |")
                 return 1
@@ -1193,7 +1201,8 @@ def main(argv=None) -> int:
                                 
                                 # FIX 5: Always print summary line with all metrics
                                 status = "FAIL" if fail_reasons else ("WARN" if warn_reasons else "OK")
-                                print(f"| kpi_gate | status={status} | net={net_bps:.2f} risk={risk_ratio:.2%} adv_p95={adverse_p95:.2f} sl_p95={slippage_p95:.2f} |")
+                                # POLISH: Risk rounded to 1 decimal place
+                                print(f"| kpi_gate | status={status} | net={net_bps:.2f} risk={risk_ratio:.1%} adv_p95={adverse_p95:.2f} sl_p95={slippage_p95:.2f} |")
                                 
                                 if fail_reasons:
                                     print(f"[ERROR] KPI gate failed - {', '.join(fail_reasons)}")
@@ -1270,7 +1279,7 @@ def main(argv=None) -> int:
         # Print each row
         for row in trend_data:
             net_bps = f"{row['net_bps']:.2f}" if row['net_bps'] is not None else "N/A"
-            risk = f"{row['risk']:.2%}" if row['risk'] is not None else "N/A"
+            risk = f"{row['risk']:.1%}" if row['risk'] is not None else "N/A"  # POLISH: 1 decimal place
             adv_p95 = f"{row['adv_p95']:.2f}" if row['adv_p95'] is not None else "N/A"
             sl_p95 = f"{row['sl_p95']:.2f}" if row['sl_p95'] is not None else "N/A"
             minInt = f"{row['minInt%']:.1%}" if row['minInt%'] is not None else "N/A"
