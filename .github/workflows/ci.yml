@@ -143,6 +143,104 @@ jobs:
           python tools/ci/run_selected_unit.py
 
   # ===========================================================================
+  # SMOKE TESTS: Fast soak validation (<2 min)
+  # ===========================================================================
+  tests-smoke:
+    name: Smoke Tests (soak)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTHONPATH: "${{ github.workspace }}"
+      SOAK_SLEEP_SECONDS: "5"
+      BYBIT_API_KEY: "test_api_key_for_ci_only"
+      BYBIT_API_SECRET: "test_api_secret_for_ci_only"
+      STORAGE_PG_PASSWORD: "test_pg_password_for_ci_only"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      
+      - name: Prepare minimal requirements for CI
+        shell: bash
+        run: |
+          echo "=== Filtering requirements.txt ==="
+          
+          awk '
+            BEGIN{IGNORECASE=1}
+            /^[[:space:]]*bybit-connector/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*mm-orderbook/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*mm_orderbook/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*git\+ssh:/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*git\+https:/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            {print}
+          ' requirements.txt > requirements_ci.txt
+          
+          echo "pydantic>=2,<3"           >> requirements_ci.txt
+          echo "pydantic-settings>=2,<3"  >> requirements_ci.txt
+          echo "pandas>=2,<3"             >> requirements_ci.txt
+          
+          echo ""
+          echo "=== GATE: Verify mm-orderbook not in requirements_ci.txt ==="
+          if grep -i "mm.orderbook\|mm_orderbook" requirements_ci.txt; then
+            echo "❌ GATE FAILED: mm-orderbook found in requirements_ci.txt"
+            exit 1
+          fi
+          echo "✓ GATE PASSED: mm-orderbook correctly filtered out"
+
+      - name: Install base dependencies
+        run: |
+          python -m pip install -U pip
+          pip install maturin
+          echo "✓ pip and maturin installed"
+
+      - name: Install project with Rust module (editable)
+        run: |
+          echo "=== Building and installing mm-bot with Rust extensions ==="
+          pip install -e . -v
+          echo ""
+          echo "=== Smoke test: import mm_orderbook ==="
+          python -c "import mm_orderbook; print('✓ mm_orderbook import OK')"
+
+      - name: Install remaining dependencies
+        run: |
+          echo "=== Installing external dependencies from requirements_ci.txt ==="
+          pip install -r requirements_ci.txt
+          echo ""
+          echo "=== Final package list ==="
+          pip list
+
+      - name: Run Smoke Tests (<2 min)
+        run: |
+          echo "================================================"
+          echo "SOAK SMOKE TESTS (fast validation)"
+          echo "================================================"
+          SOAK_SLEEP_SECONDS=5 pytest -v tests/smoke/test_soak_smoke.py -k smoke
+          echo "================================================"
+      
+      - name: Upload smoke artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-artifacts
+          path: |
+            artifacts/soak/**
+            .pytest_cache/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ===========================================================================
   # E2E TESTS: Slower, higher memory (~20-30 min)
   # ===========================================================================
   tests-e2e:

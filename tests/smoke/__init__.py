@@ -1,1 +1,1 @@
-# Smoke tests module
+"""Smoke tests for quick validation."""

@@ -960,6 +960,33 @@ jobs:
           Write-Host "FINALIZATION COMPLETE"
           Write-Host "================================================"
 
+      - name: Rotate soak artifacts (prevent disk bloat)
+        id: rotate-artifacts
+        if: always()
+        run: |
+          Write-Host "================================================"
+          Write-Host "ARTIFACT ROTATION"
+          Write-Host "================================================"
+          
+          # Run artifact manager with retention policy
+          & $env:PYTHON_EXE -m tools.soak.artifact_manager `
+            --path artifacts/soak `
+            --ttl-days 7 `
+            --max-size-mb 900 `
+            --keep-latest 100
+          
+          $exitCode = $LASTEXITCODE
+          
+          if ($exitCode -eq 2) {
+            Write-Warning "Artifact size exceeds threshold, consider manual cleanup"
+          } elseif ($exitCode -ne 0) {
+            Write-Error "Artifact rotation failed with exit code $exitCode"
+          } else {
+            Write-Host "[OK] Artifact rotation completed successfully"
+          }
+          
+          Write-Host "================================================"
+
       - name: "[12/13] Upload artifacts"
         id: upload-artifacts
         if: always()
