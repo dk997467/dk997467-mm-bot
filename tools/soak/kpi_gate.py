@@ -20,6 +20,8 @@ Usage:
 """
 
 from typing import Dict, Any, Optional
+from datetime import datetime
+from pathlib import Path
 
 
 # ==============================================================================
@@ -320,13 +322,48 @@ def main():
         with open(target_path, 'r') as f:
             data = json.load(f)
         
+        # Extract metrics for KPI_GATE.json
+        metrics_dict = {}
+        
         if mode == "weekly":
             ok, reason = eval_weekly(data)
             result_mode = "weekly"
+            # Extract weekly metrics
+            metrics_dict = {
+                "edge_net_bps_median": data.get("edge_net_bps", {}).get("median", 0.0),
+                "order_age_p95_ms_median": data.get("order_age_p95_ms", {}).get("median", 0.0),
+                "taker_share_pct_median": data.get("taker_share_pct", {}).get("median", 0.0),
+                "maker_ratio": 1.0 - (data.get("taker_share_pct", {}).get("median", 0.0) / 100.0),
+                "trend_ok": bool(data.get("regress_guard", {}).get("trend_ok", False)),
+            }
         else:  # iter
             summary = data.get("summary", data)  # Support both wrapped and unwrapped
             ok, reason = eval_iter(summary)
             result_mode = "iter"
+            # Extract iter metrics
+            metrics_dict = {
+                "risk_ratio": summary.get("risk_ratio", 1.0),
+                "maker_taker_ratio": summary.get("maker_taker_ratio", 0.0),
+                "net_bps": summary.get("net_bps", 0.0),
+                "p95_latency_ms": summary.get("p95_latency_ms", 0.0),
+            }
+        
+        # Write KPI_GATE.json artifact
+        from tools.common import jsonx
+        
+        kpi_gate_output = {
+            "mode": result_mode,
+            "ok": bool(ok),
+            "exit_code": 0 if ok else 1,
+            "reason": reason or "",
+            "source_path": str(target_path),
+            "metrics": metrics_dict,
+            "ts_iso": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        }
+        
+        out_dir = Path("artifacts")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        jsonx.write_json(out_dir / "KPI_GATE.json", kpi_gate_output)
         
         # Print result
         if ok:
