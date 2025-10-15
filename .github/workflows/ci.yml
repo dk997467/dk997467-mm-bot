@@ -239,6 +239,14 @@ jobs:
             .pytest_cache/**
           if-no-files-found: ignore
           retention-days: 7
+      
+      - name: Run Config Precedence Integration Test (<1 min)
+        run: |
+          echo "================================================"
+          echo "CONFIG PRECEDENCE INTEGRATION TEST"
+          echo "================================================"
+          SOAK_SLEEP_SECONDS=1 USE_MOCK=1 pytest -v tests/integration/test_config_precedence_integration.py -k config_precedence
+          echo "================================================"
 
   # ===========================================================================
   # E2E TESTS: Slower, higher memory (~20-30 min)
