@@ -19,6 +19,147 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+import hashlib
+
+
+# ==============================================================================
+# OSCILLATION DETECTOR + VELOCITY BOUNDS + COOLDOWN GUARD
+# ==============================================================================
+
+def oscillates(seq: List[float], tol: float = 1e-6, window: int = 3) -> bool:
+    """
+    Detect oscillation pattern (A→B→A→B...) in sequence.
+    
+    Args:
+        seq: Time series of parameter values (most recent last)
+        tol: Tolerance for float comparison
+        window: Minimum window to detect oscillation (default: 3)
+    
+    Returns:
+        True if oscillation detected
+    
+    Example:
+        >>> oscillates([1.0, 2.0, 1.0])  # A→B→A
+        True
+        >>> oscillates([1.0, 2.0, 3.0])  # No oscillation
+        False
+    """
+    if len(seq) < window:
+        return False
+    
+    # Check last 'window' values for A→B→A pattern
+    # Pattern: seq[-3] ≈ seq[-1] and seq[-3] != seq[-2]
+    if window == 3 and len(seq) >= 3:
+        a = seq[-3]
+        b = seq[-2]
+        c = seq[-1]
+        
+        # A ≈ C (back to original) and A != B (oscillated)
+        if abs(a - c) < tol and abs(a - b) > tol:
+            return True
+    
+    # General case: check alternating pattern
+    # For window=4: A→B→A→B
+    if len(seq) >= window and window > 3:
+        # Check if values alternate between two distinct values
+        unique_vals = list(set(round(v, 6) for v in seq[-window:]))
+        if len(unique_vals) == 2:
+            # Check if pattern alternates
+            pattern_a = all(abs(seq[-(window-i)] - seq[-(window-i-2)]) < tol 
+                           for i in range(0, window-2, 2) if window-i-2 > 0)
+            if pattern_a:
+                return True
+    
+    return False
+
+
+def within_velocity(
+    old_value: float,
+    new_value: float,
+    max_change_per_hour: float,
+    elapsed_hours: float
+) -> bool:
+    """
+    Check if parameter change is within velocity bounds.
+    
+    Args:
+        old_value: Previous parameter value
+        new_value: Proposed new value
+        max_change_per_hour: Maximum allowed change per hour
+        elapsed_hours: Time elapsed since last change
+    
+    Returns:
+        True if change is within bounds
+    
+    Example:
+        >>> within_velocity(100, 120, 10, 1.0)  # 20 change in 1h, max=10/h
+        False
+        >>> within_velocity(100, 105, 10, 1.0)  # 5 change in 1h, max=10/h
+        True
+    """
+    if elapsed_hours <= 0:
+        return False  # Cannot change instantaneously
+    
+    delta = abs(new_value - old_value)
+    allowed_delta = max_change_per_hour * elapsed_hours
+    
+    return delta <= allowed_delta
+
+
+def apply_cooldown_if_needed(
+    delta_magnitude: float,
+    threshold: float,
+    cooldown_iters: int,
+    current_cooldown_remaining: int
+) -> Dict[str, Any]:
+    """
+    Determine if cooldown should be applied after large delta.
+    
+    Args:
+        delta_magnitude: Magnitude of proposed change
+        threshold: Threshold for "large" change (triggers cooldown)
+        cooldown_iters: Number of iterations to cooldown
+        current_cooldown_remaining: Current cooldown remaining iterations
+    
+    Returns:
+        Dict with:
+            - should_apply: bool (whether delta should be applied)
+            - cooldown_active: bool
+            - cooldown_remaining: int
+            - reason: str
+    
+    Example:
+        >>> apply_cooldown_if_needed(0.15, 0.10, 3, 0)
+        {'should_apply': True, 'cooldown_active': True, 'cooldown_remaining': 3, 'reason': 'large_delta_triggers_cooldown'}
+        
+        >>> apply_cooldown_if_needed(0.05, 0.10, 3, 2)
+        {'should_apply': False, 'cooldown_active': True, 'cooldown_remaining': 1, 'reason': 'cooldown_active'}
+    """
+    # If cooldown already active, decrement and skip
+    if current_cooldown_remaining > 0:
+        return {
+            "should_apply": False,
+            "cooldown_active": True,
+            "cooldown_remaining": current_cooldown_remaining - 1,
+            "reason": "cooldown_active"
+        }
+    
+    # Check if this delta is large enough to trigger cooldown
+    if delta_magnitude > threshold:
+        return {
+            "should_apply": True,  # Apply this delta (it triggered cooldown)
+            "cooldown_active": True,
+            "cooldown_remaining": cooldown_iters,
+            "reason": "large_delta_triggers_cooldown"
+        }
+    
+    # Normal case: no cooldown
+    return {
+        "should_apply": True,
+        "cooldown_active": False,
+        "cooldown_remaining": 0,
+        "reason": "normal"
+    }
 
 
 def _read_json(path: Path) -> Optional[Dict[str, Any]]:
