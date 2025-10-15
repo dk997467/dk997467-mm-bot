@@ -177,18 +177,95 @@ def format_kpi_summary(metrics: Dict[str, Any], result: Dict[str, Any]) -> str:
     )
 
 
+def eval_weekly(rollup: Dict[str, Any]) -> tuple[bool, str]:
+    """
+    Evaluate WEEKLY_ROLLUP.json KPIs.
+    
+    Args:
+        rollup: Parsed WEEKLY_ROLLUP.json
+    
+    Returns:
+        (pass: bool, reason: str)
+    """
+    net_bps = rollup.get("edge_net_bps", {}).get("median", 0.0)
+    p95_ms = rollup.get("order_age_p95_ms", {}).get("median", 9999.0)
+    taker = rollup.get("taker_share_pct", {}).get("median", 100.0)  # %
+    trend = bool(rollup.get("regress_guard", {}).get("trend_ok", False))
+    
+    maker_ratio = (100.0 - float(taker)) / 100.0
+    
+    ok = (net_bps >= 2.7 and p95_ms <= 350.0 and maker_ratio >= 0.85 and trend)
+    
+    if ok:
+        return True, ""
+    else:
+        return False, f"bad_kpi(net_bps={net_bps}, p95_ms={p95_ms}, maker_ratio={maker_ratio:.2f}, trend_ok={trend})"
+
+
+def eval_iter(summary: Dict[str, Any]) -> tuple[bool, str]:
+    """
+    Evaluate ITER_SUMMARY.json KPIs.
+    
+    Args:
+        summary: Parsed ITER_SUMMARY.json["summary"]
+    
+    Returns:
+        (pass: bool, reason: str)
+    """
+    risk = summary.get("risk_ratio", 1.0)
+    mkr = summary.get("maker_taker_ratio", 0.0)
+    nbps = summary.get("net_bps", 0.0)
+    p95 = summary.get("p95_latency_ms", 9999.0)
+    
+    ok = (risk <= 0.42 and mkr >= 0.85 and nbps >= 2.7 and p95 <= 350.0)
+    
+    if ok:
+        return True, ""
+    else:
+        return False, f"bad_kpi(risk={risk:.2f}, mkr={mkr:.2f}, net_bps={nbps}, p95={p95})"
+
+
 def main():
-    """CLI entry point for testing."""
+    """
+    CLI entry point with auto-detect mode.
+    
+    Usage:
+        python -m tools.soak.kpi_gate                     # Auto-detect
+        python -m tools.soak.kpi_gate <path>              # Positional path
+        python -m tools.soak.kpi_gate --weekly <path>     # Weekly rollup
+        python -m tools.soak.kpi_gate --iter <path>       # Iteration summary
+        python -m tools.soak.kpi_gate --test              # Self-test
+    
+    Exit codes:
+        0 = PASS
+        1 = FAIL or error
+    """
     import sys
     import json
+    from pathlib import Path
     
-    if len(sys.argv) < 2:
-        print("Usage: python -m tools.soak.kpi_gate <ITER_SUMMARY.json>")
-        print("       python -m tools.soak.kpi_gate --test")
-        return 1
+    # Parse arguments
+    mode = None  # "weekly", "iter", "test", or auto-detect
+    target_path = None
     
-    if sys.argv[1] == "--test":
-        # Run self-test
+    if len(sys.argv) == 1:
+        # Auto-detect mode
+        mode = "auto"
+    elif sys.argv[1] == "--test":
+        mode = "test"
+    elif sys.argv[1] == "--weekly":
+        mode = "weekly"
+        target_path = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+    elif sys.argv[1] == "--iter":
+        mode = "iter"
+        target_path = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+    else:
+        # Positional path
+        mode = "auto"
+        target_path = Path(sys.argv[1])
+    
+    # Handle --test mode
+    if mode == "test":
         test_metrics = {
             "risk_ratio": 0.35,
             "maker_taker_ratio": 0.92,
@@ -202,33 +279,65 @@ def main():
         
         return 0 if result["verdict"] != "FAIL" else 1
     
-    # Load ITER_SUMMARY and check KPI gate
-    summary_path = sys.argv[1]
+    # Auto-detect file if not specified
+    if mode == "auto" and target_path is None:
+        # Try WEEKLY_ROLLUP.json first
+        weekly_path = Path("artifacts") / "WEEKLY_ROLLUP.json"
+        if weekly_path.exists():
+            target_path = weekly_path
+            mode = "weekly"
+        else:
+            # Try latest ITER_SUMMARY_*.json
+            iter_dir = Path("artifacts") / "soak" / "latest"
+            if iter_dir.exists():
+                iter_files = sorted(
+                    iter_dir.glob("ITER_SUMMARY_*.json"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True
+                )
+                if iter_files:
+                    target_path = iter_files[0]
+                    mode = "iter"
+    
+    # If still no file found, print usage and exit
+    if target_path is None or not target_path.exists():
+        print("Usage: python -m tools.soak.kpi_gate [<path>|--weekly <path>|--iter <path>|--test]")
+        print("No KPI file found for auto-detect mode")
+        return 1
+    
+    # Auto-detect mode based on filename if not explicitly set
+    if mode == "auto":
+        if "WEEKLY_ROLLUP" in target_path.name:
+            mode = "weekly"
+        elif "ITER_SUMMARY" in target_path.name:
+            mode = "iter"
+        else:
+            # Default to iter mode
+            mode = "iter"
+    
+    # Load and evaluate
     try:
-        with open(summary_path, 'r') as f:
+        with open(target_path, 'r') as f:
             data = json.load(f)
         
-        summary = data.get("summary", {})
+        if mode == "weekly":
+            ok, reason = eval_weekly(data)
+            result_mode = "weekly"
+        else:  # iter
+            summary = data.get("summary", data)  # Support both wrapped and unwrapped
+            ok, reason = eval_iter(summary)
+            result_mode = "iter"
         
-        # Check gate
-        mode = sys.argv[2] if len(sys.argv) > 2 else "hard"
-        result = kpi_gate_check(summary, mode=mode)
-        
-        # Print summary
-        print(format_kpi_summary(summary, result))
-        
-        if result["verdict"] == "FAIL":
-            print(f"❌ KPI Gate FAILED: {result['reason']}")
-            return 1
-        elif result["verdict"] == "WARN":
-            print(f"⚠️ KPI Gate WARNING: {result['reason']}")
-            return 0  # Continue on warnings
-        else:
-            print(f"✅ KPI Gate PASSED")
+        # Print result
+        if ok:
+            print(f"KPI_GATE: PASS {result_mode}")
             return 0
+        else:
+            print(f"KPI_GATE: FAIL {result_mode} {reason}")
+            return 1
     
     except Exception as e:
-        print(f"❌ Error reading {summary_path}: {e}")
+        print(f"KPI_GATE: FAIL error reading {target_path}: {e}")
         return 1
 
 
