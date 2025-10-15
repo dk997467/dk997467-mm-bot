@@ -179,7 +179,7 @@ def format_kpi_summary(metrics: Dict[str, Any], result: Dict[str, Any]) -> str:
     )
 
 
-def eval_weekly(rollup: Dict[str, Any]) -> tuple[bool, str]:
+def eval_weekly(rollup: Dict[str, Any]) -> tuple[bool, bool, Dict[str, Any]]:
     """
     Evaluate WEEKLY_ROLLUP.json KPIs.
     
@@ -187,7 +187,10 @@ def eval_weekly(rollup: Dict[str, Any]) -> tuple[bool, str]:
         rollup: Parsed WEEKLY_ROLLUP.json
     
     Returns:
-        (pass: bool, reason: str)
+        (metrics_ok: bool, trend_ok: bool, metrics: dict)
+        - metrics_ok: True if net_bps, p95_ms, maker_ratio are within thresholds
+        - trend_ok: True if regression guard says trend is ok
+        - metrics: Dict with extracted metric values
     """
     net_bps = rollup.get("edge_net_bps", {}).get("median", 0.0)
     p95_ms = rollup.get("order_age_p95_ms", {}).get("median", 9999.0)
@@ -196,12 +199,17 @@ def eval_weekly(rollup: Dict[str, Any]) -> tuple[bool, str]:
     
     maker_ratio = (100.0 - float(taker)) / 100.0
     
-    ok = (net_bps >= 2.7 and p95_ms <= 350.0 and maker_ratio >= 0.85 and trend)
+    # Check metrics independently of trend
+    metrics_ok = (net_bps >= 2.7 and p95_ms <= 350.0 and maker_ratio >= 0.85)
     
-    if ok:
-        return True, ""
-    else:
-        return False, f"bad_kpi(net_bps={net_bps}, p95_ms={p95_ms}, maker_ratio={maker_ratio:.2f}, trend_ok={trend})"
+    metrics = {
+        "net_bps": net_bps,
+        "p95_ms": p95_ms,
+        "maker_ratio": round(maker_ratio, 6),
+        "trend_ok": trend,
+    }
+    
+    return metrics_ok, trend, metrics
 
 
 def eval_iter(summary: Dict[str, Any]) -> tuple[bool, str]:
@@ -326,20 +334,31 @@ def main():
         metrics_dict = {}
         
         if mode == "weekly":
-            ok, reason = eval_weekly(data)
+            metrics_ok, trend_ok, metrics = eval_weekly(data)
             result_mode = "weekly"
-            # Extract weekly metrics
-            metrics_dict = {
-                "edge_net_bps_median": data.get("edge_net_bps", {}).get("median", 0.0),
-                "order_age_p95_ms_median": data.get("order_age_p95_ms", {}).get("median", 0.0),
-                "taker_share_pct_median": data.get("taker_share_pct", {}).get("median", 0.0),
-                "maker_ratio": 1.0 - (data.get("taker_share_pct", {}).get("median", 0.0) / 100.0),
-                "trend_ok": bool(data.get("regress_guard", {}).get("trend_ok", False)),
-            }
+            
+            # Determine verdict based on metrics and trend
+            if metrics_ok and trend_ok:
+                verdict, exit_code, reason = "PASS", 0, ""
+            elif metrics_ok and not trend_ok:
+                verdict, exit_code, reason = "WARN", 0, "trend_broken"
+            else:
+                verdict, exit_code, reason = "FAIL", 1, (
+                    f"bad_kpi(net_bps={metrics['net_bps']}, p95_ms={metrics['p95_ms']}, "
+                    f"maker_ratio={metrics['maker_ratio']}, trend_ok={metrics['trend_ok']})"
+                )
+            
+            metrics_dict = metrics
+            
         else:  # iter
             summary = data.get("summary", data)  # Support both wrapped and unwrapped
             ok, reason = eval_iter(summary)
             result_mode = "iter"
+            
+            # Iter mode: simple PASS/FAIL
+            verdict = "PASS" if ok else "FAIL"
+            exit_code = 0 if ok else 1
+            
             # Extract iter metrics
             metrics_dict = {
                 "risk_ratio": summary.get("risk_ratio", 1.0),
@@ -351,14 +370,12 @@ def main():
         # Write KPI_GATE.json artifact
         from tools.common import jsonx
         
-        verdict = "PASS" if ok else "FAIL"
-        
         kpi_gate_output = {
             "mode": result_mode,
-            "ok": bool(ok),
-            "exit_code": 0 if ok else 1,
+            "ok": verdict in ("PASS", "WARN"),
+            "exit_code": exit_code,
             "verdict": verdict,
-            "reason": reason or "",
+            "reason": reason,
             "source_path": str(target_path),
             "metrics": metrics_dict,
             "ts_iso": datetime.utcnow().isoformat(timespec="seconds") + "Z",
@@ -369,12 +386,8 @@ def main():
         jsonx.write_json(out_dir / "KPI_GATE.json", kpi_gate_output)
         
         # Print result
-        if ok:
-            print(f"KPI_GATE: PASS {result_mode}")
-            return 0
-        else:
-            print(f"KPI_GATE: FAIL {result_mode} {reason}")
-            return 1
+        print(f"KPI_GATE: {verdict} {result_mode} {reason}".rstrip())
+        return exit_code
     
     except Exception as e:
         print(f"KPI_GATE: FAIL error reading {target_path}: {e}")

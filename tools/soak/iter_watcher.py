@@ -24,6 +24,29 @@ import hashlib
 
 
 # ==============================================================================
+# SIGNATURE CALCULATION
+# ==============================================================================
+
+def compute_signature(runtime_path: Path) -> str:
+    """
+    Compute SHA256 signature of runtime_overrides.json.
+    
+    Args:
+        runtime_path: Path to runtime_overrides.json
+    
+    Returns:
+        SHA256 hex digest or "na" if file not found
+    """
+    try:
+        data = runtime_path.read_bytes()
+        return hashlib.sha256(data).hexdigest()
+    except FileNotFoundError:
+        return "na"
+    except Exception:
+        return "na"
+
+
+# ==============================================================================
 # MAKER/TAKER RATIO CALCULATION
 # ==============================================================================
 
@@ -788,6 +811,17 @@ def write_iteration_outputs(
     # CRITICAL: Always include proposed_deltas (even if empty) for smoke tests
     proposed_deltas = tuning_result.get("deltas") or tuning_result.get("proposed_deltas") or {}
     
+    # CRITICAL: Always include signature (sha256 of runtime_overrides.json)
+    # Priority: tuning_result.signature → summary.signature_hash → summary.state_hash → compute
+    sig = (tuning_result.get("signature") or 
+           summary.get("signature_hash") or 
+           summary.get("state_hash"))
+    if not sig:
+        runtime_path = output_dir / "runtime_overrides.json"
+        if not runtime_path.exists():
+            runtime_path = Path("artifacts/soak/runtime_overrides.json")
+        sig = compute_signature(runtime_path)
+    
     iterations.append({
         "iteration": iteration_idx,
         "runtime_utc": summary.get("runtime_utc"),
@@ -798,6 +832,7 @@ def write_iteration_outputs(
         "suggested_deltas": tuning_result.get("deltas", {}),  # Backwards compat
         "rationale": tuning_result.get("rationale", ""),
         "applied": tuning_result.get("applied", False),
+        "signature": sig or "na",  # Always present (smoke test requirement)
         # Add guard flags for debugging
         "oscillation_detected": tuning_result.get("oscillation_detected", False),
         "velocity_violation": tuning_result.get("velocity_violation", False),
