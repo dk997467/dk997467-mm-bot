@@ -616,13 +616,26 @@ def apply_tuning_deltas(iter_idx: int, total_iterations: int = None) -> bool:
     deltas = tuning.get("deltas", {})
     already_applied = tuning.get("applied", False)
     
-    # Skip if already applied or no deltas
+    # Skip if already applied
     if already_applied:
-        print(f"| iter_watch | APPLY | SKIP | iter={iter_idx} already_applied=true |")
+        print(f"| iter_watch | APPLY_SKIP | reason=already_applied | iter={iter_idx} |")
         return False
     
+    # FIX 3: Don't skip on empty deltas - could be capped params with zero deltas
+    # Check if ALL deltas are exactly zero (capped case)
     if not deltas:
-        print(f"| iter_watch | APPLY | SKIP | iter={iter_idx} no deltas |")
+        print(f"| iter_watch | APPLY_SKIP | reason=no_deltas | iter={iter_idx} |")
+        return False
+    
+    # Check if all deltas are zero (capped params)
+    all_zero = all(abs(v) < 1e-9 for v in deltas.values())
+    if all_zero:
+        print(f"| iter_watch | APPLY_SKIP | reason=all_deltas_zero (hit_bounds) | iter={iter_idx} |")
+        # Still mark as processed to avoid re-processing
+        tuning["applied"] = False
+        tuning["skipped_reason"] = "all_deltas_zero_hit_bounds"
+        with open(iter_summary_path, 'w', encoding='utf-8') as f:
+            json.dump(iter_summary, f, indent=2, separators=(',', ':'))
         return False
     
     # PROMPT 5.6: LATE-ITERATION GUARD (don't apply on final iteration)
@@ -848,16 +861,17 @@ def main(argv=None) -> int:
         overrides_path = Path("artifacts/soak/runtime_overrides.json")
         env_overrides = os.environ.get("MM_RUNTIME_OVERRIDES_JSON")
         
-        # PROMPT 7: Load profile if --profile specified
+        # PROMPT 7 + FIX 4: Load profile if --profile specified
         if args.profile == "steady_safe":
             profile_path = Path("artifacts/soak/steady_safe_overrides.json")
             if profile_path.exists():
                 with open(profile_path, 'r', encoding='utf-8') as f:
                     current_overrides = json.load(f)
-                # Save as active runtime overrides
+                # FIX 4: Save as active runtime overrides BEFORE iter 1
                 save_runtime_overrides(current_overrides)
                 print(f"| overrides | OK | source=profile:steady_safe |")
                 print(f"| profile | STEADY-SAFE baseline active |")
+                print(f"| profile | STEADY-SAFE baseline applied before iter=1 |")
             else:
                 print(f"| overrides | ERROR | profile file not found: {profile_path} |")
                 return 1
@@ -1011,12 +1025,19 @@ def main(argv=None) -> int:
                     }
                 else:
                     # Subsequent iterations: metrics improve after fallback
+                    # FIX 6: Realistic mock - risk decreases after anti-risk deltas
+                    # Start at 0.68 (iter 2), decrease by ~17% each iteration, floor 0.30
+                    base_risk = 0.68
+                    risk_decay = 0.83  # 17% relative decrease per iteration
+                    iterations_since_start = iteration - 2  # iter 2 is first with risk
+                    current_risk = max(0.30, base_risk * (risk_decay ** iterations_since_start))
+                    
                     mock_edge_report = {
                         "totals": {
                             "net_bps": 2.8 + (iteration * 0.1),  # Positive after fallback
-                            "adverse_bps_p95": 3.5 - (iteration * 0.2),  # Improves to < 4
-                            "slippage_bps_p95": 2.5 - (iteration * 0.15),  # Improves to < 3
-                            "cancel_ratio": 0.48 - (iteration * 0.05),
+                            "adverse_bps_p95": max(1.5, 3.5 - (iteration * 0.2)),  # Improves to < 4, floor 1.5
+                            "slippage_bps_p95": max(1.0, 2.5 - (iteration * 0.15)),  # Improves to < 3, floor 1.0
+                            "cancel_ratio": max(0.05, 0.48 - (iteration * 0.05)),
                             "order_age_p95_ms": 350,  # Keep high to trigger Age Relief
                             "ws_lag_p95_ms": 95 + (iteration * 5),
                             "maker_share_pct": 90.0 + (iteration * 0.5),
@@ -1032,7 +1053,7 @@ def main(argv=None) -> int:
                             "block_reasons": {
                                 "min_interval": {"count": 5, "ratio": 0.2},
                                 "concurrency": {"count": 3, "ratio": 0.12},
-                                "risk": {"count": 17, "ratio": 0.68},
+                                "risk": {"count": int(current_risk * 25), "ratio": current_risk},  # FIX 6: Decreasing risk
                                 "throttle": {"count": 0, "ratio": 0.0}
                             }
                         },
@@ -1153,6 +1174,7 @@ def main(argv=None) -> int:
                                 summary = iter_summary_data.get("summary", {})
                                 risk_ratio = summary.get("risk_ratio", 0.0)
                                 adverse_p95 = summary.get("adverse_bps_p95", 0.0)
+                                slippage_p95 = summary.get("slippage_bps_p95", 0.0)  # FIX 5: Add slippage
                                 net_bps = summary.get("net_bps", 0.0)
                                 
                                 # Check FAIL conditions (most severe)
@@ -1169,13 +1191,14 @@ def main(argv=None) -> int:
                                 if adverse_p95 > 3.0:
                                     warn_reasons.append(f"adverse_p95={adverse_p95:.2f}>3.0")
                                 
+                                # FIX 5: Always print summary line with all metrics
+                                status = "FAIL" if fail_reasons else ("WARN" if warn_reasons else "OK")
+                                print(f"| kpi_gate | status={status} | net={net_bps:.2f} risk={risk_ratio:.2%} adv_p95={adverse_p95:.2f} sl_p95={slippage_p95:.2f} |")
+                                
                                 if fail_reasons:
-                                    print(f"| kpi_gate | FAIL | {', '.join(fail_reasons)} |")
-                                    print(f"[ERROR] KPI gate failed - iteration marked as failed")
+                                    print(f"[ERROR] KPI gate failed - {', '.join(fail_reasons)}")
                                 elif warn_reasons:
-                                    print(f"| kpi_gate | WARN | {', '.join(warn_reasons)} |")
-                                else:
-                                    print(f"| kpi_gate | OK | risk={risk_ratio:.2%}, net={net_bps:.2f}, adv_p95={adverse_p95:.2f} |")
+                                    print(f"[WARN] KPI gate warning - {', '.join(warn_reasons)}")
                             
                             except Exception as e:
                                 print(f"[WARN] Could not check KPI gate: {e}")

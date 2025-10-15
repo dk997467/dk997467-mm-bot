@@ -244,10 +244,15 @@ def summarize_iteration(artifacts_dir: Path) -> Dict[str, Any]:
     block_reasons = totals.get("block_reasons") or {}
     risk_block_data = block_reasons.get("risk") or {}
     risk_ratio = risk_block_data.get("ratio", 0.0)  # Already a ratio (0.0-1.0 or 0-100)
+    risk_raw_count = risk_block_data.get("count", 0)  # Raw count for diagnostics
     
     # Normalize risk_ratio to 0.0-1.0 range if it's in percentage form
     if risk_ratio > 1.0:
         risk_ratio = risk_ratio / 100.0
+    
+    # DIAGNOSTIC: Print risk source info
+    total_blocks = sum((block_reasons.get(k) or {}).get("count", 0) for k in ["risk", "min_interval", "concurrency", "other"])
+    print(f"| iter_watch | RISK_SRC | risk={risk_ratio:.2%} raw={risk_raw_count} total_blocks={total_blocks} |")
     
     # Also get min_interval and concurrency ratios
     min_interval_ratio = (block_reasons.get("min_interval") or {}).get("ratio", 0.0)
@@ -374,21 +379,37 @@ def propose_micro_tuning(
     if risk_ratio >= 0.60:
         # ZONE 1: AGGRESSIVE throttling (risk_ratio >= 60%)
         # Target: быстро снизить risk через консервативные параметры
+        # FIX 2: Always generate deltas, even if capped (to avoid apply_skip)
         
         new_min_interval = min(current_min_interval + 5, 80)
-        if new_min_interval != current_min_interval:
-            deltas["min_interval_ms"] = new_min_interval - current_min_interval
+        delta_min_interval = new_min_interval - current_min_interval
+        if delta_min_interval != 0:
+            deltas["min_interval_ms"] = delta_min_interval
             reasons.append(f"AGGRESSIVE: risk={risk_ratio:.1%} >= 60% -> min_interval +5ms (cap 80)")
+        else:
+            # At cap - still record intent
+            deltas["min_interval_ms"] = 0.0  # Explicit zero to show we tried
+            reasons.append(f"AGGRESSIVE: risk={risk_ratio:.1%} >= 60% -> min_interval +5ms (CAPPED at 80)")
         
         new_impact = max(current_impact_cap - 0.01, 0.08)
-        if new_impact != current_impact_cap:
-            deltas["impact_cap_ratio"] = new_impact - current_impact_cap
+        delta_impact = new_impact - current_impact_cap
+        if delta_impact != 0:
+            deltas["impact_cap_ratio"] = delta_impact
             reasons.append(f"AGGRESSIVE: risk={risk_ratio:.1%} >= 60% -> impact_cap -0.01 (floor 0.08)")
+        else:
+            # At floor - still record intent
+            deltas["impact_cap_ratio"] = 0.0  # Explicit zero
+            reasons.append(f"AGGRESSIVE: risk={risk_ratio:.1%} >= 60% -> impact_cap -0.01 (FLOORED at 0.08)")
         
         new_tail = min(current_tail_age + 30, 800)
-        if new_tail != current_tail_age:
-            deltas["tail_age_ms"] = new_tail - current_tail_age
+        delta_tail = new_tail - current_tail_age
+        if delta_tail != 0:
+            deltas["tail_age_ms"] = delta_tail
             reasons.append(f"AGGRESSIVE: risk={risk_ratio:.1%} >= 60% -> tail_age +30ms (cap 800)")
+        else:
+            # At cap - still record intent
+            deltas["tail_age_ms"] = 0.0  # Explicit zero
+            reasons.append(f"AGGRESSIVE: risk={risk_ratio:.1%} >= 60% -> tail_age +30ms (CAPPED at 800)")
     
     elif risk_ratio >= 0.40:
         # ZONE 2: MODERATE throttling (40% <= risk_ratio < 60%)
