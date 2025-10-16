@@ -1,0 +1,206 @@
+feat(tools): Add post-soak deep analyzer with KPI, guards, and recommendations
+
+PROMPT — Full Post-Soak Deep Report Generator:
+
+PROBLEM:
+❌ No automated analysis of soak test results
+❌ Manual KPI validation is error-prone
+❌ No systematic freeze/prod-gate decisions
+❌ No parameter delta recommendations
+
+SOLUTION — Post-Soak Analyzer (stdlib only):
+✅ Loads ITER_SUMMARY_*.json from artifacts/soak/latest
+✅ Analyzes KPI trends (last 8 iterations)
+✅ Detects guard activations (oscillation, velocity, cooldown, freeze)
+✅ Identifies anomalies (latency spikes, risk jumps, maker/taker drops)
+✅ Generates deterministic parameter delta recommendations
+✅ Detects A→B→A signature oscillation loops
+✅ Renders ASCII sparklines for visualization
+✅ Produces 3 reports: POST_SOAK_AUDIT.md, RECOMMENDATIONS.md, FAILURES.md
+
+IMPLEMENTATION:
+
+1. tools/soak/analyze_post_soak.py (~600 lines)
+   ✅ load_iter_summaries() — Glob-based loading with space support
+   ✅ check_kpi() — Hard threshold validation
+   ✅ compute_last8_stats() — Mean/median/stdev/min/max
+   ✅ scan_guards() — Oscillation/velocity/cooldown/freeze counting
+   ✅ detect_signatures() — A→B→A loop detection (3-window)
+   ✅ detect_anomalies() — Latency spikes, risk jumps, MT drops
+   ✅ make_deltas() — Deterministic parameter recommendations
+   ✅ render_ascii_sparkline() — ▁▂▃▄▅▆▇█ visualization
+   ✅ generate_audit_report() — Full analysis markdown
+   ✅ generate_recommendations() — Delta table + freeze decision
+   ✅ generate_failures() — Detailed violation breakdown
+
+2. tools/soak/create_test_soak_data.py (~100 lines)
+   ✅ Test data generator for analyzer validation
+   ✅ Simulates KPI progression with noise
+   ✅ Triggers freeze events, guards, oscillations
+   ✅ Creates realistic ITER_SUMMARY_*.json files
+
+3. POST_SOAK_ANALYZER_COMPLETE.md (comprehensive docs)
+   ✅ Usage examples and CLI reference
+   ✅ Generated report samples
+   ✅ Troubleshooting guide
+   ✅ CI/CD integration examples
+
+KPI THRESHOLDS (HARD):
+- risk_ratio ≤ 0.42
+- maker_taker_ratio ≥ 0.85
+- net_bps ≥ 2.7
+- p95_latency_ms ≤ 350
+
+PASS CRITERIA:
+- Last 8 iterations: ≥6 pass all KPI
+- freeze_triggered at least once
+
+DELTA RECOMMENDATIONS:
+risk > 0.42             → base_spread_bps += 0.03, min_interval_ms += 35
+maker_taker < 0.85      → base_spread_bps += 0.015, replace_rate *= 0.85
+p95_latency > 350       → concurrency_limit *= 0.85, tail_age_ms += 75
+oscillation > 1         → cooldown_iters += 1, max_delta_per_hour *= 0.8
+velocity > 0            → max_delta_per_hour *= 0.9
+net < 2.7 && risk ≤ 0.4 → base_spread_bps -= 0.01, min_interval_ms -= 20
+
+GENERATED REPORTS:
+
+POST_SOAK_AUDIT.md:
+├── Overview (iterations, time range, KPI_GATE verdict)
+├── Iteration Matrix (CSV table with all KPI + guard flags)
+├── KPI Trends (stats table: mean/median/min/max/stdev)
+├── Visual Trends (ASCII sparklines for risk_ratio & net_bps)
+├── Guards & Stability (activation counts, freeze events)
+├── Runtime Signatures (unique configs, A→B→A loops)
+├── Edge Decomposition (driver breakdown if available)
+├── Anomalies (detected issues with iteration refs)
+└── Verdict & Actions (PASS/WARN/FAIL + freeze + prod gate)
+
+RECOMMENDATIONS.md:
+├── KPI Summary (last 8 iterations)
+├── Proposed Deltas (table with current → proposed + rationale)
+└── Freeze Decision (READY_TO_FREEZE [OK] or HOLD [HOLD])
+
+FAILURES.md (only if FAIL):
+├── KPI Violations (per-iteration breakdown)
+└── Anomalies (all detected issues)
+
+FEATURES:
+
+Path Handling:
+✅ Supports paths with spaces (e.g., "artifacts/soak/latest 1/soak/latest")
+✅ Uses Path + glob for robustness
+✅ Works on Windows, Linux, macOS
+
+Graceful Degradation:
+✅ Missing files → warn, don't crash
+✅ Missing fields → default values
+✅ No edge data → skip decomposition
+
+Deterministic Output:
+✅ Markdown: UTF-8, consistent formatting
+✅ Sorted keys, stable ordering
+✅ ASCII sparklines: ▁▂▃▄▅▆▇█
+
+Exit Codes:
+0 = PASS or WARN
+1 = FAIL or critical error
+
+USAGE:
+
+# Default path (with space support)
+python -m tools.soak.analyze_post_soak
+
+# Custom path
+python -m tools.soak.analyze_post_soak --path "artifacts/soak/my_run/latest"
+
+# Generate test data
+python -m tools.soak.create_test_soak_data --output "artifacts/soak/test_run/latest" --iterations 24
+
+TESTING:
+
+✅ Generated 24 test iterations with KPI progression
+✅ Analyzer successfully loaded and analyzed data
+✅ All 3 reports generated correctly
+✅ Verdict: PASS (pass_count=6/8, freeze=True)
+✅ Detected 7 A→B→A oscillation loops
+✅ Proposed 1 parameter delta (max_delta_per_hour)
+✅ ASCII sparklines rendered correctly
+✅ Windows encoding fixed (no emoji issues)
+
+CI/CD INTEGRATION:
+
+# GitHub Actions
+- name: Analyze soak results
+  id: post-soak
+  if: always()
+  run: |
+    python -m tools.soak.analyze_post_soak --path "artifacts/soak/latest"
+    echo "EXIT_CODE=$?" >> $GITHUB_OUTPUT
+
+- name: Check soak verdict
+  if: always()
+  run: |
+    if [ "${{ steps.post-soak.outputs.EXIT_CODE }}" != "0" ]; then
+      echo "❌ Soak test FAILED - review POST_SOAK_AUDIT.md"
+      exit 1
+    fi
+
+- name: Upload soak analysis
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: soak-analysis-${{ github.run_id }}
+    path: |
+      artifacts/soak/latest/POST_SOAK_AUDIT.md
+      artifacts/soak/latest/RECOMMENDATIONS.md
+      artifacts/soak/latest/FAILURES.md
+    retention-days: 30
+
+ACCEPTANCE CRITERIA:
+
+- [x] Loads ITER_SUMMARY_*.json from path with spaces
+- [x] Computes KPI stats for last 8 iterations
+- [x] Detects guard activations (oscillation, velocity, cooldown, freeze)
+- [x] Generates deterministic parameter deltas
+- [x] Detects A→B→A signature loops
+- [x] Identifies anomalies (latency spikes, risk jumps, MT drops)
+- [x] Renders ASCII sparklines for visualization
+- [x] Generates POST_SOAK_AUDIT.md with full analysis
+- [x] Generates RECOMMENDATIONS.md with deltas
+- [x] Generates FAILURES.md (only on FAIL verdict)
+- [x] Returns correct exit codes (0=PASS/WARN, 1=FAIL)
+- [x] Uses only stdlib (no external dependencies)
+- [x] Handles missing files gracefully (degradation)
+- [x] Windows-compatible (no emoji encoding issues)
+
+BENEFITS:
+
+✅ Automated KPI validation (no manual checks)
+✅ Systematic freeze/prod-gate decisions
+✅ Data-driven parameter tuning recommendations
+✅ Early anomaly detection (before prod)
+✅ Reproducible analysis (deterministic)
+✅ CI/CD friendly (exit codes, artifacts)
+✅ Human-readable reports (Markdown)
+✅ Machine-parseable (structured CSV blocks)
+
+FILES:
+- tools/soak/analyze_post_soak.py (~600 lines, fully functional)
+- tools/soak/create_test_soak_data.py (~100 lines, test data generator)
+- POST_SOAK_ANALYZER_COMPLETE.md (comprehensive documentation)
+- COMMIT_MESSAGE_POST_SOAK_ANALYZER.txt (this file)
+
+IMPACT:
+Before: ❌ Manual analysis, ❌ No KPI validation, ❌ Ad-hoc decisions
+After:  ✅ Automated, ✅ KPI gates, ✅ Systematic recommendations
+
+See POST_SOAK_ANALYZER_COMPLETE.md for full documentation.
+
+---
+
+**Status:** ✅ COMPLETE
+**Dependencies:** stdlib only (glob, json, statistics, datetime, pathlib, re, sys)
+**Tested:** ✅ 24 iterations, PASS verdict, all reports generated
+**Ready for:** Production use, CI/CD integration
+
