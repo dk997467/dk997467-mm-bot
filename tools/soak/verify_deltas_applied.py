@@ -3,10 +3,10 @@
 Delta-Apply Verifier Tool.
 
 Verifies that proposed parameter deltas were correctly applied between iterations.
-Checks for signature changes, guard activations, and parameter mismatches.
+Checks for signature changes, guard activations, skip reasons, and parameter mismatches.
 
 Usage:
-    python -m tools.soak.verify_deltas_applied [--path PATH] [--strict]
+    python -m tools.soak.verify_deltas_applied [--path PATH] [--strict] [--json]
 
 Exit codes:
     0 = >=90% full applications (or >=80% with 0 signature_stuck) [--strict: >=95%]
@@ -79,31 +79,52 @@ def _get_signature(data: Dict[str, Any]) -> str:
 
 def _get_runtime_params(data: Dict[str, Any]) -> Dict[str, float]:
     """Extract runtime parameters from iteration data."""
-    # Try multiple locations
-    # 1. Check tuning.deltas (actual applied deltas on this iteration)
-    tuning = data.get("tuning", {})
-    deltas = tuning.get("deltas", {})
-    if deltas:
+    try:
+        from tools.soak.params import get_all_params
+        
+        # 1. Check tuning.deltas (actual applied deltas on this iteration)
+        tuning = data.get("tuning", {})
+        deltas = tuning.get("deltas", {})
+        if deltas:
+            params = {}
+            for key, val in deltas.items():
+                if isinstance(val, (int, float)):
+                    params[key] = float(val)
+            return params
+        
+        # 2. Try runtime_overrides with params module
+        runtime = data.get("runtime_overrides", {})
+        if runtime:
+            return get_all_params(runtime)
+        
+        # 3. Fallback: try other locations
+        runtime = data.get("runtime", {})
+        if not runtime:
+            runtime = data.get("config", {})
+        
+        if runtime:
+            return get_all_params(runtime)
+        
+        return {}
+    
+    except ImportError:
+        # Fallback: manual extraction if params module not available
+        tuning = data.get("tuning", {})
+        deltas = tuning.get("deltas", {})
+        if deltas:
+            params = {}
+            for key, val in deltas.items():
+                if isinstance(val, (int, float)):
+                    params[key] = float(val)
+            return params
+        
+        runtime = data.get("runtime_overrides", data.get("runtime", {}))
         params = {}
-        for key, val in deltas.items():
+        for key, val in runtime.items():
             if isinstance(val, (int, float)):
                 params[key] = float(val)
+        
         return params
-    
-    # 2. Fallback: try runtime_overrides
-    runtime = data.get("runtime_overrides", {})
-    if not runtime:
-        runtime = data.get("runtime", {})
-    if not runtime:
-        runtime = data.get("config", {})
-    
-    # Extract numeric parameters
-    params = {}
-    for key, val in runtime.items():
-        if isinstance(val, (int, float)):
-            params[key] = float(val)
-    
-    return params
 
 
 def _compare_params(
@@ -229,13 +250,33 @@ def _analyze_iteration_pair(
     
     result["mismatches"] = mismatches
     
+    # Check skip_reason (if applied=false with explicit skip reason → partial_ok)
+    skip_reason = {}
+    if tuning_iter_prev:
+        skip_reason = tuning_iter_prev.get("skip_reason", {})
+    
+    # If not applied but has skip_reason → consider partial_ok
+    if not result["applied"] and skip_reason:
+        any_guard = (
+            skip_reason.get("cooldown") or
+            skip_reason.get("velocity") or
+            skip_reason.get("oscillation") or
+            skip_reason.get("freeze") or
+            skip_reason.get("no_op")
+        )
+        
+        if any_guard:
+            result["params_match"] = "partial_ok"
+            result["reason"] = f"skipped: {skip_reason.get('note', 'guard active')}"
+            return result
+    
     # Determine match status
     if all_match:
         result["params_match"] = "Y"
         result["reason"] = "full_apply"
     elif result["guard_reasons"]:
         # Guards active → partial application acceptable
-        result["params_match"] = "partial"
+        result["params_match"] = "partial_ok"
         result["reason"] = f"partial_apply_guards: {', '.join(result['guard_reasons'])}"
     else:
         result["params_match"] = "N"
@@ -279,13 +320,15 @@ def _generate_report(
     total = len(analyses)
     proposed_count = sum(1 for a in analyses if a["proposed_deltas"])
     full_apply = sum(1 for a in analyses if a["params_match"] == "Y")
-    partial_apply = sum(1 for a in analyses if a["params_match"] == "partial")
-    no_apply = sum(1 for a in analyses if a["params_match"] == "N")
+    partial_ok = sum(1 for a in analyses if a["params_match"] == "partial_ok")
+    fail = sum(1 for a in analyses if a["params_match"] == "N")
     signature_stuck = sum(1 for a in analyses if a["signature_stuck"])
     
-    full_apply_pct = (full_apply / proposed_count * 100) if proposed_count > 0 else 0
-    partial_apply_pct = (partial_apply / proposed_count * 100) if proposed_count > 0 else 0
-    no_apply_pct = (no_apply / proposed_count * 100) if proposed_count > 0 else 0
+    # Calculate ratio (full / total proposed)
+    full_apply_ratio = (full_apply / proposed_count) if proposed_count > 0 else 0
+    full_apply_pct = full_apply_ratio * 100
+    partial_ok_pct = (partial_ok / proposed_count * 100) if proposed_count > 0 else 0
+    fail_pct = (fail / proposed_count * 100) if proposed_count > 0 else 0
     
     lines.extend([
         "",
@@ -294,9 +337,10 @@ def _generate_report(
         f"- **Total iteration pairs:** {total}",
         f"- **Pairs with proposed deltas:** {proposed_count}",
         f"- **Full applications:** {full_apply} ({full_apply_pct:.1f}%)",
-        f"- **Partial applications:** {partial_apply} ({partial_apply_pct:.1f}%)",
-        f"- **Failed applications:** {no_apply} ({no_apply_pct:.1f}%)",
+        f"- **Partial OK (skipped with reason):** {partial_ok} ({partial_ok_pct:.1f}%)",
+        f"- **Failed applications:** {fail} ({fail_pct:.1f}%)",
         f"- **Signature stuck events:** {signature_stuck}",
+        f"- **Full apply ratio:** {full_apply_ratio:.3f}",
         "",
     ])
     
@@ -371,12 +415,12 @@ def _generate_report(
         f.write("\n".join(lines))
 
 
-def verify_deltas(base_path: Path, strict: bool = False) -> int:
+def verify_deltas(base_path: Path, strict: bool = False) -> Tuple[int, Dict[str, Any]]:
     """
     Verify delta applications.
     
     Returns:
-        0 if verification passes, 1 otherwise
+        (exit_code, metrics_dict)
     """
     # Load data
     tuning_report = _load_tuning_report(base_path)
@@ -431,18 +475,41 @@ def verify_deltas(base_path: Path, strict: bool = False) -> int:
     proposed_count = sum(1 for a in analyses if a["proposed_deltas"])
     if proposed_count == 0:
         print("[WARN] No deltas proposed in any iteration", file=sys.stderr)
-        return 0  # Nothing to verify
+        metrics = {
+            "full_apply_ratio": 0.0,
+            "full_apply_count": 0,
+            "partial_ok_count": 0,
+            "fail_count": 0,
+            "signature_stuck_count": 0,
+            "proposed_count": 0,
+        }
+        return 0, metrics  # Nothing to verify
     
     full_apply = sum(1 for a in analyses if a["params_match"] == "Y")
+    partial_ok = sum(1 for a in analyses if a["params_match"] == "partial_ok")
+    fail = sum(1 for a in analyses if a["params_match"] == "N")
     signature_stuck = sum(1 for a in analyses if a["signature_stuck"])
     
-    full_apply_pct = (full_apply / proposed_count * 100)
+    full_apply_ratio = full_apply / proposed_count
+    full_apply_pct = full_apply_ratio * 100
+    
+    # Metrics dict for JSON output
+    metrics = {
+        "full_apply_ratio": round(full_apply_ratio, 3),
+        "full_apply_count": full_apply,
+        "partial_ok_count": partial_ok,
+        "fail_count": fail,
+        "signature_stuck_count": signature_stuck,
+        "proposed_count": proposed_count,
+    }
     
     # Determine threshold
     threshold = 95.0 if strict else 90.0
     
     print(f"\nVerification Summary:", file=sys.stderr)
     print(f"  Full applications: {full_apply}/{proposed_count} ({full_apply_pct:.1f}%)", file=sys.stderr)
+    print(f"  Partial OK: {partial_ok}", file=sys.stderr)
+    print(f"  Failed: {fail}", file=sys.stderr)
     print(f"  Signature stuck: {signature_stuck}", file=sys.stderr)
     print(f"  Threshold: >={threshold}%", file=sys.stderr)
     
@@ -450,17 +517,17 @@ def verify_deltas(base_path: Path, strict: bool = False) -> int:
     if strict:
         if full_apply_pct >= threshold:
             print(f"\n✅ PASS (strict mode: >={threshold}%)", file=sys.stderr)
-            return 0
+            return 0, metrics
         else:
             print(f"\n❌ FAIL (strict mode: <{threshold}%)", file=sys.stderr)
-            return 1
+            return 1, metrics
     else:
         if full_apply_pct >= threshold or (full_apply_pct >= 80 and signature_stuck == 0):
             print(f"\n✅ PASS", file=sys.stderr)
-            return 0
+            return 0, metrics
         else:
             print(f"\n❌ FAIL", file=sys.stderr)
-            return 1
+            return 1, metrics
 
 
 def main():
@@ -481,6 +548,11 @@ def main():
         action="store_true",
         help="Use strict threshold (>=95%% instead of >=90%%)",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output metrics as JSON to stdout (for CI/CD integration)",
+    )
     
     args = parser.parse_args()
     
@@ -490,7 +562,12 @@ def main():
         print(f"[ERROR] Path does not exist: {base_path}", file=sys.stderr)
         sys.exit(1)
     
-    exit_code = verify_deltas(base_path, strict=args.strict)
+    exit_code, metrics = verify_deltas(base_path, strict=args.strict)
+    
+    # Output JSON if requested
+    if args.json:
+        print(json.dumps(metrics, indent=2))
+    
     sys.exit(exit_code)
 
 
