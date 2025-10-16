@@ -1,0 +1,75 @@
+feat(soak): Add core infrastructure for reliability maximization (Phase 1/4)
+
+Implement foundational tools for achieving ≥95% delta application rate.
+
+NEW MODULES:
+
+1. tools/soak/params.py (~170 lines)
+   - Unified parameter mapping (flat key → nested path)
+   - get_from_runtime(runtime, key) - Get parameter value
+   - set_in_runtime(runtime, key, value) - Set parameter value  
+   - apply_deltas(runtime, deltas) - Apply all deltas at once
+   - get_all_params(runtime) - Extract all as flat dict
+   - validate_deltas(deltas) - Check for unknown parameters
+   
+   Parameter coverage:
+   - Risk: base_spread_bps, impact_cap_ratio, max_delta_ratio
+   - Engine: replace_rate_per_min, concurrency_limit, tail_age_ms, min_interval_ms
+   - Tuner: cooldown_iters, velocity_cap, oscillation_window
+
+2. tools/common/jsonx.py (updated, +110 lines)
+   - atomic_write_json(path, obj) → (state_hash, size)
+     * Deterministic serialization (sorted keys, no whitespace)
+     * Atomic write (tmp + fsync + rename)
+     * SHA256 state hash computation
+   
+   - read_json_with_hash(path) → (data, state_hash)
+     * Read + hash in one call
+     * Verify file integrity
+
+FEATURES:
+✅ Consistent parameter access across nested structures
+✅ Atomic file writes with crash safety
+✅ Deterministic state hashing (SHA256)
+✅ Stdlib-only implementation
+✅ Full error handling and cleanup
+
+TESTING:
+$ python tools/soak/params.py
+  Original runtime: {'risk': {'base_spread_bps': 0.2}}
+  After apply_deltas: {'risk': {'base_spread_bps': 0.25}, 'engine': {'tail_age_ms': 500}}
+  All params (flat): {'base_spread_bps': 0.25, 'concurrency_limit': 10, 'tail_age_ms': 500}
+  ✅ All checks passed
+
+$ python -c "from tools.common.jsonx import atomic_write_json..."
+  Write: hash=0797a3fe..., size=33
+  Read: hash=0797a3fe..., verified=True
+  ✅ Atomic write verified
+
+DOCUMENTATION:
+- SOAK_RELIABILITY_IMPLEMENTATION.md (comprehensive guide)
+  * Implementation phases (1-4)
+  * Component status tracking
+  * Acceptance criteria  
+  * Quick test commands
+
+NEXT PHASES:
+Phase 2: Apply pipeline with skip reasons and state hash tracking
+Phase 3: Verification updates and Prometheus metrics
+Phase 4: Tests and CI integration
+
+OBJECTIVE:
+≥95% full delta applications in mock mode with:
+- Deterministic parameter apply
+- Signature tracking
+- Explicit skip reasons
+- Guards and metrics
+- Strict CI gates
+
+FILES:
+- tools/soak/params.py (new, ~170 lines)
+- tools/common/jsonx.py (updated, +110 lines)
+- SOAK_RELIABILITY_IMPLEMENTATION.md (new, documentation)
+
+Status: Phase 1/4 ✅ COMPLETE
+

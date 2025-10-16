@@ -152,6 +152,118 @@ def compute_json_hash(obj: Any) -> str:
     return hashlib.sha256(canonical.encode("ascii")).hexdigest()
 
 
+def atomic_write_json(path: Path | str, obj: Any) -> tuple[str, int]:
+    """
+    Write JSON atomically with state hash computation.
+    
+    This function ensures:
+    1. Deterministic serialization (sorted keys, no whitespace)
+    2. Atomic file write (tmp file + fsync + rename)
+    3. State hash computation (SHA256 of serialized data)
+    
+    Args:
+        path: Output file path
+        obj: Object to serialize
+    
+    Returns:
+        (state_hash: str, size_bytes: int)
+    
+    Example:
+        >>> state_hash, size = atomic_write_json("runtime.json", {"param": 0.5})
+        >>> print(f"Hash: {state_hash}, Size: {size}")
+        Hash: abc123..., Size: 14
+    
+    Raises:
+        ValueError: If obj contains NaN or Infinity
+        IOError: If write fails
+    """
+    import hashlib
+    
+    path = Path(path)
+    
+    # Serialize deterministically (compact format for hash stability)
+    json_bytes = json.dumps(
+        obj,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False
+    ).encode("ascii")
+    
+    # Ensure parent directory exists
+    path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Write to temporary file
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(json_bytes)
+            f.flush()
+            # Ensure data is written to disk (crash safety)
+            os.fsync(f.fileno())
+        
+        # Atomic rename (overwrites destination)
+        os.replace(tmp_path, path)
+        
+        # Compute state hash
+        state_hash = hashlib.sha256(json_bytes).hexdigest()
+        
+        return state_hash, len(json_bytes)
+    
+    except ValueError as e:
+        # Clean up and re-raise
+        if tmp_path.exists():
+            tmp_path.unlink()
+        if "Out of range float values are not JSON compliant" in str(e):
+            raise ValueError(f"Cannot serialize {path}: contains NaN or Infinity") from e
+        raise
+    
+    except Exception:
+        # Clean up and re-raise
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+        raise
+
+
+def read_json_with_hash(path: Path | str) -> tuple[Any, str]:
+    """
+    Read JSON file and compute its state hash.
+    
+    Args:
+        path: Input file path
+    
+    Returns:
+        (data: Any, state_hash: str)
+    
+    Raises:
+        FileNotFoundError: If file doesn't exist
+        json.JSONDecodeError: If file is not valid JSON
+    
+    Example:
+        >>> data, hash_val = read_json_with_hash("runtime.json")
+        >>> print(f"Hash: {hash_val}")
+        Hash: abc123...
+    """
+    import hashlib
+    
+    path = Path(path)
+    
+    with open(path, "rb") as f:
+        json_bytes = f.read()
+    
+    # Compute hash of raw bytes
+    state_hash = hashlib.sha256(json_bytes).hexdigest()
+    
+    # Parse JSON
+    data = json.loads(json_bytes.decode("utf-8"))
+    
+    return data, state_hash
+
+
 def diff_json(old: Any, new: Any) -> Dict[str, Any]:
     """
     Compute diff between two JSON objects.
