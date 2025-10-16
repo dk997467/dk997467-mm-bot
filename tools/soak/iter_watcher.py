@@ -55,14 +55,15 @@ def ensure_maker_taker_ratio(summary: Dict[str, Any], context: Optional[Dict[str
     Ensure maker_taker_ratio is present in summary with a reasonable value.
     
     Priority order:
-    1. From weekly rollup (if available in context)
-    2. From internal metrics (maker_fills / taker_fills)
-    3. Mock mode: safe default 0.9
-    4. General default: 0.6
+    1. From fills data (actual maker/taker counts from EDGE_REPORT)
+    2. From weekly rollup (if available in context)
+    3. From internal metrics (maker_fills / taker_fills)
+    4. Mock mode: safe default 0.9
+    5. General default: 0.6
     
     Args:
         summary: Iteration summary dict (modified in-place)
-        context: Optional context with weekly_rollup or other data
+        context: Optional context with weekly_rollup or fills data
     """
     if context is None:
         context = {}
@@ -70,32 +71,62 @@ def ensure_maker_taker_ratio(summary: Dict[str, Any], context: Optional[Dict[str
     # Skip if already set to a reasonable value
     existing = summary.get("maker_taker_ratio")
     if existing is not None and 0.0 <= existing <= 1.0 and existing > 0.05:
-        return  # Already has valid value
+        # Already has valid value, but check if we should set source
+        if "maker_taker_source" not in summary:
+            summary["maker_taker_source"] = "existing"
+        return
     
-    # 1) Try from weekly rollup structure
+    # 1) PRIORITY 1: Try from fills data (actual execution data)
+    fills = context.get("fills") or summary.get("fills") or {}
+    maker_count = fills.get("maker_count") or fills.get("maker_fills")
+    taker_count = fills.get("taker_count") or fills.get("taker_fills")
+    maker_volume = fills.get("maker_volume")
+    taker_volume = fills.get("taker_volume")
+    
+    # Try volume-based first (more accurate)
+    if isinstance(maker_volume, (int, float)) and isinstance(taker_volume, (int, float)):
+        total_volume = float(maker_volume) + float(taker_volume)
+        if total_volume > 0:
+            summary["maker_taker_ratio"] = float(maker_volume) / total_volume
+            summary["maker_taker_source"] = "fills_volume"
+            return
+    
+    # Try count-based
+    if isinstance(maker_count, (int, float)) and isinstance(taker_count, (int, float)):
+        total_count = float(maker_count) + float(taker_count)
+        if total_count > 0:
+            summary["maker_taker_ratio"] = float(maker_count) / total_count
+            summary["maker_taker_source"] = "fills_count"
+            return
+    
+    # 2) Try from weekly rollup structure
     wk = context.get("weekly_rollup") or {}
     taker_pct = (wk.get("taker_share_pct") or {}).get("median")
     if taker_pct is not None:
         ratio = max(0.0, min(1.0, 1.0 - float(taker_pct) / 100.0))
         summary["maker_taker_ratio"] = ratio
+        summary["maker_taker_source"] = "weekly_rollup"
         return
     
-    # 2) Try from internal fill counters
+    # 3) Try from internal fill counters (legacy)
     maker_fills = summary.get("maker_fills")
     taker_fills = summary.get("taker_fills")
     if isinstance(maker_fills, (int, float)) and isinstance(taker_fills, (int, float)):
         total_fills = float(maker_fills) + float(taker_fills)
         if total_fills > 0:
             summary["maker_taker_ratio"] = float(maker_fills) / total_fills
+            summary["maker_taker_source"] = "internal_fills"
             return
     
-    # 3) Mock mode - safe default for smoke tests
+    # 4) Mock mode - safe default for smoke tests
     if os.getenv("USE_MOCK") == "1":
         summary["maker_taker_ratio"] = 0.9
+        summary["maker_taker_source"] = "mock_default"
         return
     
-    # 4) General default (to avoid sanity check failures)
+    # 5) General fallback (to avoid sanity check failures)
     summary.setdefault("maker_taker_ratio", 0.6)
+    summary.setdefault("maker_taker_source", "fallback")
 
 
 # ==============================================================================
@@ -655,6 +686,74 @@ def propose_micro_tuning(
         if new_impact != current_impact_cap:
             deltas["impact_cap_ratio"] = new_impact - current_impact_cap
             reasons.append(f"NORMALIZE: risk={risk_ratio:.1%} < 35% + net_bps={net_bps:.2f} >= 3.0 -> impact_cap +0.005 (cap 0.10)")
+    
+    # ==========================================================================
+    # NEW PROMPT: MAKER/TAKER OPTIMIZATION (risk ≤ 0.40, low maker/taker)
+    # ==========================================================================
+    
+    maker_taker_ratio = summary.get("maker_taker_ratio", 0.6)
+    current_base_spread = current_overrides.get("base_spread_bps", 0.12)
+    current_replace_rate = current_overrides.get("replace_rate_per_min", 6.0)
+    
+    if risk_ratio <= 0.40 and maker_taker_ratio < 0.85 and net_bps >= 2.7:
+        # Shift to maker-friendly behavior
+        # Goal: increase maker/taker to ≥0.85 while maintaining risk ≤ 0.42, net_bps ≥ 2.7
+        
+        # 1. Widen spread slightly (more passive)
+        new_spread = min(current_base_spread + 0.015, current_base_spread * 1.5)
+        if new_spread != current_base_spread and "base_spread_bps" not in deltas:
+            deltas["base_spread_bps"] = new_spread - current_base_spread
+            reasons.append(f"MAKER_BOOST: maker/taker={maker_taker_ratio:.2f} < 0.85 -> base_spread +0.015")
+        
+        # 2. Reduce replacement rate (more patience)
+        new_replace_rate = max(current_replace_rate * 0.85, current_replace_rate * 0.5)
+        if new_replace_rate != current_replace_rate and "replace_rate_per_min" not in deltas:
+            deltas["replace_rate_per_min"] = new_replace_rate - current_replace_rate
+            reasons.append(f"MAKER_BOOST: maker/taker={maker_taker_ratio:.2f} < 0.85 -> replace_rate *0.85")
+        
+        # 3. Increase min_interval (less frequent updates)
+        new_min_interval = min(current_min_interval + 25, current_min_interval * 2, 100)
+        if new_min_interval != current_min_interval and "min_interval_ms" not in deltas:
+            deltas["min_interval_ms"] = new_min_interval - current_min_interval
+            reasons.append(f"MAKER_BOOST: maker/taker={maker_taker_ratio:.2f} < 0.85 -> min_interval +25ms")
+        
+        print(f"| iter_watch | MAKER_BOOST | ratio={maker_taker_ratio:.2%} target=0.85 deltas={len([k for k in deltas if k in ['base_spread_bps', 'replace_rate_per_min', 'min_interval_ms']])} |")
+    
+    # ==========================================================================
+    # NEW PROMPT: LATENCY BUFFER (target ≤330-340ms, max 350ms)
+    # ==========================================================================
+    
+    p95_latency_ms = summary.get("p95_latency_ms", 0.0)
+    current_concurrency = current_overrides.get("concurrency_limit", 10)
+    
+    if p95_latency_ms > 0:
+        if 330 <= p95_latency_ms <= 360:
+            # Soft buffer zone: mild anti-latency deltas
+            new_concurrency = max(int(current_concurrency * 0.90), 1)
+            if new_concurrency != current_concurrency and "concurrency_limit" not in deltas:
+                deltas["concurrency_limit"] = new_concurrency - current_concurrency
+                reasons.append(f"LATENCY_BUFFER: p95={p95_latency_ms:.0f}ms [330,360] -> concurrency *0.90")
+            
+            new_tail = min(current_tail_age + 50, 800)
+            if new_tail != current_tail_age and "tail_age_ms" not in deltas:
+                deltas["tail_age_ms"] = new_tail - current_tail_age
+                reasons.append(f"LATENCY_BUFFER: p95={p95_latency_ms:.0f}ms [330,360] -> tail_age +50ms")
+            
+            print(f"| iter_watch | LATENCY_BUFFER | p95={p95_latency_ms:.0f}ms target=<340ms action=soft |")
+        
+        elif p95_latency_ms > 360:
+            # Hard zone: stronger anti-latency deltas
+            new_concurrency = max(int(current_concurrency * 0.85), 1)
+            if new_concurrency != current_concurrency and "concurrency_limit" not in deltas:
+                deltas["concurrency_limit"] = new_concurrency - current_concurrency
+                reasons.append(f"LATENCY_HARD: p95={p95_latency_ms:.0f}ms > 360 -> concurrency *0.85")
+            
+            new_tail = min(current_tail_age + 75, 800)
+            if new_tail != current_tail_age and "tail_age_ms" not in deltas:
+                deltas["tail_age_ms"] = new_tail - current_tail_age
+                reasons.append(f"LATENCY_HARD: p95={p95_latency_ms:.0f}ms > 360 -> tail_age +75ms")
+            
+            print(f"| iter_watch | LATENCY_HARD | p95={p95_latency_ms:.0f}ms >> 360ms action=aggressive |")
     
     # ==========================================================================
     # PROMPT 3: PRIORITY 2 - DRIVER-AWARE TUNING (adverse/slippage drivers)
