@@ -1,8 +1,49 @@
 import os, sys, io, builtins, asyncio
 from pathlib import Path
 import pytest
+import platform
 
 import socket as _socket
+
+# ============================================================================
+# CRITICAL FIX: Windows asyncio event loop policy
+# ============================================================================
+# On Windows, ProactorEventLoop has issues with socket pairs used by pytest.
+# Use SelectorEventLoop instead for test stability.
+# ============================================================================
+if platform.system() == "Windows":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
+@pytest.fixture(scope="session")
+def event_loop_policy():
+    """
+    Set event loop policy for Windows compatibility.
+    
+    Windows ProactorEventLoop has socket pair issues with pytest-asyncio.
+    Use SelectorEventLoop instead.
+    """
+    if platform.system() == "Windows":
+        return asyncio.WindowsSelectorEventLoopPolicy()
+    return asyncio.get_event_loop_policy()
+
+
+@pytest.fixture
+async def cleanup_tasks():
+    """
+    Cleanup fixture to ensure all tasks are cancelled at test end.
+    
+    Prevents "unclosed event loop" warnings on Windows.
+    """
+    yield
+    # Cancel all pending tasks
+    tasks = [t for t in asyncio.all_tasks() if not t.done()]
+    for task in tasks:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 # ============================================================================
 # CRITICAL FIX #1: Establish project root for fixture/golden file resolution
@@ -130,16 +171,36 @@ def pytest_configure(config):
 
 @pytest.fixture(autouse=True)
 def _deny_network_calls(monkeypatch):
-    def _deny_connect(*args, **kwargs):
+    original_connect = _socket.socket.connect
+    original_create_connection = _socket.create_connection
+    
+    def _selective_deny_connect(self, *args, **kwargs):
+        # Allow localhost/127.0.0.1 connections for asyncio event loop
+        if args and len(args) > 0:
+            addr = args[0]
+            if isinstance(addr, tuple) and len(addr) >= 1:
+                host = addr[0]
+                # Allow localhost connections
+                if host in ('127.0.0.1', 'localhost', '::1'):
+                    return original_connect(self, *args, **kwargs)
         raise RuntimeError("Network disabled in tests")
-    def _deny_create_connection(*args, **kwargs):
+    
+    def _selective_deny_create_connection(*args, **kwargs):
+        # Allow localhost connections for asyncio
+        if args and len(args) > 0:
+            addr = args[0]
+            if isinstance(addr, tuple) and len(addr) >= 1:
+                host = addr[0]
+                if host in ('127.0.0.1', 'localhost', '::1'):
+                    return original_create_connection(*args, **kwargs)
         raise RuntimeError("Network disabled in tests")
+    
     try:
-        monkeypatch.setattr(_socket.socket, "connect", _deny_connect, raising=True)
+        monkeypatch.setattr(_socket.socket, "connect", _selective_deny_connect, raising=True)
     except Exception:
         pass
     try:
-        monkeypatch.setattr(_socket, "create_connection", _deny_create_connection, raising=True)
+        monkeypatch.setattr(_socket, "create_connection", _selective_deny_create_connection, raising=True)
     except Exception:
         pass
     yield

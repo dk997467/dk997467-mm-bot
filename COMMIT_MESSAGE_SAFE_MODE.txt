@@ -1,0 +1,89 @@
+fix(ci): FULL_STACK safe-mode — skip tests_whitelist w/o secrets; run pre_live_pack as module w/ PYTHONPATH
+
+Проблема:
+- В mini-soak FULL_STACK падал при отсутствии секретов (STORAGE_PG_PASSWORD, etc.)
+- tests_whitelist требовал реальные креденшелы для запуска
+- pre_live_pack запускался как скрипт → ошибка импорта из src/
+
+Решение A (validate_stack.py):
+1. Расширен extract_tests_section():
+   - Добавлен параметр allow_missing_secrets
+   - Проверка secrets через check_secrets_available()
+   - Возврат ok=True, details="SKIPPED_NO_SECRETS" если секреты отсутствуют
+
+2. Обновлён aggregate_stack_summary():
+   - Добавлен параметр allow_missing_secrets
+   - Передаётся в extract_tests_section()
+
+3. Маркер уже присутствовал:
+   - | full_stack | OK | STACK=GREEN |
+
+Решение B (full_stack_validate.py):
+1. Добавлен argparse с флагами:
+   - --allow-missing-secrets
+   - --allow-missing-sections
+
+2. Настройка PYTHONPATH в main():
+   - Добавляет ROOT_DIR и ROOT_DIR/src
+   - Сохраняет существующий PYTHONPATH
+   - Логирует для отладки
+
+3. Обновлён run_tests_whitelist():
+   - Проверка MM_ALLOW_MISSING_SECRETS env var
+   - Создание пустых логов для консистентности
+   - Возврат SKIPPED_NO_SECRETS
+
+4. Обновлён run_dry_runs():
+   - Проверка секретов перед запуском
+   - Модульный запуск: python -m tools.release.pre_live_pack --dry-run
+   - Было: прямой вызов скрипта (ошибка импорта)
+
+5. Добавлен вызов validate_stack.py в конце:
+   - Генерация unified stack summary
+   - Пробрасывание флагов
+   - Вывод маркера
+
+Решение C (тестирование):
+Создан tests/e2e/test_validate_stack_safe_mode.py:
+- test_validate_stack_safe_mode(): проверка validate_stack
+- test_full_stack_validate_safe_mode(): проверка full_stack_validate
+- Верификация exit code = 0
+- Верификация tests_whitelist.details = "SKIPPED_NO_SECRETS"
+- Верификация маркера | full_stack | OK | STACK=GREEN |
+
+Критерии приёмки (выполнены):
+✅ FULL_STACK в safe-режиме завершается с кодом 0
+✅ tests_whitelist → ok=true, details="SKIPPED_NO_SECRETS"
+✅ pre_live_pack не падает по импорту (модульный запуск + PYTHONPATH)
+✅ Маркер | full_stack | OK | STACK=GREEN | присутствует
+
+Тестирование (результаты):
+✅ Автоматизированный тест прошёл успешно:
+   python tests/e2e/test_validate_stack_safe_mode.py
+   
+✅ Ручное тестирование:
+   MM_ALLOW_MISSING_SECRETS=1 PYTHONPATH="$PWD:$PWD/src" \
+   python -m tools.ci.validate_stack --emit-stack-summary --allow-missing-secrets
+   
+   Exit code: 0
+   Output: {"sections":[...{"details":"SKIPPED_NO_SECRETS","name":"tests_whitelist","ok":true}...]}
+   Marker: | full_stack | OK | STACK=GREEN |
+
+Файлы:
+- tools/ci/validate_stack.py (изменён) — проверка секретов в tests_whitelist
+- tools/ci/full_stack_validate.py (изменён) — argparse + PYTHONPATH + модульный запуск
+- tests/e2e/test_validate_stack_safe_mode.py (новый) — автоматизированный тест
+- SAFE_MODE_FULL_STACK_IMPLEMENTATION.md (новый) — детальная документация
+
+Использование:
+# Windows PowerShell
+$env:MM_ALLOW_MISSING_SECRETS="1"
+$env:PYTHONPATH="$PWD;$PWD\src"
+python -m tools.ci.full_stack_validate --allow-missing-secrets
+
+# Linux/macOS
+MM_ALLOW_MISSING_SECRETS=1 PYTHONPATH="$PWD:$PWD/src" \
+python -m tools.ci.full_stack_validate --allow-missing-secrets
+
+Ожидается: код выхода 0, tests_whitelist → SKIPPED_NO_SECRETS, маркер STACK=GREEN
+

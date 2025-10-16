@@ -14,12 +14,97 @@ at project root. This prevents memory leaks from metric accumulation.
 import asyncio
 import pytest
 import time
+import signal
 from unittest.mock import Mock, AsyncMock
 from typing import Dict, Tuple, Optional, Any
+from contextlib import contextmanager
 
 from src.common.config import AppConfig, StrategyConfig, LimitsConfig, TradingConfig
 from src.common.di import AppContext
 from src.metrics.exporter import Metrics
+
+
+# ==============================================================================
+# PYTEST CONFIGURATION & CUSTOM MARKERS
+# ==============================================================================
+
+def pytest_configure(config):
+    """Register custom markers to avoid 'unknown marker' warnings."""
+    config.addinivalue_line("markers", "timeout(duration): per-test timeout in seconds")
+    config.addinivalue_line("markers", "smoke: Fast validation suite (<2 minutes)")
+    config.addinivalue_line("markers", "e2e: End-to-end integration tests")
+    config.addinivalue_line("markers", "tuning: Tuning/guards behavior tests")
+    config.addinivalue_line("markers", "integration: Integration tests with full stack")
+
+
+@contextmanager
+def _alarm_timeout(seconds: int):
+    """
+    POSIX-only hard timeout using SIGALRM. No-op on non-POSIX systems.
+    
+    Args:
+        seconds: Timeout duration in seconds
+    
+    Raises:
+        TimeoutError: If test exceeds timeout
+    """
+    if seconds <= 0:
+        yield
+        return
+    
+    if hasattr(signal, "SIGALRM"):
+        def _handler(signum, frame):
+            raise TimeoutError(f"Test exceeded timeout of {seconds}s")
+        
+        old_handler = signal.getsignal(signal.SIGALRM)
+        signal.signal(signal.SIGALRM, _handler)
+        signal.alarm(int(seconds))
+        try:
+            yield
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+    else:
+        # Windows/non-POSIX: best-effort no-op
+        # Could be extended with thread-based timeout if needed
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _apply_timeout_marker(request):
+    """
+    Automatically apply @pytest.mark.timeout(N) to tests.
+    
+    Works on Linux/POSIX (SIGALRM). On platforms without SIGALRM (Windows), it's a no-op.
+    
+    Usage:
+        @pytest.mark.timeout(60)
+        def test_something():
+            ...
+        
+        @pytest.mark.timeout(seconds=120)
+        def test_slow():
+            ...
+    """
+    mark = request.node.get_closest_marker("timeout")
+    if not mark:
+        yield
+        return
+    
+    # Support forms: @pytest.mark.timeout(60) or @pytest.mark.timeout(seconds=60)
+    seconds = 0
+    if mark.args:
+        seconds = int(mark.args[0])
+    else:
+        seconds = int(mark.kwargs.get("seconds", 0))
+    
+    with _alarm_timeout(seconds):
+        yield
+
+
+# ==============================================================================
+# TEST FIXTURES
+# ==============================================================================
 
 
 @pytest.fixture

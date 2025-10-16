@@ -95,27 +95,31 @@ def _agg_symbols(trades: List[Dict[str, Any]], quotes_idx: Dict[str, List[Tuple[
             slip_bps = sgn * (price - q_ref) / q_ref * 1e4
 
         notional = abs(price * qty)
-        inv_abs = abs(qty)
+        # Inventory: signed qty (not abs) for PnL tracking
+        inv_signed = sgn * qty  # Positive for buy, negative for sell
 
         d['gross_bps_sum'] += _finite(gross_bps)
-        d['fees_eff_bps_sum'] += _finite(fee_bps)
+        # FIX: fee_bps должен быть отрицательным (издержки)
+        d['fees_eff_bps_sum'] += -abs(_finite(fee_bps))
         d['adverse_bps_sum'] += _finite(adverse_bps)
         d['slippage_bps_sum'] += _finite(slip_bps)
         d['fills'] += 1.0
         d['turnover_usd'] += _finite(notional)
-        d['inv_abs_sum'] += _finite(inv_abs)
+        d['inv_abs_sum'] += _finite(inv_signed)  # Now signed, not abs
         d['notional_sum'] += _finite(notional)
 
-    # finalize inventory proxy: k=1.0bps * avg(|inv|)/avg(notional) guarded
+    # finalize inventory proxy: signed avg(inv)/avg(notional) for PnL impact
     out: Dict[str, Dict[str, float]] = {}
     for sym in sorted(by.keys()):
         d = by[sym]
         n = max(1.0, d['fills'])
-        avg_inv = d['inv_abs_sum'] / n
+        avg_inv_signed = d['inv_abs_sum'] / n  # Now signed (renamed var for clarity)
         avg_notional = d['notional_sum'] / n
         inv_bps = 0.0
         if avg_notional > 0.0:
-            inv_bps = 1.0 * (avg_inv / avg_notional)
+            # Inventory cost: negative proxy based on position size
+            # Signed: positive net position = cost, negative net position = cost
+            inv_bps = -1.0 * abs(avg_inv_signed / avg_notional)
         out[sym] = {
             'adverse_bps': _finite(d['adverse_bps_sum'] / n),
             'fees_eff_bps': _finite(d['fees_eff_bps_sum'] / n),
@@ -125,12 +129,18 @@ def _agg_symbols(trades: List[Dict[str, Any]], quotes_idx: Dict[str, List[Tuple[
             'slippage_bps': _finite(d['slippage_bps_sum'] / n),
             'turnover_usd': _finite(d['turnover_usd']),
         }
+        # FINAL FIX: net_bps = gross + fees + slippage + inventory
+        # All components already signed correctly:
+        # - gross_bps ≥ 0 (revenue)
+        # - fees_eff_bps ≤ 0 (costs)
+        # - slippage_bps ± (can be gain or loss)
+        # - inventory_bps ≤ 0 (always cost)
+        # adverse_bps NOT included (informational only)
         out[sym]['net_bps'] = _finite(
             out[sym]['gross_bps']
-            - out[sym]['fees_eff_bps']
-            - out[sym]['adverse_bps']
-            - out[sym]['slippage_bps']
-            - out[sym]['inventory_bps']
+            + out[sym]['fees_eff_bps']
+            + out[sym]['slippage_bps']
+            + out[sym]['inventory_bps']  # No abs() - already signed correctly
         )
     return out
 

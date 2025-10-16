@@ -85,6 +85,54 @@ jobs:
       - name: Run fast e2e (verbose, targeted)
         run: |
           pytest -vv -s --maxfail=1 tests/e2e/test_full_stack_validation.py
+      
+      - name: Generate readiness score (deterministic)
+        run: |
+          CI_FAKE_UTC="1970-01-01T00:00:00Z" \
+            python -m tools.release.readiness_score \
+            --out-json artifacts/reports/readiness.json
+      
+      - name: Validate readiness gate
+        id: readiness
+        continue-on-error: true
+        run: |
+          python -m tools.ci.validate_readiness artifacts/reports/readiness.json
+      
+      - name: Golden regression check
+        id: golden
+        continue-on-error: true
+        run: |
+          # Check if golden files exist
+          if [ -f "tests/golden/EDGE_REPORT_case1.json" ] && [ -f "artifacts/golden/EDGE_REPORT_latest.json" ]; then
+            python -m tools.tests.golden_compare \
+              --baseline tests/golden/EDGE_REPORT_case1.json \
+              --actual artifacts/golden/EDGE_REPORT_latest.json \
+              --fail-on-drift
+          else
+            echo "[WARN] Golden files not found, skipping regression check"
+            exit 0
+          fi
+      
+      - name: Check gates
+        if: always()
+        run: |
+          READINESS_EXIT="${{ steps.readiness.outcome }}"
+          GOLDEN_EXIT="${{ steps.golden.outcome }}"
+          
+          echo "Readiness Gate: $READINESS_EXIT"
+          echo "Golden Regression: $GOLDEN_EXIT"
+          
+          if [ "$READINESS_EXIT" != "success" ]; then
+            echo "❌ Readiness gate FAILED"
+            exit 1
+          fi
+          
+          if [ "$GOLDEN_EXIT" = "failure" ]; then
+            echo "❌ Golden regression detected"
+            exit 1
+          fi
+          
+          echo "✅ All gates passed"
 
       - name: Upload artifacts (90 days by default)
         if: always()

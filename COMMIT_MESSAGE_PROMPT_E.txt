@@ -1,0 +1,50 @@
+feat(soak): auto-apply best cell runtime overrides as default
+
+Implements PROMPT E - automatic application of optimal runtime overrides
+from best parameter sweep cell when starting soak tests.
+
+Changes:
+- tools/soak/run.py
+  * Added get_default_best_cell_overrides() with best parameter sweep values
+  * Auto-apply defaults in auto-tune mode (if no ENV/file exists)
+  * Auto-apply defaults in mini-soak mode (if no ENV/file exists)
+  * Print markers for override sources (env/file/file_existing/default_best_cell)
+
+- strategy/edge_sentinel.py
+  * Added "runtime_overrides_applied" field to saved profiles
+  * Extended RUNTIME_LIMITS with max_delta_ratio (0.10-0.20)
+
+- tests/e2e/test_overrides_default_best_cell.py (NEW)
+  * Test default best cell overrides are applied
+  * Test ENV variable takes precedence
+  * Verify file structure and markers
+
+Default Best Cell Values (from parameter sweep):
+  min_interval_ms: 60
+  replace_rate_per_min: 300
+  base_spread_bps_delta: 0.05
+  tail_age_ms: 600
+  impact_cap_ratio: 0.10
+  max_delta_ratio: 0.15
+
+Priority Order:
+  1. MM_RUNTIME_OVERRIDES_JSON (ENV) → highest priority
+  2. artifacts/soak/runtime_overrides.json (file)
+  3. Default best cell (fallback)
+
+Impact:
+✅ Soak tests automatically start with optimal configuration
+✅ No manual override specification needed
+✅ Always uses known-good values from parameter sweep
+✅ Simple command: MM_PROFILE=S1 python -m tools.soak.run --iterations 1
+✅ Version-controlled best values in code
+
+Acceptance Test:
+  MM_PROFILE=S1 python -m tools.soak.run --iterations 1 --mock
+  → Creates artifacts/soak/runtime_overrides.json
+  → Creates artifacts/soak/applied_profile.json
+  → Marker: | overrides | OK | source=default_best_cell |
+
+Tests: 2/2 E2E tests passing
+Refs: PROMPT_E_BEST_CELL_OVERRIDES_COMPLETE.md
+

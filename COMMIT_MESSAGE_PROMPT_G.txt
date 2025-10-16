@@ -1,0 +1,51 @@
+feat(ci): KPI Gate + safe-mode в soak workflow (PROMPT G)
+
+Добавлена поддержка safe-mode для validation-шагов в soak-ране
+и исправлен exit code для KPI Gate warnings.
+
+ИЗМЕНЕНИЯ:
+
+1. Workflow Configuration (.github/workflows/soak-windows.yml):
+   - Добавлены env-переменные для safe-mode:
+     * MM_ALLOW_MISSING_SECRETS=1 (пропуск шагов без секретов)
+     * FIXTURES_DIR=tests/fixtures (путь к тестовым данным)
+   - Применяются ко всем validation-шагам в soak-цикле
+
+2. KPI Gate Exit Code Fix (tools/ci/validate_readiness.py):
+   - Изменена логика: WARN теперь возвращает exit code 0 (не ошибка)
+   - Только FAIL возвращает exit code 1
+   - Обоснование: WARN — информационный статус, не должен блокировать pipeline
+
+3. E2E Tests (tests/e2e/test_ci_safe_mode.py):
+   - test_validate_stack_safe_mode_no_secrets: проверка safe-mode без секретов
+   - test_full_stack_validate_safe_mode: проверка full_stack в safe-mode
+   - test_kpi_gate_with_good_metrics: KPI Gate с хорошими метриками → OK
+   - test_kpi_gate_with_warnings: KPI Gate с warnings → WARN (exit 0)
+
+МАРКЕРЫ:
+
+Safe-Mode:
+  | full_stack | OK | STACK=GREEN |
+  tests_whitelist: ok=true, details="SKIPPED_NO_SECRETS"
+
+KPI Gate:
+  | kpi_gate | OK | THRESHOLDS=APPLIED |
+  | kpi_gate | WARN | REASONS=EDGE:adverse,EDGE:order_age |
+  | kpi_gate | FAIL | REASONS=EDGE:net_bps |
+
+EXIT CODES:
+
+  validate_stack --allow-missing-secrets → 0 (green)
+  validate_readiness --kpi-gate → 0 для OK/WARN, 1 для FAIL
+
+ACCEPTANCE:
+
+  ✅ Soak-ран не падает при отсутствии секретов
+  ✅ KPI_GATE.json создаётся в каждой итерации
+  ✅ Warnings не блокируют pipeline
+  ✅ Маркеры стабильны и парсятся CI-мониторингом
+
+TEST RESULTS: 4/4 passed
+
+Связано: PROMPT A-F (S1 профиль, runtime overrides, auto-tuning, age relief)
+

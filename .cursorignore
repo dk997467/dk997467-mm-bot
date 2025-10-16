@@ -1,5 +1,8 @@
-artifacts/
-artifacts/**/*
+# === CURSOR IGNORE CONFIGURATION ===
+# This file controls what Cursor AI can see and analyze
+# For full project visibility (including artifacts), we keep this minimal
+
+# Exclude heavy/irrelevant directories only
 venv/
 .venv/
 node_modules/
@@ -8,8 +11,15 @@ build/
 logs/
 data/
 tmp/
+
+# Exclude Python cache directories
 **/__pycache__/
 **/.pytest_cache/
 **/.mypy_cache/
 **/.ruff_cache/
+
+# === ARTIFACTS ARE NOW VISIBLE ===
+# Previously artifacts/ was hidden here - REMOVED for full analysis capability
+# Cursor can now read artifacts/latest/, artifacts/reports/, artifacts/soak/
+# This is INTENTIONAL for debugging and analysis
 

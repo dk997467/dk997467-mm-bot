@@ -1,0 +1,219 @@
+feat(soak): Add delta-apply verifier tool
+
+Implement comprehensive delta application verification for soak tests.
+
+NEW TOOL: tools/soak/verify_deltas_applied.py (~480 lines)
+
+PURPOSE:
+Verify that proposed parameter deltas are correctly applied between soak test iterations.
+Detect application failures, signature stuck issues, and guard-related partial applications.
+
+FEATURES:
+✅ Delta Application Verification
+  - Compares proposed (TUNING_REPORT) vs observed (ITER_SUMMARY) parameters
+  - Float comparison with tolerance (1e-9)
+  - Detects full/partial/failed applications
+
+✅ Guard-Aware Analysis
+  - Recognizes guards: cooldown, velocity, oscillation, freeze
+  - Explains partial applications when guards active
+  - Distinguishes acceptable vs problematic mismatches
+
+✅ Signature Tracking
+  - Checks if signature changed after delta application
+  - Detects "signature stuck" events
+  - Identifies configuration bugs
+
+✅ Detailed Markdown Report
+  - Summary table: proposed keys, applied, guards, sig changed, params match
+  - Per-iteration analysis with reasons
+  - Detailed mismatch table (proposed vs observed)
+  - Problematic parameters ranking
+  - Final verdict with metrics
+
+✅ Configurable Thresholds
+  - Default: >=90% full applications OR (>=80% + 0 signature_stuck)
+  - Strict (--strict): >=95% full applications
+  - Exit code: 0 (pass) or 1 (fail)
+
+USAGE:
+# Basic
+python -m tools.soak.verify_deltas_applied --path "artifacts/soak/latest"
+
+# Strict mode (95% threshold)
+python -m tools.soak.verify_deltas_applied --path "artifacts/soak/latest" --strict
+
+OUTPUT:
+- Report: artifacts/soak/latest/DELTA_VERIFY_REPORT.md
+- Exit code: 0 (pass) or 1 (fail)
+
+REPORT STRUCTURE:
+
+1. Summary Table
+| Iter (i-1 → i) | Proposed Keys | Applied | Guards | Sig Changed | Params Match | Reason |
+|----------------|---------------|---------|--------|-------------|--------------|--------|
+| 1 → 2 | max_delta_ratio, ... | Y | none | N | Y | full_apply |
+| 2 → 3 | ... | N | none | N | N | mismatch_no_guards |
+| 3 → 4 | ... | Y | cooldown_active | N | partial | partial_apply_guards: cooldown |
+
+2. Metrics
+- Total iteration pairs: N
+- Pairs with proposed deltas: M
+- Full applications: X (Y%)
+- Partial applications: X (Y%)
+- Failed applications: X (Y%)
+- Signature stuck events: X
+
+3. Detailed Mismatches
+Per-iteration breakdown with proposed vs observed values
+
+4. Problematic Parameters
+Ranking of parameters with most mismatches
+
+5. Verdict
+✅ PASS - X% full applications (threshold: >=90%)
+or
+❌ FAIL - X% full applications (threshold: >=90%)
+
+ANALYSIS LOGIC:
+
+For each iteration pair (i-1 → i):
+1. Extract proposed deltas from iteration i-1 (TUNING_REPORT)
+2. Extract observed params from iteration i (ITER_SUMMARY)
+3. Check signature change (tuning.signature or state_hash)
+4. Compare params (float tolerance: 1e-9)
+5. Determine match status:
+   - Y (full): All params match
+   - partial: Mismatches but guards active
+   - N (fail): Mismatches and no guards
+6. Calculate metrics and determine exit code
+
+DATA SOURCES:
+
+TUNING_REPORT.json (list or dict with "iterations"):
+[
+  {
+    "iteration": 1,
+    "suggested_deltas": {"param_a": 0.5},
+    "applied": true,
+    "cooldown_active": false,
+    "velocity_violation": false,
+    "oscillation_detected": false,
+    "freeze_triggered": false
+  }
+]
+
+ITER_SUMMARY_*.json:
+{
+  "iteration": 1,
+  "tuning": {
+    "deltas": {"param_a": 0.5},
+    "applied": true,
+    "signature": "abc123"
+  }
+}
+
+TESTING:
+
+Test script: tools/soak/test_verify_deltas.py
+Result: ✅ All checks passed (100% applications, 2/2)
+
+Real data test:
+$ python -m tools.soak.verify_deltas_applied --path "artifacts/soak/latest"
+[OK] Report written to: artifacts/soak/latest/DELTA_VERIFY_REPORT.md
+
+Verification Summary:
+  Full applications: 1/4 (25.0%)
+  Signature stuck: 3
+  Threshold: >=90.0%
+
+❌ FAIL
+
+INTEGRATION:
+
+Complements existing soak tooling:
+1. analyze_post_soak.py — Deep KPI analysis
+2. extract_post_soak_snapshot.py — Compact JSON snapshot
+3. soak_gate.py — Unified orchestrator
+4. verify_deltas_applied.py — Delta verification ✅
+
+Typical workflow:
+# 1. Run soak test
+python -m tools.soak.run --iterations 12 --auto-tune
+
+# 2. Generate reports
+python -m tools.soak.soak_gate --path artifacts/soak/latest
+
+# 3. Verify deltas
+python -m tools.soak.verify_deltas_applied --path artifacts/soak/latest
+
+CI/CD INTEGRATION:
+
+- name: Run soak test
+  run: python -m tools.soak.run --iterations 12
+
+- name: Verify delta applications
+  run: |
+    python -m tools.soak.verify_deltas_applied \
+      --path artifacts/soak/latest \
+      --strict
+    # Fails CI if deltas not applied correctly
+
+USE CASES:
+
+1. CI/CD Validation - Fail pipeline if auto-tuning broken
+2. Post-Soak Analysis - Review DELTA_VERIFY_REPORT.md
+3. Debug Signature Stuck - Find iterations where sig didn't change
+4. Identify Problematic Parameters - See which params fail most
+
+IMPLEMENTATION DETAILS:
+
+Key Functions:
+- _load_tuning_report() — Loads TUNING_REPORT.json
+- _load_iter_summaries() — Loads all ITER_SUMMARY_*.json
+- _analyze_iteration_pair() — Core analysis for one pair
+- _compare_params() — Float comparison with tolerance
+- _generate_report() — Markdown generation
+- verify_deltas() — Main orchestrator
+
+Float Tolerance: 1e-9
+Guard Detection: cooldown, velocity, oscillation, freeze
+Signature Sources: tuning.signature or tuning.state_hash
+
+ACCEPTANCE CRITERIA:
+
+- [x] Loads TUNING_REPORT.json (list or dict format)
+- [x] Loads ITER_SUMMARY_*.json files
+- [x] Analyzes each iteration pair (i-1 → i)
+- [x] Compares proposed vs observed params
+- [x] Detects guard activations
+- [x] Tracks signature changes
+- [x] Generates Markdown report
+- [x] Calculates metrics (full/partial/fail %)
+- [x] Determines exit code based on threshold
+- [x] Supports --strict flag (95% threshold)
+- [x] Stdlib-only implementation
+- [x] Deterministic output
+- [x] Tested on real soak data
+
+FILES:
+- tools/soak/verify_deltas_applied.py (~480 lines) [NEW]
+- tools/soak/test_verify_deltas.py (~100 lines) [NEW]
+- DELTA_VERIFIER_COMPLETE.md (documentation) [NEW]
+- COMMIT_MESSAGE_DELTA_VERIFIER.txt (this file) [NEW]
+- artifacts/soak/latest/DELTA_VERIFY_REPORT.md [GENERATED]
+
+IMPACT:
+Before: No way to verify if auto-tuning actually applied deltas
+After:  Automated verification with detailed reports and CI/CD integration
+
+Total: ~580 lines production code + tests
+Dependencies: stdlib only
+Exit Codes: 0 (pass), 1 (fail)
+
+---
+
+Status: ✅ COMPLETE
+Tested: ✅ Test suite passing + real data
+Ready for: Production use, CI/CD integration
+

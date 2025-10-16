@@ -63,6 +63,17 @@ class StageMetrics:
         self._partial_fail_rate: Dict[str, float] = {}  # "op:exchange" -> rate
         self._ws_gap_ms: List[float] = []  # WebSocket gap histogram
         self._reconcile_discrepancies: Dict[str, int] = defaultdict(int)  # type -> count
+        
+        # MD Cache metrics
+        self._md_cache_hits: Dict[str, int] = defaultdict(int)  # symbol -> hits
+        self._md_cache_misses: Dict[str, int] = defaultdict(int)  # symbol -> misses
+        self._md_cache_age_ms: Dict[str, float] = {}  # symbol -> age (gauge)
+        self._md_refresh_latency_ms: List[float] = []  # refresh latency histogram
+        
+        # MD Cache safeguard metrics
+        self._pricing_on_stale: Dict[str, int] = defaultdict(int)  # reason -> count
+        self._md_cache_invalidations: Dict[str, int] = defaultdict(int)  # reason -> count
+        self._md_cache_depth_miss: Dict[str, int] = defaultdict(int)  # "requested:have" -> count
     
     def record_trace(self, trace: Trace) -> None:
         """
@@ -89,6 +100,22 @@ class StageMetrics:
         if "parallel_symbols" in trace.metadata:
             self._parallel_symbols = trace.metadata["parallel_symbols"]
     
+    def record_stage_duration(self, stage_name: str, duration_ms: float) -> None:
+        """
+        Record stage duration.
+        
+        Args:
+            stage_name: Stage name (e.g., "stage_fetch_md", "tick_total")
+            duration_ms: Duration in milliseconds
+        """
+        self._stage_durations[stage_name].append(duration_ms)
+        
+        # Check deadline for tick_total
+        if stage_name == self.STAGE_TICK_TOTAL:
+            self._total_ticks += 1
+            if duration_ms > self.deadline_ms:
+                self._deadline_misses += 1
+    
     def record_guard_trip(self, reason: str) -> None:
         """
         Записать срабатывание guard.
@@ -109,6 +136,71 @@ class StageMetrics:
         """
         key = f"{verb}:{api}"
         self._exchange_req_durations[key].append(duration_ms)
+    
+    def record_md_cache_hit(self, symbol: str) -> None:
+        """Record MD cache hit."""
+        self._md_cache_hits[symbol] += 1
+    
+    def record_md_cache_miss(self, symbol: str) -> None:
+        """Record MD cache miss."""
+        self._md_cache_misses[symbol] += 1
+    
+    def record_md_cache_age(self, symbol: str, age_ms: float) -> None:
+        """Record MD cache age (gauge)."""
+        self._md_cache_age_ms[symbol] = age_ms
+    
+    def record_md_refresh_latency(self, latency_ms: float) -> None:
+        """Record MD refresh latency."""
+        self._md_refresh_latency_ms.append(latency_ms)
+    
+    def get_md_cache_hit_ratio(self, symbol: Optional[str] = None) -> float:
+        """
+        Get MD cache hit ratio.
+        
+        Args:
+            symbol: Optional symbol (None = global)
+        
+        Returns:
+            Hit ratio [0.0, 1.0]
+        """
+        if symbol:
+            hits = self._md_cache_hits[symbol]
+            misses = self._md_cache_misses[symbol]
+        else:
+            hits = sum(self._md_cache_hits.values())
+            misses = sum(self._md_cache_misses.values())
+        
+        total = hits + misses
+        return hits / total if total > 0 else 0.0
+    
+    def record_pricing_on_stale(self, reason: str) -> None:
+        """
+        Record pricing decision made on stale data.
+        
+        Args:
+            reason: Reason for stale pricing (e.g., "pricing_threshold", "guard_block")
+        """
+        self._pricing_on_stale[reason] += 1
+    
+    def record_md_cache_invalidation(self, reason: str) -> None:
+        """
+        Record cache invalidation.
+        
+        Args:
+            reason: Invalidation reason (e.g., "ws_gap", "rewind", "manual")
+        """
+        self._md_cache_invalidations[reason] += 1
+    
+    def record_md_cache_depth_miss(self, requested: int, have: int) -> None:
+        """
+        Record depth mismatch.
+        
+        Args:
+            requested: Requested depth
+            have: Cached depth
+        """
+        key = f"{requested}:{have}"
+        self._md_cache_depth_miss[key] += 1
     
     def get_stage_percentiles(self, stage: str, percentiles: List[float] = [0.5, 0.95, 0.99]) -> Dict[float, float]:
         """

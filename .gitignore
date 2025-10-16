@@ -12,8 +12,9 @@ artifacts/**
 
 # Auto-generated symlinks (created by conftest.py)
 # These point to tests/fixtures/ and tests/golden/
-fixtures/
-golden/
+# Anchor repo-root ignores (do not affect tests/*)
+/fixtures/
+/golden/
 
 # Secrets (NEVER commit!)
 secrets/
@@ -27,3 +28,34 @@ docker-compose.override.yml
 # OS junk
 .DS_Store
 Thumbs.db
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- allow golden & fixtures under tests/ ---
+!tests/fixtures/
+!tests/fixtures/**
+!tests/golden/
+!tests/golden/**
+dist/
+*.zip
+*.sha256
+
+# === ARTIFACTS VISIBILITY FOR ANALYSIS ===
+# Keep artifacts/ in .gitignore (don't commit to repo)
+# BUT allow IDE/Cursor to see and analyze them
+# NOTE: This only affects git tracking, not IDE visibility
+# (IDE visibility controlled by .cursorignore and .vscode/settings.json)
+artifacts/
+artifacts/**
+
+# Allow inspection of critical artifacts for development
+!artifacts/latest/
+!artifacts/latest/**
+!artifacts/reports/
+!artifacts/reports/**
+!artifacts/soak/
+!artifacts/soak/**
