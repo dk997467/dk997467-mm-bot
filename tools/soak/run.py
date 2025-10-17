@@ -946,6 +946,11 @@ def main(argv=None) -> int:
                 except Exception as e:
                     print(f"[WARN] Could not process {summary_path.name}: {e}")
         
+        # Set USE_MOCK environment variable if --mock flag is specified
+        if args.mock:
+            os.environ["USE_MOCK"] = "1"
+            print("| soak | MOCK_MODE | USE_MOCK=1 (for iter_watcher maker/taker calculation) |")
+        
         # State for negative streak detector (MEGA-PROMPT: fallback logic)
         neg_streak = 0  # Count of consecutive iterations with net_bps < 0
         fallback_applied_at_iter = None  # Track when fallback was last applied
