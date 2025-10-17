@@ -1,9 +1,10 @@
 # 🎯 Soak Maker/Taker + Latency + Apply Fix — Implementation Summary
 
-## ✅ Status: PHASE 1 COMPLETE (Mock Fallback Fixed)
+## ✅ Status: PHASE 1 COMPLETE (Mock Fallback Fixed + USE_MOCK Env Var)
 
 Branch: `feat/soak-maker-latency-apply-fix`  
-Base: `feat/soak-ci-chaos-release-toolkit`
+Base: `feat/soak-ci-chaos-release-toolkit`  
+Commits: 2 (d4879db, c116514)
 
 ---
 
@@ -114,7 +115,9 @@ Base: `feat/soak-ci-chaos-release-toolkit`
 
 ## 🎯 Current Branch Changes
 
-### **Mock Fallback Fix** ✅
+### **1. Mock Fallback Fix** ✅ (Commit d4879db)
+
+**File:** `tools/soak/iter_watcher.py`
 
 **Change:**
 ```python
@@ -129,6 +132,38 @@ summary["maker_taker_ratio"] = 0.80  # Lower to show room for optimization
 - Shows clear gap to target (0.85)
 - Allows maker/taker optimization logic to trigger
 - More realistic for testing optimization deltas
+
+### **2. USE_MOCK Environment Variable** ✅ (Commit c116514)
+
+**File:** `tools/soak/run.py`
+
+**Issue:**
+- `iter_watcher.py` checks `os.getenv("USE_MOCK")` to use mock fallback
+- `run.py` accepts `--mock` flag but doesn't set environment variable
+- Result: maker_taker falls through to general fallback (0.60) instead of mock (0.80)
+
+**Fix:**
+```python
+# At start of mini-soak loop:
+if args.mock:
+    os.environ["USE_MOCK"] = "1"
+    print("| soak | MOCK_MODE | USE_MOCK=1 (for iter_watcher maker/taker calculation) |")
+```
+
+**Impact:**
+- Mock runs now correctly use `maker_taker_ratio = 0.80` (was 0.60)
+- Allows maker/taker optimization logic to trigger (threshold: 0.85)
+- Better testing of optimization deltas in mock mode
+
+**Verification:**
+```bash
+$ python -m tools.soak.run --iterations 2 --auto-tune --mock
+| soak | MOCK_MODE | USE_MOCK=1 (for iter_watcher maker/taker calculation) |
+
+$ python -c "import json; data = json.load(open('artifacts/soak/latest/ITER_SUMMARY_1.json')); \
+             print(data['summary']['maker_taker_ratio'])"
+0.8  # ✅ Correct!
+```
 
 ---
 
@@ -186,8 +221,9 @@ python -m tools.soak.extract_post_soak_snapshot --path artifacts/soak/latest --p
 
 ## 📁 Files Changed in This Branch
 
-**Updated (1 file):**
+**Updated (2 files):**
 - `tools/soak/iter_watcher.py` — Mock fallback: 0.90 → 0.80
+- `tools/soak/run.py` — Set USE_MOCK env var when --mock flag is used
 
 **New (1 file):**
 - `SOAK_MAKER_LATENCY_APPLY_FIX_SUMMARY.md` — This document
@@ -291,7 +327,8 @@ python -m tools.soak.extract_post_soak_snapshot --path artifacts/soak/latest --p
 - ✅ Soak gate with delta quality checks
 - ✅ Pipeline scripts (Bash + PowerShell)
 - ✅ Basic test coverage
-- ✅ Mock fallback fix (0.80)
+- ✅ Mock fallback fix (0.80) — **Commit d4879db**
+- ✅ USE_MOCK env var fix — **Commit c116514**
 
 **What's Pending:**
 - 🚧 Live-apply integration in run.py (separate PR)
