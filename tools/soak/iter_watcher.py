@@ -118,9 +118,9 @@ def ensure_maker_taker_ratio(summary: Dict[str, Any], context: Optional[Dict[str
             summary["maker_taker_source"] = "internal_fills"
             return
     
-    # 4) Mock mode - safe default for smoke tests
+    # 4) Mock mode - conservative default for smoke tests
     if os.getenv("USE_MOCK") == "1":
-        summary["maker_taker_ratio"] = 0.9
+        summary["maker_taker_ratio"] = 0.80  # Lower to show room for optimization
         summary["maker_taker_source"] = "mock_default"
         return
     
