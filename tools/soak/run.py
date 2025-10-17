@@ -1155,19 +1155,16 @@ def main(argv=None) -> int:
                         with open(artifacts_dir / "KPI_GATE.json", 'w') as f:
                             json.dump(kpi_gate, f, indent=2)
                         
-                        # Process iteration with watcher
+                        # Process iteration with watcher (includes live-apply with tracking)
                         iter_watcher.process_iteration(
                             iteration_idx=iteration + 1,
                             artifacts_dir=artifacts_dir,
                             output_dir=output_dir,
                             current_overrides=current_overrides,
-                            print_markers=True
+                            print_markers=True,
+                            runtime_path=Path("artifacts/soak/runtime_overrides.json"),
+                            total_iterations=args.iterations
                         )
-                        
-                        # PROMPT 1: Apply tuning deltas (live-apply mechanism)
-                        # This makes recommendations from iter_watcher actually take effect
-                        # PROMPT 5: Pass total_iterations for late-iteration guard
-                        apply_tuning_deltas(iteration + 1, total_iterations=args.iterations)
                         
                         # Reload overrides after live-apply (they might have changed)
                         overrides_path_reload = Path("artifacts/soak/runtime_overrides.json")

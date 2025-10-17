@@ -932,6 +932,9 @@ def write_iteration_outputs(
         "rationale": tuning_result.get("rationale", ""),
         "applied": tuning_result.get("applied", False),
         "signature": sig or "na",  # Always present (smoke test requirement)
+        "state_hash": tuning_result.get("state_hash"),  # State hash from apply_pipeline
+        "skip_reason": tuning_result.get("skip_reason", ""),  # Reason if not applied
+        "changed_keys": tuning_result.get("changed_keys", []),  # Keys that changed
         # Add guard flags for debugging
         "oscillation_detected": tuning_result.get("oscillation_detected", False),
         "velocity_violation": tuning_result.get("velocity_violation", False),
@@ -986,16 +989,112 @@ def print_iteration_markers(
         print(f"| iter_watch | SUGGEST | (none) |")
 
 
+def _determine_guards(
+    output_dir: Path,
+    iteration_idx: int,
+    total_iterations: Optional[int] = None
+) -> Dict[str, bool]:
+    """
+    Determine guard states for delta application.
+    
+    Checks:
+    - freeze_triggered: Freeze is active
+    - oscillation_detected: Recent A→B→A pattern
+    - velocity_violation: Too much change too fast
+    - cooldown_active: Recent large change
+    - late_iteration: Final iteration guard
+    
+    Args:
+        output_dir: Directory containing ITER_SUMMARY files and tuning_state.json
+        iteration_idx: Current iteration number (1-based)
+        total_iterations: Total number of iterations (None = no limit)
+    
+    Returns:
+        Dict of guard flags
+    """
+    guards = {
+        "freeze_triggered": False,
+        "oscillation_detected": False,
+        "velocity_violation": False,
+        "cooldown_active": False,
+        "late_iteration": False,
+    }
+    
+    # Check late iteration guard
+    if total_iterations and iteration_idx >= total_iterations:
+        guards["late_iteration"] = True
+    
+    # Check freeze state
+    tuning_state_path = output_dir / "tuning_state.json"
+    if tuning_state_path.exists():
+        try:
+            with open(tuning_state_path, 'r', encoding='utf-8') as f:
+                tuning_state = json.load(f)
+            
+            frozen_until = tuning_state.get("frozen_until_iter")
+            if frozen_until and iteration_idx <= frozen_until:
+                guards["freeze_triggered"] = True
+            
+            cooldown_until = tuning_state.get("cooldown_until_iter")
+            if cooldown_until and iteration_idx <= cooldown_until:
+                guards["cooldown_active"] = True
+        except Exception:
+            pass
+    
+    # Check oscillation (A→B→A pattern in last 3 signatures)
+    if iteration_idx >= 3:
+        signatures = []
+        for i in range(iteration_idx - 2, iteration_idx + 1):
+            iter_path = output_dir / f"ITER_SUMMARY_{i}.json"
+            if iter_path.exists():
+                try:
+                    with open(iter_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    sig = data.get("tuning", {}).get("state_hash") or data.get("tuning", {}).get("signature")
+                    if sig:
+                        signatures.append(sig)
+                except Exception:
+                    pass
+        
+        # Check for A→B→A pattern
+        if len(signatures) == 3:
+            if signatures[0] == signatures[2] and signatures[0] != signatures[1]:
+                guards["oscillation_detected"] = True
+    
+    # Check velocity (total change in last N iterations)
+    # This is a simplified check - full implementation would track per-param deltas
+    # For now, just check if we have multiple recent iterations with changes
+    recent_changes = 0
+    for i in range(max(1, iteration_idx - 3), iteration_idx):
+        iter_path = output_dir / f"ITER_SUMMARY_{i}.json"
+        if iter_path.exists():
+            try:
+                with open(iter_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if data.get("tuning", {}).get("deltas"):
+                    recent_changes += 1
+            except Exception:
+                pass
+    
+    # Velocity violation if 3+ changes in last 3 iterations
+    if recent_changes >= 3:
+        guards["velocity_violation"] = True
+    
+    return guards
+
+
 # Convenience function for all-in-one iteration processing
 def process_iteration(
     iteration_idx: int,
     artifacts_dir: Path,
     output_dir: Path,
     current_overrides: Optional[Dict[str, float]] = None,
-    print_markers: bool = True
+    print_markers: bool = True,
+    runtime_path: Optional[Path] = None,
+    total_iterations: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    All-in-one iteration processing: summarize, suggest tuning, write outputs, print markers.
+    All-in-one iteration processing: summarize, suggest tuning, apply with tracking, write outputs.
     
     Args:
         iteration_idx: Iteration number (1-based)
@@ -1003,19 +1102,58 @@ def process_iteration(
         output_dir: Directory to write ITER_SUMMARY_*.json and TUNING_REPORT.json
         current_overrides: Current runtime overrides (optional)
         print_markers: Whether to print log markers
+        runtime_path: Path to runtime_overrides.json (for live-apply)
+        total_iterations: Total number of iterations (for late-iteration guard)
     
     Returns:
-        Dict containing summary and tuning_result
+        Dict containing summary and tuning_result with tracking fields
     """
+    from tools.soak.apply_pipeline import apply_deltas_with_tracking
+    
+    # Step 1: Summarize iteration
     summary = summarize_iteration(artifacts_dir)
+    
+    # Step 2: Propose tuning deltas
     tuning_result = propose_micro_tuning(summary, current_overrides)
+    
+    # Step 3: Determine guards (cooldown, velocity, oscillation, freeze)
+    guards = _determine_guards(output_dir, iteration_idx, total_iterations)
+    
+    # Step 4: Apply deltas with tracking (if runtime_path provided)
+    if runtime_path and runtime_path.exists():
+        proposed_deltas = tuning_result.get("deltas", {})
+        
+        # Apply with tracking
+        tracking_result = apply_deltas_with_tracking(
+            runtime_path=runtime_path,
+            proposed_deltas=proposed_deltas,
+            guards=guards
+        )
+        
+        # Enrich tuning_result with tracking fields
+        tuning_result["applied"] = tracking_result["applied"]
+        tuning_result["skip_reason"] = tracking_result.get("skip_reason") or ""
+        tuning_result["changed_keys"] = tracking_result["changed_keys"]
+        tuning_result["state_hash"] = tracking_result["state_hash"]
+        tuning_result["old_hash"] = tracking_result["old_hash"]
+        tuning_result["proposed_deltas"] = proposed_deltas  # Always include
+    else:
+        # No runtime_path - still populate tracking fields
+        tuning_result["applied"] = False
+        tuning_result["skip_reason"] = "no_runtime_path"
+        tuning_result["changed_keys"] = []
+        tuning_result["state_hash"] = None
+        tuning_result["old_hash"] = None
+        tuning_result["proposed_deltas"] = tuning_result.get("deltas", {})
+    
+    # Step 5: Write outputs (ITER_SUMMARY + TUNING_REPORT with tracking)
     write_iteration_outputs(output_dir, iteration_idx, summary, tuning_result)
     
+    # Step 6: Print markers
     if print_markers:
         print_iteration_markers(iteration_idx, summary, tuning_result)
     
-    # PROMPT 5.3: FREEZE CHECK (activate freeze if steady state detected)
-    # Load history of recent iterations to check freeze conditions
+    # Step 7: FREEZE CHECK (activate freeze if steady state detected)
     if iteration_idx >= 2:
         history = []
         for i in range(max(1, iteration_idx - 1), iteration_idx + 1):
