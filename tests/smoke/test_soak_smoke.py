@@ -203,12 +203,15 @@ class TestSoakSmoke:
     
     def test_smoke_live_apply_executed(self):
         """
-        Verify live-apply mechanism executed between iterations.
+        Verify live-apply mechanism executed with full tracking.
         
-        Checks:
-        - Tuning deltas proposed
-        - runtime_overrides.json updated
-        - Signatures logged
+        Checks (ITER_SUMMARY + TUNING_REPORT parity):
+        - proposed_deltas (always present, even if {})
+        - applied (bool)
+        - skip_reason (string, empty if applied)
+        - changed_keys (list)
+        - state_hash (hex string)
+        - signature (backwards compat)
         """
         # Run soak test
         cmd = [
@@ -230,23 +233,60 @@ class TestSoakSmoke:
         
         assert result.returncode == 0
         
-        # Check TUNING_REPORT for deltas
         latest_dir = Path("artifacts/soak/latest")
-        tuning_report = latest_dir / "TUNING_REPORT.json"
         
+        # Check ITER_SUMMARY files for tracking fields
+        for i in range(1, 4):
+            iter_summary = latest_dir / f"ITER_SUMMARY_{i}.json"
+            with open(iter_summary, 'r') as f:
+                data = json.load(f)
+            
+            tuning = data["tuning"]
+            
+            # Required tracking fields
+            assert "proposed_deltas" in tuning, f"ITER_SUMMARY_{i}: Missing proposed_deltas"
+            assert "applied" in tuning, f"ITER_SUMMARY_{i}: Missing applied"
+            assert "skip_reason" in tuning, f"ITER_SUMMARY_{i}: Missing skip_reason"
+            assert "changed_keys" in tuning, f"ITER_SUMMARY_{i}: Missing changed_keys"
+            assert "state_hash" in tuning, f"ITER_SUMMARY_{i}: Missing state_hash"
+            
+            # Type validation
+            assert isinstance(tuning["proposed_deltas"], dict), f"ITER_SUMMARY_{i}: proposed_deltas not dict"
+            assert isinstance(tuning["applied"], bool), f"ITER_SUMMARY_{i}: applied not bool"
+            assert isinstance(tuning["skip_reason"], (str, dict)), f"ITER_SUMMARY_{i}: skip_reason not str/dict"
+            assert isinstance(tuning["changed_keys"], list), f"ITER_SUMMARY_{i}: changed_keys not list"
+            
+            # If applied, state_hash must be present
+            if tuning["applied"]:
+                assert tuning["state_hash"] is not None, f"ITER_SUMMARY_{i}: state_hash missing when applied=true"
+            
+            print(f"✓ ITER_SUMMARY_{i}: applied={tuning['applied']}, changed_keys={tuning['changed_keys']}")
+        
+        # Check TUNING_REPORT for parity
+        tuning_report = latest_dir / "TUNING_REPORT.json"
         with open(tuning_report, 'r') as f:
             tuning_data = json.load(f)
         
-        # Verify iterations have tuning data
-        for iteration in tuning_data["iterations"]:
-            assert "proposed_deltas" in iteration, "Missing proposed_deltas"
-            assert "signature" in iteration, "Missing signature"
-            
-            # Deltas can be empty (if freeze active or at bounds)
-            # but signature should always be present
-            assert iteration["signature"] is not None
+        assert len(tuning_data["iterations"]) == 3, "TUNING_REPORT should have 3 iterations"
         
-        print(f"\n✅ Live-apply executed for {len(tuning_data['iterations'])} iterations")
+        # Verify TUNING_REPORT has same tracking fields
+        for iteration in tuning_data["iterations"]:
+            iter_idx = iteration["iteration"]
+            
+            # Required tracking fields (same as ITER_SUMMARY)
+            assert "proposed_deltas" in iteration, f"TUNING_REPORT[{iter_idx}]: Missing proposed_deltas"
+            assert "applied" in iteration, f"TUNING_REPORT[{iter_idx}]: Missing applied"
+            assert "skip_reason" in iteration, f"TUNING_REPORT[{iter_idx}]: Missing skip_reason"
+            assert "changed_keys" in iteration, f"TUNING_REPORT[{iter_idx}]: Missing changed_keys"
+            assert "state_hash" in iteration, f"TUNING_REPORT[{iter_idx}]: Missing state_hash"
+            assert "signature" in iteration, f"TUNING_REPORT[{iter_idx}]: Missing signature"
+            
+            # Signature should always be present (even if "na")
+            assert iteration["signature"] is not None, f"TUNING_REPORT[{iter_idx}]: signature is None"
+            
+            print(f"✓ TUNING_REPORT[{iter_idx}]: applied={iteration['applied']}, changed_keys={iteration['changed_keys']}")
+        
+        print(f"\n✅ Live-apply executed with full tracking for {len(tuning_data['iterations'])} iterations")
     
     def test_smoke_runtime_lt_2_minutes(self, benchmark=None):
         """
