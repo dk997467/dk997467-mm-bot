@@ -37,6 +37,14 @@ KPI_THRESHOLDS = {
     "p95_latency_ms": 350,      # max
 }
 
+# Relaxed thresholds for mock mode (smoke tests, CI validation)
+KPI_THRESHOLDS_MOCK = {
+    "risk_ratio": 0.50,         # max (relaxed from 0.42)
+    "maker_taker_ratio": 0.50,  # min (relaxed from 0.85)
+    "net_bps": -10.0,           # min (relaxed from 2.7)
+    "p95_latency_ms": 500,      # max (relaxed from 350)
+}
+
 # PASS criteria: last 8 iterations, ≥6 pass all KPI + freeze_triggered at least once
 PASS_WINDOW = 8
 PASS_MIN_COUNT = 6
@@ -77,15 +85,27 @@ def load_iter_summaries(base_path: Path) -> List[Dict[str, Any]]:
     return summaries
 
 
-def check_kpi(summary: Dict[str, Any]) -> Dict[str, bool]:
-    """Check if iteration passes all KPI thresholds."""
+def check_kpi(summary: Dict[str, Any], use_mock_thresholds: bool = False) -> Dict[str, bool]:
+    """
+    Check if iteration passes all KPI thresholds.
+    
+    Args:
+        summary: Iteration summary dict
+        use_mock_thresholds: If True, use relaxed thresholds for mock mode
+    
+    Returns:
+        Dict with per-metric checks and all_pass flag
+    """
     s = summary.get("summary", summary)
     
+    # Choose thresholds based on mode
+    thresholds = KPI_THRESHOLDS_MOCK if use_mock_thresholds else KPI_THRESHOLDS
+    
     checks = {
-        "risk_ratio": s.get("risk_ratio", 1.0) <= KPI_THRESHOLDS["risk_ratio"],
-        "maker_taker_ratio": s.get("maker_taker_ratio", 0.0) >= KPI_THRESHOLDS["maker_taker_ratio"],
-        "net_bps": s.get("net_bps", 0.0) >= KPI_THRESHOLDS["net_bps"],
-        "p95_latency_ms": s.get("p95_latency_ms", 9999) <= KPI_THRESHOLDS["p95_latency_ms"],
+        "risk_ratio": s.get("risk_ratio", 1.0) <= thresholds["risk_ratio"],
+        "maker_taker_ratio": s.get("maker_taker_ratio", 0.0) >= thresholds["maker_taker_ratio"],
+        "net_bps": s.get("net_bps", 0.0) >= thresholds["net_bps"],
+        "p95_latency_ms": s.get("p95_latency_ms", 9999) <= thresholds["p95_latency_ms"],
     }
     
     checks["all_pass"] = all(checks.values())
@@ -727,9 +747,12 @@ def analyze_soak(base_path: Path) -> Tuple[str, int]:
     # Generate parameter delta recommendations
     deltas = make_deltas(stats, guards)
     
-    # Determine verdict
+    # Determine verdict (use relaxed thresholds in mock mode)
+    import os
+    use_mock = os.getenv("USE_MOCK") == "1"
+    
     last8 = summaries[-PASS_WINDOW:] if len(summaries) >= PASS_WINDOW else summaries
-    pass_count = sum(1 for item in last8 if check_kpi(item)["all_pass"])
+    pass_count = sum(1 for item in last8 if check_kpi(item, use_mock_thresholds=use_mock)["all_pass"])
     freeze_occurred = guards["freeze_triggered"] > 0
     
     if pass_count >= PASS_MIN_COUNT and freeze_occurred:

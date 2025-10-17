@@ -77,50 +77,41 @@ def _get_signature(data: Dict[str, Any]) -> str:
     return str(sig)
 
 
-def _get_runtime_params(data: Dict[str, Any]) -> Dict[str, float]:
-    """Extract runtime parameters from iteration data."""
+def _get_runtime_params(data: Dict[str, Any], keys: List[str]) -> Dict[str, float]:
+    """
+    Extract runtime parameters for specific keys using params mapping.
+    
+    Args:
+        data: Iteration data
+        keys: List of parameter keys to extract
+    
+    Returns:
+        Dict mapping flat keys to their values (using nested path resolution)
+    """
     try:
-        from tools.soak.params import get_all_params
+        from tools.soak import params as P
         
-        # 1. Check tuning.deltas (actual applied deltas on this iteration)
-        tuning = data.get("tuning", {})
-        deltas = tuning.get("deltas", {})
-        if deltas:
-            params = {}
-            for key, val in deltas.items():
-                if isinstance(val, (int, float)):
-                    params[key] = float(val)
-            return params
+        # Find runtime dict (priority: runtime_overrides > runtime > config)
+        runtime = data.get("runtime_overrides") or data.get("runtime") or data.get("config", {})
         
-        # 2. Try runtime_overrides with params module
-        runtime = data.get("runtime_overrides", {})
-        if runtime:
-            return get_all_params(runtime)
-        
-        # 3. Fallback: try other locations
-        runtime = data.get("runtime", {})
         if not runtime:
-            runtime = data.get("config", {})
+            return {}
         
-        if runtime:
-            return get_all_params(runtime)
+        # Use params module to resolve nested paths
+        result = {}
+        for key in keys:
+            val = P.get_from_runtime(runtime, key)
+            if val is not None:
+                result[key] = float(val)
         
-        return {}
+        return result
     
     except ImportError:
-        # Fallback: manual extraction if params module not available
-        tuning = data.get("tuning", {})
-        deltas = tuning.get("deltas", {})
-        if deltas:
-            params = {}
-            for key, val in deltas.items():
-                if isinstance(val, (int, float)):
-                    params[key] = float(val)
-            return params
-        
+        # Fallback: try flat extraction (won't handle nested properly)
         runtime = data.get("runtime_overrides", data.get("runtime", {}))
         params = {}
-        for key, val in runtime.items():
+        for key in keys:
+            val = runtime.get(key)
             if isinstance(val, (int, float)):
                 params[key] = float(val)
         
@@ -245,7 +236,9 @@ def _analyze_iteration_pair(
         return result
     
     # Compare proposed vs observed parameters
-    params_curr = _get_runtime_params(data_curr)
+    # Pass proposed keys to get_runtime_params for proper nested resolution
+    proposed_keys = list(result["proposed_deltas"].keys())
+    params_curr = _get_runtime_params(data_curr, proposed_keys)
     all_match, mismatches = _compare_params(result["proposed_deltas"], params_curr)
     
     result["mismatches"] = mismatches

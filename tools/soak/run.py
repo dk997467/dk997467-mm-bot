@@ -986,6 +986,14 @@ def main(argv=None) -> int:
                             "order_age_p95_ms": 340,  # High
                             "ws_lag_p95_ms": 130,  # High
                             "maker_share_pct": 88.0,
+                            "p95_latency_ms": 250.0,  # Add latency
+                            # Fills data for maker/taker calculation
+                            "fills": {
+                                "maker_count": 300,
+                                "taker_count": 700,
+                                "maker_volume": 15000.0,
+                                "taker_volume": 35000.0
+                            },
                             # DIAGNOSTICS (PROMPT H + MEGA-PROMPT):
                             "component_breakdown": {
                                 "gross_bps": 5.0,
@@ -1017,6 +1025,13 @@ def main(argv=None) -> int:
                             "order_age_p95_ms": 335,
                             "ws_lag_p95_ms": 125,
                             "maker_share_pct": 89.0,
+                            "p95_latency_ms": 280.0,
+                            "fills": {
+                                "maker_count": 350,
+                                "taker_count": 650,
+                                "maker_volume": 18000.0,
+                                "taker_volume": 32000.0
+                            },
                             "component_breakdown": {
                                 "gross_bps": 5.0,
                                 "fees_eff_bps": 2.0,
@@ -1045,6 +1060,26 @@ def main(argv=None) -> int:
                     iterations_since_start = iteration - 2  # iter 2 is first with risk
                     current_risk = max(0.30, base_risk * (risk_decay ** iterations_since_start))
                     
+                    # Maker/taker ratio improves gradually: 35% -> 82%
+                    # Start at 35%, increase by 2pp per iteration, cap at 82%
+                    base_maker_ratio = 0.35
+                    maker_increase_per_iter = 0.02
+                    current_maker_ratio = min(0.82, base_maker_ratio + (iteration * maker_increase_per_iter))
+                    
+                    # Convert to counts for fills (total=1000 fills per iter)
+                    total_fills = 1000
+                    maker_count = int(total_fills * current_maker_ratio)
+                    taker_count = total_fills - maker_count
+                    
+                    # Volume proportional to counts (avg $50 per fill)
+                    maker_volume = maker_count * 50.0
+                    taker_volume = taker_count * 50.0
+                    
+                    # Latency improves: 320ms -> 180ms
+                    base_latency = 320.0
+                    latency_decrease = 5.0
+                    current_latency = max(180.0, base_latency - (iteration * latency_decrease))
+                    
                     mock_edge_report = {
                         "totals": {
                             "net_bps": 2.8 + (iteration * 0.1),  # Positive after fallback
@@ -1054,6 +1089,13 @@ def main(argv=None) -> int:
                             "order_age_p95_ms": 350,  # Keep high to trigger Age Relief
                             "ws_lag_p95_ms": 95 + (iteration * 5),
                             "maker_share_pct": 90.0 + (iteration * 0.5),
+                            "p95_latency_ms": current_latency,
+                            "fills": {
+                                "maker_count": maker_count,
+                                "taker_count": taker_count,
+                                "maker_volume": maker_volume,
+                                "taker_volume": taker_volume
+                            },
                             "component_breakdown": {
                                 "gross_bps": 8.0,
                                 "fees_eff_bps": 2.0,

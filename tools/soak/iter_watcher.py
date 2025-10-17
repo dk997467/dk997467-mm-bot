@@ -482,6 +482,7 @@ def summarize_iteration(artifacts_dir: Path) -> Dict[str, Any]:
     adverse_bps_p95 = totals.get("adverse_bps_p95", adverse_bps)  # Fallback to mean
     slippage_bps_p95 = totals.get("slippage_bps_p95", slippage_bps)
     order_age_p95_ms = totals.get("order_age_p95_ms", 300)  # Default assumption
+    p95_latency_ms = totals.get("p95_latency_ms", 0.0)  # Latency metric
     
     # Negative edge drivers (sign guard: ignore component_breakdown signs for mock data)
     neg_drivers = totals.get("neg_edge_drivers") or []
@@ -534,6 +535,7 @@ def summarize_iteration(artifacts_dir: Path) -> Dict[str, Any]:
         "adverse_bps_p95": adverse_bps_p95,
         "slippage_bps_p95": slippage_bps_p95,
         "order_age_p95_ms": order_age_p95_ms,
+        "p95_latency_ms": p95_latency_ms,  # Add latency to summary
         # Risk metrics from EDGE_REPORT
         "risk_ratio": risk_ratio,
         "min_interval_ratio": min_interval_ratio,
