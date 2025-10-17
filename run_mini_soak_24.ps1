@@ -45,8 +45,8 @@ Write-Host "  [OK] Mini-soak completed"
 Write-Host ""
 
 # Step 2: Run soak gate (analyzer + extractor + delta verify + metrics)
-Write-Host "[2/5] Running soak gate (full analysis + Prometheus)..."
-python -m tools.soak.soak_gate --path "artifacts\soak\latest" --prometheus --strict
+Write-Host "[2/5] Running soak gate (full analysis + Prometheus, mock mode)..."
+python -m tools.soak.soak_gate --path "artifacts\soak\latest" --prometheus --strict --mock
 
 $gateExit = $LASTEXITCODE
 Write-Host "  Soak gate exit code: $gateExit"

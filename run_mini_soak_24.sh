@@ -46,8 +46,8 @@ echo "  ✓ Mini-soak completed"
 echo ""
 
 # Step 2: Run soak gate (analyzer + extractor + delta verify + metrics)
-echo "[2/5] Running soak gate (full analysis + Prometheus)..."
-python -m tools.soak.soak_gate --path "artifacts/soak/latest" --prometheus --strict
+echo "[2/5] Running soak gate (full analysis + Prometheus, mock mode)..."
+python -m tools.soak.soak_gate --path "artifacts/soak/latest" --prometheus --strict --mock
 
 GATE_EXIT=$?
 echo "  Soak gate exit code: $GATE_EXIT"
