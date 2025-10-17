@@ -288,6 +288,65 @@ class TestSoakSmoke:
         
         print(f"\n✅ Live-apply executed with full tracking for {len(tuning_data['iterations'])} iterations")
     
+    def test_smoke_new_fields_present(self):
+        """
+        Verify new fields are present and populated correctly.
+        
+        Checks:
+        - p95_latency_ms > 0 (in mock runs)
+        - maker_taker_ratio present
+        - maker_taker_source in {fills_volume, fills_count, weekly_rollup, mock_default}
+        """
+        # Run soak test
+        cmd = [
+            sys.executable,
+            "-m", "tools.soak.run",
+            "--iterations", "3",
+            "--auto-tune",
+            "--mock"
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env={**os.environ, "SOAK_SLEEP_SECONDS": "5"}
+        )
+        
+        assert result.returncode == 0
+        
+        latest_dir = Path("artifacts/soak/latest")
+        
+        # Check all iterations for new fields
+        for i in range(1, 4):
+            iter_summary = latest_dir / f"ITER_SUMMARY_{i}.json"
+            with open(iter_summary, 'r') as f:
+                data = json.load(f)
+            
+            summary = data["summary"]
+            
+            # p95_latency_ms must be present and > 0 in mock mode
+            assert "p95_latency_ms" in summary, f"ITER_SUMMARY_{i}: Missing p95_latency_ms"
+            p95_latency = summary["p95_latency_ms"]
+            assert p95_latency > 0, f"ITER_SUMMARY_{i}: p95_latency_ms={p95_latency} should be > 0 in mock mode"
+            
+            # maker_taker_ratio must be present
+            assert "maker_taker_ratio" in summary, f"ITER_SUMMARY_{i}: Missing maker_taker_ratio"
+            maker_taker_ratio = summary["maker_taker_ratio"]
+            assert 0.0 <= maker_taker_ratio <= 1.0, f"ITER_SUMMARY_{i}: maker_taker_ratio={maker_taker_ratio} out of range [0, 1]"
+            
+            # maker_taker_source must be present and valid
+            assert "maker_taker_source" in summary, f"ITER_SUMMARY_{i}: Missing maker_taker_source"
+            maker_taker_source = summary["maker_taker_source"]
+            valid_sources = {"fills_volume", "fills_count", "weekly_rollup", "mock_default", "internal_fills", "existing", "fallback"}
+            assert maker_taker_source in valid_sources, f"ITER_SUMMARY_{i}: maker_taker_source={maker_taker_source} not in {valid_sources}"
+            
+            print(f"✓ ITER_SUMMARY_{i}: p95_latency={p95_latency:.1f}ms, maker_taker={maker_taker_ratio:.2%} (source={maker_taker_source})")
+        
+        print(f"\n✅ All new fields present and valid for 3 iterations")
+    
     def test_smoke_runtime_lt_2_minutes(self, benchmark=None):
         """
         Verify test completes in <2 minutes.

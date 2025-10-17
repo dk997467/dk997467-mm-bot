@@ -258,6 +258,138 @@ def test_soak_gate_with_delta_verify():
         assert "soak_delta_full_apply_ratio" in content, "Delta metrics should be exported"
 
 
+@pytest.mark.smoke
+def test_nested_write_and_read():
+    """Test that nested write works correctly with params.set_in_runtime()."""
+    from tools.soak.apply_pipeline import apply_deltas_with_tracking
+    from tools.soak.params import get_from_runtime
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        runtime_path = Path(tmpdir) / "runtime.json"
+        
+        # Apply deltas with nested keys
+        proposed_deltas = {
+            "base_spread_bps": 0.25,
+            "impact_cap_ratio": 0.10,
+            "tail_age_ms": 600,
+            "concurrency_limit": 15
+        }
+        
+        # First apply: should write to nested structure
+        result1 = apply_deltas_with_tracking(
+            runtime_path,
+            proposed_deltas,
+            {}
+        )
+        
+        assert result1["applied"] is True, "First apply should succeed"
+        assert result1["state_hash"] is not None, "Should have state hash"
+        assert len(result1["changed_keys"]) == 4, "Should have 4 changed keys"
+        
+        # Verify nested write worked: read back with get_from_runtime
+        runtime = json.loads(runtime_path.read_text())
+        
+        for key, expected_value in proposed_deltas.items():
+            actual_value = get_from_runtime(runtime, key)
+            assert actual_value == expected_value, f"Key {key}: expected {expected_value}, got {actual_value}"
+        
+        # Second apply (same values): should be no-op
+        result2 = apply_deltas_with_tracking(
+            runtime_path,
+            proposed_deltas,
+            {}
+        )
+        
+        assert result2["applied"] is False, "Second apply should be no-op"
+        assert result2["no_op"] is True, "Should detect no-op"
+        assert result2["state_hash"] == result1["state_hash"], "State hash should be stable on no-op"
+        
+        print(f"✅ Nested write verified: {len(proposed_deltas)} params")
+
+
+@pytest.mark.smoke
+def test_latency_buffer_soft_trigger():
+    """Test that soft latency buffer triggers at 330-360ms range."""
+    from tools.soak.iter_watcher import propose_micro_tuning
+    
+    # Mock summary with p95_latency_ms in soft zone
+    summary = {
+        "risk_ratio": 0.30,  # Low risk (OK)
+        "net_bps": 3.5,      # Good net
+        "maker_taker_ratio": 0.85,  # Good maker/taker
+        "p95_latency_ms": 335.0,  # In soft zone [330, 360]
+        "adverse_bps_p95": 2.0,
+        "slippage_bps_p95": 1.5,
+        "order_age_p95_ms": 300,
+        "neg_edge_drivers": []
+    }
+    
+    current_overrides = {
+        "base_spread_bps": 0.20,
+        "concurrency_limit": 10,
+        "tail_age_ms": 500,
+        "replace_rate_per_min": 6.0
+    }
+    
+    # Propose tuning
+    result = propose_micro_tuning(summary, current_overrides)
+    
+    # Should propose soft latency buffer deltas
+    deltas = result.get("deltas", {})
+    reasons = result.get("reasons", [])
+    
+    # Check for latency buffer triggers
+    latency_reasons = [r for r in reasons if "LATENCY_BUFFER" in r or "LATENCY_HARD" in r]
+    assert len(latency_reasons) > 0, f"Should propose latency buffer deltas for p95=335ms. Reasons: {reasons}"
+    
+    # Should reduce concurrency
+    if "concurrency_limit" in deltas:
+        assert deltas["concurrency_limit"] < 0, "Should reduce concurrency_limit"
+    
+    print(f"✅ Soft latency buffer triggered: p95=335ms -> {len(deltas)} deltas")
+
+
+@pytest.mark.smoke
+def test_latency_buffer_hard_trigger():
+    """Test that hard latency buffer triggers at >360ms."""
+    from tools.soak.iter_watcher import propose_micro_tuning
+    
+    # Mock summary with p95_latency_ms in hard zone
+    summary = {
+        "risk_ratio": 0.25,
+        "net_bps": 4.0,
+        "maker_taker_ratio": 0.88,
+        "p95_latency_ms": 365.0,  # In hard zone (> 360)
+        "adverse_bps_p95": 1.8,
+        "slippage_bps_p95": 1.2,
+        "order_age_p95_ms": 280,
+        "neg_edge_drivers": []
+    }
+    
+    current_overrides = {
+        "base_spread_bps": 0.18,
+        "concurrency_limit": 12,
+        "tail_age_ms": 450,
+        "replace_rate_per_min": 5.5
+    }
+    
+    # Propose tuning
+    result = propose_micro_tuning(summary, current_overrides)
+    
+    deltas = result.get("deltas", {})
+    reasons = result.get("reasons", [])
+    
+    # Check for HARD latency trigger
+    hard_reasons = [r for r in reasons if "LATENCY_HARD" in r]
+    assert len(hard_reasons) > 0, f"Should propose HARD latency deltas for p95=365ms. Reasons: {reasons}"
+    
+    # Should reduce concurrency more aggressively
+    if "concurrency_limit" in deltas:
+        assert deltas["concurrency_limit"] < 0, "Should reduce concurrency_limit"
+    
+    print(f"✅ Hard latency buffer triggered: p95=365ms -> {len(deltas)} deltas")
+
+
 if __name__ == "__main__":
     # Run tests
     pytest.main([__file__, "-v", "-s"])
