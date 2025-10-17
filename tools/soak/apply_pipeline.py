@@ -21,7 +21,7 @@ Usage:
 from pathlib import Path
 from typing import Dict, Any, Optional
 from tools.common.jsonx import atomic_write_json, read_json_with_hash, compute_json_hash
-from tools.soak.params import apply_deltas, get_from_runtime
+from tools.soak.params import apply_deltas, get_from_runtime, set_in_runtime
 
 
 def _detect_no_op(runtime: Dict[str, Any], proposed: Dict[str, Any]) -> bool:
@@ -188,8 +188,18 @@ def apply_deltas_with_tracking(
             }
         }
     
-    # Apply deltas
+    # Apply deltas using nested write (apply_deltas uses set_in_runtime internally)
+    # This ensures params are written to nested paths (e.g., risk.base_spread_bps)
     runtime, count_applied = apply_deltas(runtime, proposed_deltas)
+    
+    # Verify nested write worked: check each proposed key is accessible via get_from_runtime
+    for key in proposed_deltas.keys():
+        actual_value = get_from_runtime(runtime, key)
+        if actual_value is None:
+            # Param not found - this should never happen if set_in_runtime worked
+            raise RuntimeError(
+                f"Nested write verification failed: {key} not found in runtime after apply_deltas"
+            )
     
     # Atomic write + get new hash
     new_hash, size = atomic_write_json(runtime_path, runtime)

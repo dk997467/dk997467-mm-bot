@@ -20,21 +20,33 @@ from pathlib import Path
 from typing import Tuple
 
 
-def run_analyzer(path: Path) -> Tuple[bool, str]:
+def run_analyzer(path: Path, mock_mode: bool = False) -> Tuple[bool, str]:
     """
     Run analyze_post_soak.py.
+    
+    Args:
+        path: Path to soak artifacts
+        mock_mode: If True, set USE_MOCK=1 env var for relaxed KPI thresholds
     
     Returns:
         (success: bool, error_msg: str)
     """
     print("[soak_gate] Running analyze_post_soak.py...")
     
+    # Prepare environment with mock flag if needed
+    import os
+    env = os.environ.copy()
+    if mock_mode:
+        env["USE_MOCK"] = "1"
+        print("[soak_gate] Mock mode: USE_MOCK=1 (relaxed KPI thresholds)")
+    
     try:
         result = subprocess.run(
             [sys.executable, "-m", "tools.soak.analyze_post_soak", "--path", str(path)],
             capture_output=True,
             text=True,
-            timeout=300  # 5 minutes timeout
+            timeout=300,  # 5 minutes timeout
+            env=env
         )
         
         print(result.stdout, end="")
@@ -53,10 +65,17 @@ def run_analyzer(path: Path) -> Tuple[bool, str]:
 def run_extractor(
     path: Path,
     prometheus: bool = False,
-    compare: str = None
+    compare: str = None,
+    mock_mode: bool = False
 ) -> Tuple[bool, dict, str]:
     """
     Run extract_post_soak_snapshot.py.
+    
+    Args:
+        path: Path to soak artifacts
+        prometheus: Export Prometheus metrics
+        compare: Baseline path for comparison
+        mock_mode: If True, set USE_MOCK=1 env var
     
     Returns:
         (success: bool, snapshot: dict, error_msg: str)
@@ -71,12 +90,19 @@ def run_extractor(
     if compare:
         cmd.extend(["--compare", compare])
     
+    # Prepare environment with mock flag if needed
+    import os
+    env = os.environ.copy()
+    if mock_mode:
+        env["USE_MOCK"] = "1"
+    
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=60  # 1 minute timeout
+            timeout=60,  # 1 minute timeout
+            env=env
         )
         
         # Print stderr (logs)
@@ -215,6 +241,11 @@ def main():
         action="store_true",
         help="Skip delta verification (not recommended)",
     )
+    parser.add_argument(
+        "--mock",
+        action="store_true",
+        help="Use relaxed KPI thresholds for mock mode (sets USE_MOCK=1)",
+    )
     
     args = parser.parse_args()
     
@@ -229,12 +260,13 @@ def main():
     print("=" * 80)
     print(f"Path: {path}")
     print(f"Strict mode: {args.strict}")
+    print(f"Mock mode: {args.mock}")
     print("=" * 80)
     print()
     
     # Step 1: Run analyzer (unless skipped)
     if not args.skip_analyzer:
-        success, error = run_analyzer(path)
+        success, error = run_analyzer(path, mock_mode=args.mock)
         if not success:
             print(f"\n[ERROR] Analyzer failed: {error}", file=sys.stderr)
             sys.exit(1)
@@ -243,7 +275,12 @@ def main():
         print("[SKIP] Analyzer skipped (--skip-analyzer)")
     
     # Step 2: Run extractor
-    success, snapshot, error = run_extractor(path, args.prometheus, args.compare)
+    success, snapshot, error = run_extractor(
+        path, 
+        prometheus=args.prometheus, 
+        compare=args.compare,
+        mock_mode=args.mock
+    )
     if not success:
         print(f"\n[ERROR] Extractor failed: {error}", file=sys.stderr)
         sys.exit(1)
