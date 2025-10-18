@@ -1557,10 +1557,10 @@ def main(argv=None) -> int:
                     except Exception as e:
                         print(f"[WARN] iter_watcher failed: {e}")
                 
-                # Update overrides for next iteration (this is now overridden by live-apply above)
-                # Keep this line for backwards compatibility if iter_watcher is disabled
-                if not iter_watcher:
-                current_overrides = new_overrides
+                    # Update overrides for next iteration (this is now overridden by live-apply above)
+                    # Keep this line for backwards compatibility if iter_watcher is disabled
+                    if not iter_watcher:
+                        current_overrides = new_overrides
                 
                 # RISK-AWARE: Track completed iterations
                 iter_done += 1
