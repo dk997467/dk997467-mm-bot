@@ -1,0 +1,246 @@
+---
+# Prometheus Alert Rules for Soak Warm-up Monitoring
+# 
+# These alerts are designed to be smart:
+# - Don't fire during warmup phase (iterations 1-4)
+# - Only trigger on sustained issues (3+ iterations)
+# - Critical alerts only for severe problems
+
+groups:
+  - name: soak_warmup_health
+    interval: 30s
+    rules:
+      
+      # ====================================================================
+      # CRITICAL ALERTS (only after warmup phase)
+      # ====================================================================
+      
+      - alert: SoakP95LatencyHigh
+        expr: |
+          soak_p95_latency_ms{iteration=~"[5-9]|[1-9][0-9]+"} > 360
+          and warmup_active == 0
+        for: 3m
+        labels:
+          severity: critical
+          component: soak
+        annotations:
+          summary: "P95 latency too high in steady phase"
+          description: |
+            P95 latency exceeded 360ms for 3+ minutes after warmup.
+            Current value: {{ $value }}ms
+            Iteration: {{ $labels.iteration }}
+            Phase: {{ $labels.phase }}
+            
+            This may indicate:
+            - Network congestion
+            - Exchange API degradation
+            - Inefficient order management
+            
+            Action: Check latency buffers, consider raising min_interval_ms
+      
+      - alert: SoakRiskRatioHigh
+        expr: |
+          soak_risk_ratio{iteration=~"[5-9]|[1-9][0-9]+"} > 0.45
+          and warmup_active == 0
+        for: 3m
+        labels:
+          severity: critical
+          component: soak
+        annotations:
+          summary: "Risk ratio too high in steady phase"
+          description: |
+            Risk ratio exceeded 45% for 3+ minutes after warmup.
+            Current value: {{ $value | humanizePercentage }}
+            Iteration: {{ $labels.iteration }}
+            Phase: {{ $labels.phase }}
+            
+            This indicates excessive position risk.
+            
+            Action: Check impact_cap_ratio, consider reducing position_limit
+      
+      - alert: SoakMakerTakerLow
+        expr: |
+          soak_maker_taker_ratio{iteration=~"[5-9]|[1-9][0-9]+"} < 0.75
+          and warmup_active == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: soak
+        annotations:
+          summary: "Maker/taker ratio too low in steady phase"
+          description: |
+            Maker/taker ratio below 75% for 5+ minutes after warmup.
+            Current value: {{ $value }}
+            Iteration: {{ $labels.iteration }}
+            Phase: {{ $labels.phase }}
+            
+            This may indicate:
+            - Too many taker rescues
+            - Spread too tight
+            - Queue position problems
+            
+            Action: Check rescue_max_ratio, increase base_spread_bps_delta
+      
+      # ====================================================================
+      # WARNING ALERTS (informational, non-blocking)
+      # ====================================================================
+      
+      - alert: SoakVelocityGuardTriggered
+        expr: |
+          increase(guard_triggers_total{type="velocity"}[5m]) > 2
+          and warmup_active == 0
+        for: 1m
+        labels:
+          severity: warning
+          component: soak_guards
+        annotations:
+          summary: "Velocity guard triggered multiple times"
+          description: |
+            Velocity guard triggered {{ $value }} times in 5 minutes.
+            Phase: {{ $labels.phase }}
+            
+            This may indicate oscillations or too aggressive tuning.
+            
+            Note: Expected during rampdown (iterations 5-6).
+            Consider increasing velocity threshold if persistent.
+      
+      - alert: SoakOscillationDetected
+        expr: |
+          guard_triggers_total{type="oscillation"} > 0
+        for: 1m
+        labels:
+          severity: warning
+          component: soak_guards
+        annotations:
+          summary: "Parameter oscillation detected"
+          description: |
+            Oscillation guard triggered {{ $value }} time(s).
+            
+            This indicates tuner is ping-ponging between states.
+            
+            Action: Check micro-steps filter, increase cooldown period
+      
+      - alert: SoakFreezeActivated
+        expr: |
+          partial_freeze_active == 1
+        for: 5m
+        labels:
+          severity: info
+          component: soak_guards
+        annotations:
+          summary: "Partial freeze activated"
+          description: |
+            Partial freeze has been active for 5+ minutes.
+            
+            This is a protective measure to prevent cascading changes.
+            System should self-recover; monitor for resolution.
+      
+      # ====================================================================
+      # WARMUP-SPECIFIC ALERTS (only fire during warmup if severe)
+      # ====================================================================
+      
+      - alert: SoakWarmupP95Critical
+        expr: |
+          soak_p95_latency_ms{iteration=~"[1-4]"} > 400
+          and warmup_active == 1
+        for: 3m
+        labels:
+          severity: warning
+          component: soak_warmup
+        annotations:
+          summary: "P95 latency critically high even during warmup"
+          description: |
+            P95 latency exceeded 400ms during warmup for 3+ minutes.
+            Current value: {{ $value }}ms
+            Iteration: {{ $labels.iteration }}
+            
+            This is unusual even for warmup phase.
+            
+            Action: Check network, exchange health, consider aborting run
+      
+      - alert: SoakWarmupStuck
+        expr: |
+          warmup_active == 1
+          and warmup_iter_idx == warmup_iter_idx offset 5m
+          and warmup_iter_idx > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: soak_warmup
+        annotations:
+          summary: "Warmup phase appears stuck"
+          description: |
+            Warmup iteration index hasn't changed in 5+ minutes.
+            Current iteration: {{ $value }}
+            
+            This indicates the soak run may be hung or crashed.
+            
+            Action: Check soak runner process, restart if needed
+      
+      # ====================================================================
+      # LAST-8 WINDOW ALERTS (final verdict)
+      # ====================================================================
+      
+      - alert: SoakLast8KPIFailure
+        expr: |
+          (maker_taker_ratio_hmean{window="8"} < 0.83)
+          or (risk_ratio_mean{window="8"} > 0.40)
+          or (p95_latency_ms_max{window="8"} > 340)
+        for: 1m
+        labels:
+          severity: critical
+          component: soak_verdict
+        annotations:
+          summary: "Last-8 KPI goals not met"
+          description: |
+            One or more last-8 KPI goals failed:
+            - Maker/Taker Hmean: {{ with query "maker_taker_ratio_hmean{window='8'}" }}{{ . | first | value }}{{ end }} (target: ≥0.83)
+            - Risk Mean: {{ with query "risk_ratio_mean{window='8'}" }}{{ . | first | value }}{{ end }} (target: ≤0.40)
+            - P95 Max: {{ with query "p95_latency_ms_max{window='8'}" }}{{ . | first | value }}{{ end }}ms (target: ≤340ms)
+            
+            This indicates soak test did not meet production readiness criteria.
+            
+            Action: Review tuning parameters, check for regressions
+      
+      # ====================================================================
+      # TUNER DISCIPLINE ALERTS
+      # ====================================================================
+      
+      - alert: SoakTunerOveractive
+        expr: |
+          tuner_keys_changed_total > 2
+          and warmup_active == 0
+        for: 1m
+        labels:
+          severity: warning
+          component: soak_tuner
+        annotations:
+          summary: "Tuner changing too many keys per iteration"
+          description: |
+            Tuner changed {{ $value }} keys in iteration {{ $labels.iteration }}.
+            Limit: 2 keys per iteration (micro-steps discipline).
+            
+            This suggests micro-steps filter is not working correctly.
+            
+            Action: Check filter_tuner_deltas() implementation
+      
+      - alert: SoakTunerSilent
+        expr: |
+          sum(tuner_keys_changed_total) == 0
+          and warmup_active == 0
+        for: 15m
+        labels:
+          severity: info
+          component: soak_tuner
+        annotations:
+          summary: "Tuner has not proposed any changes"
+          description: |
+            Tuner has been silent for 15+ minutes after warmup.
+            
+            This may be normal if system is stable, but could indicate:
+            - Guards blocking all proposals
+            - Tuner logic issue
+            - Metrics not reaching tuner
+            
+            Action: Review guard activity, check tuner logs
+

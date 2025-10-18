@@ -198,10 +198,23 @@ jobs:
           pip install -e . -v
           pip install -r requirements_ci.txt
       
-      - name: Run soak (24 iterations, strict)
+      - name: Run soak (24 iterations, strict, with warmup)
         run: |
+          echo "================================================"
+          echo "NIGHTLY SOAK: 24 iterations (strict mode)"
+          echo "================================================"
+          echo "[NIGHTLY MODE] Warmup enabled for realistic testing"
+          echo "[NIGHTLY MODE] Strict gates: last-8 must PASS"
+          echo "[NIGHTLY MODE] Delta verify: full_apply_ratio >= 0.95"
+          echo "================================================"
+          
           rm -rf artifacts/soak/latest
-          python -m tools.soak.run --iterations 24 --mock --auto-tune
+          python -m tools.soak.run \
+            --iterations 24 \
+            --mock \
+            --auto-tune \
+            --warmup \
+            --preset maker_bias_uplift_v1
       
       - name: Verify delta application (strict)
         shell: bash
@@ -298,6 +311,34 @@ jobs:
           echo "✓ STRICT KPI validation passed"
           echo "================================================"
       
+      - name: Export warm-up metrics for Prometheus
+        if: always()
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "EXPORTING WARM-UP METRICS (NIGHTLY)"
+          echo "================================================"
+          
+          ROOT="artifacts/soak/latest"
+          if compgen -G "$ROOT/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT"
+          elif compgen -G "$ROOT/soak/latest/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT/soak/latest"
+          else
+            echo "[WARN] No ITER_SUMMARY files found"
+            exit 0
+          fi
+          
+          python -m tools.soak.export_warmup_metrics \
+            --path "$TARGET" \
+            --output "$ROOT/reports/analysis/warmup_metrics.prom"
+          
+          if [ $? -eq 0 ]; then
+            echo "✓ Warm-up metrics exported (nightly)"
+          fi
+          
+          echo "================================================"
+      
       - name: Upload soak artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -307,6 +348,7 @@ jobs:
             artifacts/soak/latest/reports/
             artifacts/soak/latest/soak/latest/TUNING_REPORT.json
             artifacts/soak/latest/soak/latest/ITER_SUMMARY_*.json
+            artifacts/soak/latest/ITER_SUMMARY_*.json
           if-no-files-found: warn
           retention-days: 60
 

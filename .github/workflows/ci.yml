@@ -332,10 +332,13 @@ jobs:
           echo "=== Final package list ==="
           pip list
 
-      - name: Run 8-iteration soak with auto-tuning
+      - name: Run 8-iteration soak with auto-tuning (warmup mode)
         run: |
           echo "================================================"
-          echo "POST-SOAK ANALYSIS: 8 iterations"
+          echo "POST-SOAK ANALYSIS: 8 iterations (with warmup)"
+          echo "================================================"
+          echo "[PR MODE] Warmup enabled (iters 1-4 = WARN mode)"
+          echo "[PR MODE] Verdict based on last-8 window"
           echo "================================================"
           
           rm -rf artifacts/soak/latest
@@ -343,7 +346,9 @@ jobs:
           python -m tools.soak.run \
             --iterations 8 \
             --mock \
-            --auto-tune
+            --auto-tune \
+            --warmup \
+            --preset maker_bias_uplift_v1
           
           if [ $? -ne 0 ]; then
             echo "❌ Soak run failed"
@@ -548,6 +553,41 @@ jobs:
           
           echo "================================================"
 
+      - name: Export warm-up metrics for Prometheus
+        if: always()
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "EXPORTING WARM-UP METRICS"
+          echo "================================================"
+          
+          # Auto-detect artifacts location
+          ROOT="artifacts/soak/latest"
+          if compgen -G "$ROOT/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT"
+          elif compgen -G "$ROOT/soak/latest/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT/soak/latest"
+          else
+            echo "[WARN] No ITER_SUMMARY files found, skipping metrics export"
+            exit 0
+          fi
+          
+          # Export metrics
+          python -m tools.soak.export_warmup_metrics \
+            --path "$TARGET" \
+            --output "$ROOT/reports/analysis/warmup_metrics.prom"
+          
+          if [ $? -eq 0 ]; then
+            echo "✓ Warm-up metrics exported"
+            echo ""
+            echo "Preview (first 20 lines):"
+            head -20 "$ROOT/reports/analysis/warmup_metrics.prom"
+          else
+            echo "[WARN] Metrics export failed (non-critical)"
+          fi
+          
+          echo "================================================"
+      
       - name: Upload soak artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -557,6 +597,7 @@ jobs:
             artifacts/soak/latest/reports/
             artifacts/soak/latest/soak/latest/TUNING_REPORT.json
             artifacts/soak/latest/soak/latest/ITER_SUMMARY_*.json
+            artifacts/soak/latest/ITER_SUMMARY_*.json
           if-no-files-found: warn
           retention-days: 30
 
