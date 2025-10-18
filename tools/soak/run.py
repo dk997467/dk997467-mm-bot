@@ -32,6 +32,18 @@ try:
 except ImportError:
     iter_watcher = None
 
+# Import guards for partial freeze and debouncing
+try:
+    from tools.soak.guards import (
+        Debounce,
+        PartialFreezeState,
+        get_guard_recommendation,
+        apply_partial_freeze
+    )
+    GUARDS_AVAILABLE = True
+except ImportError:
+    GUARDS_AVAILABLE = False
+
 
 def calculate_p95(values: List[float]) -> float:
     """Calculate 95th percentile."""
@@ -700,6 +712,50 @@ def apply_tuning_deltas(iter_idx: int, total_iterations: int = None) -> bool:
     # SAFETY: Create backup before modifications (for diff diagnostics)
     backup_overrides = current_overrides.copy()
     
+    # GUARDS: Check for oscillation/latency and apply partial freeze if needed
+    if GUARDS_AVAILABLE:
+        _init_guards()
+        
+        # Get current p95 latency from iteration summary
+        summary = iter_summary.get("summary", {})
+        p95_latency_ms = summary.get("p95_latency_ms", 0.0)
+        
+        # Update delta history (keep last 8)
+        _GUARDS_INSTANCES["delta_history"].append(deltas)
+        if len(_GUARDS_INSTANCES["delta_history"]) > 8:
+            _GUARDS_INSTANCES["delta_history"].pop(0)
+        
+        # Get guard recommendation
+        try:
+            rec = get_guard_recommendation(
+                p95_latency_ms=p95_latency_ms,
+                delta_history=_GUARDS_INSTANCES["delta_history"],
+                freeze_state=_GUARDS_INSTANCES["freeze_state"],
+                debounce_oscillation=_GUARDS_INSTANCES["debounce_osc"],
+                debounce_latency_hard=_GUARDS_INSTANCES["debounce_lat"]
+            )
+            
+            # Apply partial freeze if recommended
+            if rec and rec.get("action") == "partial_freeze":
+                subsystems = rec.get("subsystems", [])
+                reason = rec.get("reason", "guard_triggered")
+                print(f"| guards | PARTIAL_FREEZE | subsystems={subsystems} reason={reason} |")
+                
+                # Apply freeze to deltas dict (filters out frozen params)
+                deltas = apply_partial_freeze(deltas, _GUARDS_INSTANCES["freeze_state"])
+                
+                # If all deltas were frozen, skip apply
+                if not deltas:
+                    print(f"| iter_watch | APPLY_SKIP | reason=all_deltas_frozen_by_guards |")
+                    tuning["applied"] = False
+                    tuning["skipped_reason"] = "all_deltas_frozen_by_guards"
+                    with open(iter_summary_path, 'w', encoding='utf-8') as f:
+                        json.dump(iter_summary, f, indent=2, separators=(',', ':'))
+                    return False
+        
+        except Exception as e:
+            print(f"| guards | WARN | guard_check failed: {e} |")
+    
     # Apply deltas with bounds checking
     applied_changes = {}
     for param, delta in deltas.items():
@@ -822,6 +878,96 @@ def get_default_best_cell_overrides() -> Dict[str, Any]:
     }
 
 
+def load_preset(preset_name: str = None, preset_file: str = None) -> Dict[str, Any]:
+    """
+    Load preset configuration by name or file path.
+    
+    Args:
+        preset_name: Preset name (e.g., 'maker_bias_uplift_v1')
+        preset_file: Direct path to preset JSON file
+    
+    Returns:
+        Preset configuration dict
+    """
+    if preset_file:
+        preset_path = Path(preset_file)
+    elif preset_name:
+        preset_path = Path(__file__).parent / "presets" / f"{preset_name}.json"
+    else:
+        raise ValueError("Either preset_name or preset_file must be provided")
+    
+    if not preset_path.exists():
+        raise FileNotFoundError(f"Preset not found: {preset_path}")
+    
+    with open(preset_path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def apply_preset_to_overrides(
+    overrides: Dict[str, Any],
+    preset: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Apply preset deltas to runtime overrides using deep merge with operations.
+    
+    Operations:
+      - add: dst = (dst or 0) + value
+      - mul: dst = (dst or 1) * value
+    
+    Args:
+        overrides: Current runtime overrides dict
+        preset: Preset configuration with 'changes' section
+    
+    Returns:
+        Updated overrides dict with list of changed keys
+    """
+    changes = preset.get("changes", {})
+    changed_keys = []
+    
+    for section_name, section_changes in changes.items():
+        if section_name not in overrides:
+            overrides[section_name] = {}
+        
+        for param_name, delta_spec in section_changes.items():
+            op = delta_spec.get("op")
+            value = delta_spec.get("value")
+            
+            if op == "add":
+                # Addition: dst = (dst or 0) + value
+                current = overrides[section_name].get(param_name, 0)
+                overrides[section_name][param_name] = current + value
+                changed_keys.append(f"{section_name}.{param_name}")
+            
+            elif op == "mul":
+                # Multiplication: dst = (dst or 1) * value
+                current = overrides[section_name].get(param_name, 1.0)
+                overrides[section_name][param_name] = current * value
+                changed_keys.append(f"{section_name}.{param_name}")
+            
+            else:
+                print(f"[WARN] Unknown operation '{op}' for {section_name}.{param_name}")
+    
+    return overrides
+
+
+# Global guards instances (initialized on first use)
+_GUARDS_INSTANCES = {
+    "debounce_osc": None,
+    "debounce_lat": None,
+    "freeze_state": None,
+    "delta_history": []
+}
+
+
+def _init_guards():
+    """Initialize guards instances if available."""
+    if GUARDS_AVAILABLE and _GUARDS_INSTANCES["debounce_osc"] is None:
+        _GUARDS_INSTANCES["debounce_osc"] = Debounce(open_ms=2500, close_ms=4000)
+        _GUARDS_INSTANCES["debounce_lat"] = Debounce(open_ms=2500, close_ms=4000)
+        _GUARDS_INSTANCES["freeze_state"] = PartialFreezeState()
+        print("| guards | INIT | debounce + partial_freeze ready |")
+
+
 def main(argv=None) -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Soak test runner and reporter")
@@ -834,6 +980,8 @@ def main(argv=None) -> int:
     parser.add_argument("--auto-tune", action="store_true", help="Enable runtime auto-tuning between iterations")
     parser.add_argument("--profile", type=str, choices=["steady_safe"], help="Load predefined baseline profile")
     parser.add_argument("--run-isolated", action="store_true", help="Use RUN_<epoch> isolation (writes to subdirectory, materializes to latest/ at end)")
+    parser.add_argument("--preset", type=str, help="Apply preset tuning configuration (e.g., 'maker_bias_uplift_v1')")
+    parser.add_argument("--preset-file", type=str, help="Apply preset from file path (alternative to --preset)")
     args = parser.parse_args(argv)
     
     # Check for MM_PROFILE env var and load profile
@@ -920,6 +1068,28 @@ def main(argv=None) -> int:
             current_overrides = get_default_best_cell_overrides()
             save_runtime_overrides(current_overrides)
             print(f"| overrides | OK | source=default_best_cell |")
+        
+        # Apply preset if specified
+        if args.preset or args.preset_file:
+            try:
+                preset = load_preset(preset_name=args.preset, preset_file=args.preset_file)
+                preset_name = args.preset or Path(args.preset_file).stem
+                
+                print(f"| preset | LOAD | {preset_name} |")
+                print(f"| preset | target | {preset.get('target_metrics', {})} |")
+                
+                # Apply preset to current overrides
+                current_overrides = apply_preset_to_overrides(current_overrides, preset)
+                
+                # Save updated overrides
+                save_runtime_overrides(current_overrides)
+                
+                print(f"| preset | APPLIED | {preset_name} |")
+                print(f"| preset | desc | {preset.get('description', 'N/A')} |")
+            
+            except Exception as e:
+                print(f"| preset | ERROR | Failed to apply preset: {e} |")
+                return 1
         
         # PROMPT 2: Preview runtime overrides at startup
         print(f"\n{'='*60}")
@@ -1391,11 +1561,33 @@ def main(argv=None) -> int:
             save_runtime_overrides(current_overrides)
             print(f"| overrides | OK | source=env |")
         elif overrides_path.exists():
+            with open(overrides_path, 'r', encoding='utf-8') as f:
+                current_overrides = json.load(f)
             print(f"| overrides | OK | source=file_existing |")
         else:
             current_overrides = get_default_best_cell_overrides()
             save_runtime_overrides(current_overrides)
             print(f"| overrides | OK | source=default_best_cell |")
+        
+        # Apply preset if specified
+        if args.preset or args.preset_file:
+            try:
+                preset = load_preset(preset_name=args.preset, preset_file=args.preset_file)
+                preset_name = args.preset or Path(args.preset_file).stem
+                
+                print(f"| preset | LOAD | {preset_name} |")
+                
+                # Apply preset to current overrides
+                current_overrides = apply_preset_to_overrides(current_overrides, preset)
+                
+                # Save updated overrides
+                save_runtime_overrides(current_overrides)
+                
+                print(f"| preset | APPLIED | {preset_name} |")
+            
+            except Exception as e:
+                print(f"| preset | ERROR | Failed to apply preset: {e} |")
+                return 1
         
         # Reload sentinel with overrides
         if sentinel:
