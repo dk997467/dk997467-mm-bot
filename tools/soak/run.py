@@ -833,6 +833,7 @@ def main(argv=None) -> int:
     parser.add_argument("--mock", action="store_true", help="Use mock data for testing")
     parser.add_argument("--auto-tune", action="store_true", help="Enable runtime auto-tuning between iterations")
     parser.add_argument("--profile", type=str, choices=["steady_safe"], help="Load predefined baseline profile")
+    parser.add_argument("--run-isolated", action="store_true", help="Use RUN_<epoch> isolation (writes to subdirectory, materializes to latest/ at end)")
     args = parser.parse_args(argv)
     
     # Check for MM_PROFILE env var and load profile
@@ -860,11 +861,24 @@ def main(argv=None) -> int:
         # SMOKE FIX 1: Clean artifacts/soak/latest to prevent accumulation of old TUNING_REPORT
         # This ensures TUNING_REPORT.json starts fresh for each smoke run
         latest_dir = Path("artifacts/soak/latest")
-        if latest_dir.exists():
-            import shutil
-            print(f"[INFO] Cleaning artifacts/soak/latest (prevents stale TUNING_REPORT accumulation)")
-            shutil.rmtree(latest_dir)
-        latest_dir.mkdir(parents=True, exist_ok=True)
+        
+        # RUN_<epoch> isolation (optional)
+        if args.run_isolated:
+            import time as time_module
+            epoch_ms = int(time_module.time() * 1000)
+            run_dir = latest_dir / f"RUN_{epoch_ms}"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[INFO] --run-isolated: using {run_dir}")
+            # Actual working directory for this run
+            work_dir = run_dir
+        else:
+            # Standard mode: clean and use latest/ directly
+            if latest_dir.exists():
+                import shutil
+                print(f"[INFO] Cleaning artifacts/soak/latest (prevents stale TUNING_REPORT accumulation)")
+                shutil.rmtree(latest_dir)
+            latest_dir.mkdir(parents=True, exist_ok=True)
+            work_dir = latest_dir
         
         # Initialize runtime overrides from best cell if not already present
         overrides_path = Path("artifacts/soak/runtime_overrides.json")
@@ -1436,6 +1450,37 @@ def main(argv=None) -> int:
     print(f"Hit Ratio: {metrics['mm_hit_ratio']:.2%}")
     print(f"Edge BPS: {metrics['mm_edge_bps_ema24h']:.2f}")
     print(f"{'='*60}\n")
+    
+    # RUN_<epoch> materialization: copy key files back to latest/ for test compatibility
+    if args.iterations and args.run_isolated:
+        import shutil
+        import glob
+        
+        print(f"[INFO] --run-isolated: materializing artifacts to latest/")
+        
+        # work_dir is RUN_<epoch>, latest_dir is artifacts/soak/latest
+        # Copy TUNING_REPORT.json and ITER_SUMMARY_*.json to latest/ for backward compatibility
+        
+        # Create soak/latest/ structure in parent
+        target_soak_latest = latest_dir / "soak" / "latest"
+        target_soak_latest.mkdir(parents=True, exist_ok=True)
+        
+        # Find files in work_dir
+        source_soak_latest = work_dir / "soak" / "latest"
+        
+        if source_soak_latest.exists():
+            # Copy TUNING_REPORT.json
+            tuning_report_src = source_soak_latest / "TUNING_REPORT.json"
+            if tuning_report_src.exists():
+                shutil.copy2(tuning_report_src, target_soak_latest / "TUNING_REPORT.json")
+                print(f"  Copied: TUNING_REPORT.json")
+            
+            # Copy ITER_SUMMARY_*.json
+            for iter_summary in source_soak_latest.glob("ITER_SUMMARY_*.json"):
+                shutil.copy2(iter_summary, target_soak_latest / iter_summary.name)
+                print(f"  Copied: {iter_summary.name}")
+        
+        print(f"[OK] Materialization complete")
     
     return 0 if overall_pass else 1
 
