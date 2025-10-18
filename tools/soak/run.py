@@ -1513,13 +1513,54 @@ def main(argv=None) -> int:
                             except Exception as e:
                                 print(f"[WARN] Could not check KPI gate: {e}")
                         
+                        # Apply micro-steps filter to tuning deltas if warmup manager is active
+                        if warmup_manager and iter_watcher:
+                            tuning_report_path = output_dir / "TUNING_REPORT.json"
+                            if tuning_report_path.exists():
+                                try:
+                                    with open(tuning_report_path, 'r', encoding='utf-8') as f:
+                                        tuning_report = json.load(f)
+                                    
+                                    # Get current iteration's tuning entry
+                                    iterations = tuning_report.get("iterations", [])
+                                    if iterations and len(iterations) >= iter_num:
+                                        current_iter = iterations[iter_num - 1]
+                                        proposed_deltas = current_iter.get("proposed_deltas", {})
+                                        
+                                        if proposed_deltas and current_iter.get("applied", False):
+                                            # Filter deltas with micro-steps discipline
+                                            filtered_deltas, skip_reason = warmup_manager.filter_tuner_deltas(
+                                                proposed_deltas, iter_num, max_keys=2
+                                            )
+                                            
+                                            # Update tuning report with filtered deltas
+                                            if skip_reason:
+                                                current_iter["applied"] = False
+                                                current_iter["skip_reason"] = skip_reason
+                                                current_iter["proposed_deltas"] = {}
+                                                current_iter["changed_keys"] = []
+                                                print(f"[WARMUP] Micro-steps filter: {skip_reason}")
+                                            
+                                            elif len(filtered_deltas) < len(proposed_deltas):
+                                                dropped = set(proposed_deltas.keys()) - set(filtered_deltas.keys())
+                                                current_iter["proposed_deltas"] = filtered_deltas
+                                                current_iter["changed_keys"] = list(filtered_deltas.keys())
+                                                print(f"[WARMUP] Micro-steps filter: kept {len(filtered_deltas)}/{len(proposed_deltas)} keys (dropped: {dropped})")
+                                            
+                                            # Save updated tuning report
+                                            with open(tuning_report_path, 'w', encoding='utf-8') as f:
+                                                json.dump(tuning_report, f, indent=2)
+                                
+                                except Exception as e:
+                                    print(f"[WARMUP] WARN: Failed to apply micro-steps filter: {e}")
+                    
                     except Exception as e:
                         print(f"[WARN] iter_watcher failed: {e}")
                 
                 # Update overrides for next iteration (this is now overridden by live-apply above)
                 # Keep this line for backwards compatibility if iter_watcher is disabled
                 if not iter_watcher:
-                    current_overrides = new_overrides
+                current_overrides = new_overrides
                 
                 # RISK-AWARE: Track completed iterations
                 iter_done += 1
