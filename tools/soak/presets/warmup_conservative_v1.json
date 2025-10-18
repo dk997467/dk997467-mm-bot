@@ -1,0 +1,81 @@
+{
+  "description": "Warm-up conservative v1: Safe start for first 4 iterations to prevent red failures",
+  "version": "1.0",
+  "phase": "warmup",
+  "iterations": "1-4",
+  "target_metrics": {
+    "status": "WARN max (not FAIL)",
+    "risk_max": "<= 0.50",
+    "net_bps_min": ">= 1.0",
+    "p95_latency_max": "<= 350"
+  },
+  "changes": {
+    "quoting": {
+      "base_spread_bps_delta": {
+        "op": "add",
+        "value": 0.03,
+        "reason": "Wider spread on warmup for safety (+30% vs normal)"
+      },
+      "min_interval_ms": {
+        "op": "add",
+        "value": 25,
+        "reason": "Slower rebids to reduce early churn (+25ms)"
+      },
+      "replace_rate_per_min": {
+        "op": "mul",
+        "value": 0.75,
+        "reason": "25% reduction in replacement rate"
+      }
+    },
+    "impact": {
+      "impact_cap_ratio": {
+        "op": "mul",
+        "value": 0.85,
+        "reason": "15% more conservative impact estimation"
+      },
+      "max_delta_ratio": {
+        "op": "mul",
+        "value": 0.85,
+        "reason": "15% smaller position deltas for stability"
+      }
+    },
+    "engine": {
+      "tail_age_ms": {
+        "op": "add",
+        "value": 100,
+        "reason": "Heavier tail (+100ms) to reduce early cancels"
+      }
+    },
+    "taker_rescue": {
+      "rescue_max_ratio": {
+        "op": "mul",
+        "value": 0.70,
+        "reason": "30% reduction in taker rescue (very conservative)"
+      },
+      "min_edge_bps": {
+        "op": "add",
+        "value": 0.8,
+        "reason": "Higher threshold for taker entry (+0.8 bps)"
+      },
+      "cooldown_ms": {
+        "op": "add",
+        "value": 400,
+        "reason": "Much longer cooldown between rescues (+400ms)"
+      }
+    },
+    "risk": {
+      "position_limit_notional": {
+        "op": "mul",
+        "value": 0.80,
+        "reason": "20% smaller position limit on warmup"
+      }
+    }
+  },
+  "rampdown": {
+    "start_iteration": 5,
+    "steps": 2,
+    "description": "Gradual return to baseline over 2 iterations (5-6)",
+    "strategy": "linear_interpolation"
+  }
+}
+

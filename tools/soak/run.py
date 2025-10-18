@@ -44,6 +44,13 @@ try:
 except ImportError:
     GUARDS_AVAILABLE = False
 
+# Import warmup manager for warm-up/ramp-down logic
+try:
+    from tools.soak.warmup_manager import WarmupManager
+    WARMUP_AVAILABLE = True
+except ImportError:
+    WARMUP_AVAILABLE = False
+
 
 def calculate_p95(values: List[float]) -> float:
     """Calculate 95th percentile."""
@@ -982,6 +989,8 @@ def main(argv=None) -> int:
     parser.add_argument("--run-isolated", action="store_true", help="Use RUN_<epoch> isolation (writes to subdirectory, materializes to latest/ at end)")
     parser.add_argument("--preset", type=str, help="Apply preset tuning configuration (e.g., 'maker_bias_uplift_v1')")
     parser.add_argument("--preset-file", type=str, help="Apply preset from file path (alternative to --preset)")
+    parser.add_argument("--warmup", action="store_true", help="Enable warm-up/ramp-down mode for first 4-6 iterations (prevents red start)")
+    parser.add_argument("--warmup-preset", type=str, default="warmup_conservative_v1", help="Warm-up preset name (default: warmup_conservative_v1)")
     args = parser.parse_args(argv)
     
     # Check for MM_PROFILE env var and load profile
