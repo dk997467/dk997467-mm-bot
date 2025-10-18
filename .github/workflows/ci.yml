@@ -494,45 +494,56 @@ jobs:
           fi
           
           python - <<'PY'
-          import json
+          import json, sys
           from pathlib import Path
           
-          snap = Path("artifacts/soak/latest/reports/analysis/POST_SOAK_SNAPSHOT.json")
-          s = json.loads(snap.read_text())
+          def fmt(x, spec):
+              """Safe formatter that handles None/NaN gracefully."""
+              try:
+                  return format(float(x), spec) if x is not None else "n/a"
+              except Exception:
+                  return "n/a"
           
-          kpi = s.get("kpi_last_n", {})
+          try:
+              snap = Path("artifacts/soak/latest/reports/analysis/POST_SOAK_SNAPSHOT.json")
+              s = json.loads(snap.read_text())
+              
+              kpi = s.get("kpi_last_n", {})
+              
+              # Extract metrics
+              mt = kpi.get("maker_taker_ratio", {}).get("median")
+              p95 = kpi.get("p95_latency_ms", {}).get("max")
+              risk = kpi.get("risk_ratio", {}).get("median")
+              bps = kpi.get("net_bps", {}).get("median")
+              
+              def notice(msg): print(f"::notice::{msg}")
+              def warn(msg):   print(f"::warning::{msg}")
+              
+              print("Last-8 KPI Metrics:")
+              print(f"  Maker/Taker median: {fmt(mt, '.3f')}")
+              print(f"  P95 Latency max: {fmt(p95, '.0f')}ms")
+              print(f"  Risk median: {fmt(risk, '.3f')}")
+              print(f"  Net BPS median: {fmt(bps, '.2f')}")
+              print()
+              
+              # PR thresholds -> informational only (no exit 1)
+              if mt is not None and mt < 0.83:
+                  warn(f"Maker/taker below PR target: {mt:.3f} < 0.83")
+              if p95 is not None and p95 > 340:
+                  warn(f"P95 latency above PR target: {p95:.0f}ms > 340ms")
+              if risk is not None and risk > 0.40:
+                  warn(f"Risk above PR target: {risk:.3f} > 0.40")
+              if bps is not None and bps < 2.5:
+                  warn(f"Net BPS below PR target: {bps:.2f} < 2.5")
+              
+              print()
+              print("✓ KPI check complete (informational only)")
           
-          # Extract metrics
-          mt = kpi.get("maker_taker_ratio", {}).get("median")
-          p95 = kpi.get("p95_latency_ms", {}).get("max")
-          risk = kpi.get("risk_ratio", {}).get("median")
-          bps = kpi.get("net_bps", {}).get("median")
+          except Exception as e:
+              print(f"::warning::KPI check parse error: {e}")
           
-          def notice(msg): print(f"::notice::{msg}")
-          def warn(msg):   print(f"::warning::{msg}")
-          
-          print("Last-8 KPI Metrics:")
-          print(f"  Maker/Taker median: {mt:.3f}" if mt else "  Maker/Taker: N/A")
-          print(f"  P95 Latency max: {p95:.0f}ms" if p95 else "  P95 Latency: N/A")
-          print(f"  Risk median: {risk:.3f}" if risk else "  Risk: N/A")
-          print(f"  Net BPS median: {bps:.2f}" if bps else "  Net BPS: N/A")
-          print()
-          
-          notice(f"Last-8 KPI: maker_taker_median={mt:.3f if mt else 0}, p95_max={p95:.0f if p95 else 0}, risk_median={risk:.3f if risk else 0}, net_bps_median={bps:.2f if bps else 0}")
-          
-          # PR thresholds -> informational only (no exit 1)
-          if mt is not None and mt < 0.83:
-              warn(f"Maker/taker below PR target: {mt:.3f} < 0.83")
-          if p95 is not None and p95 > 340:
-              warn(f"P95 latency above PR target: {p95:.0f}ms > 340ms")
-          if risk is not None and risk > 0.40:
-              warn(f"Risk above PR target: {risk:.3f} > 0.40")
-          if bps is not None and bps < 2.5:
-              warn(f"Net BPS below PR target: {bps:.2f} < 2.5")
-          
-          print()
-          print("✓ KPI check complete (informational only)")
           # Never fail PR on this step
+          sys.exit(0)
           PY
           
           echo "================================================"
