@@ -158,7 +158,7 @@ class TestSoakSmoke:
         assert net_bps > -10, f"Net BPS too negative: {net_bps:.2f} < -10"
         assert maker_taker >= 0.5, f"Maker/Taker ratio too low: {maker_taker:.2%} < 50%"
         
-        print("\n✅ All sanity KPI checks passed")
+        print("\n[OK] All sanity KPI checks passed")
     
     def test_smoke_config_manager_integration(self):
         """
@@ -199,7 +199,7 @@ class TestSoakSmoke:
         sources_cli = overrides_with_cli.get("_sources", {})
         assert sources_cli["min_interval_ms"] == "cli"
         
-        print("\n✅ ConfigManager integration validated")
+        print("\n[OK] ConfigManager integration validated")
     
     def test_smoke_live_apply_executed(self):
         """
@@ -260,7 +260,7 @@ class TestSoakSmoke:
             if tuning["applied"]:
                 assert tuning["state_hash"] is not None, f"ITER_SUMMARY_{i}: state_hash missing when applied=true"
             
-            print(f"✓ ITER_SUMMARY_{i}: applied={tuning['applied']}, changed_keys={tuning['changed_keys']}")
+            print(f"[OK] ITER_SUMMARY_{i}: applied={tuning['applied']}, changed_keys={tuning['changed_keys']}")
         
         # Check TUNING_REPORT for parity
         tuning_report = latest_dir / "TUNING_REPORT.json"
@@ -284,9 +284,9 @@ class TestSoakSmoke:
             # Signature should always be present (even if "na")
             assert iteration["signature"] is not None, f"TUNING_REPORT[{iter_idx}]: signature is None"
             
-            print(f"✓ TUNING_REPORT[{iter_idx}]: applied={iteration['applied']}, changed_keys={iteration['changed_keys']}")
+            print(f"[OK] TUNING_REPORT[{iter_idx}]: applied={iteration['applied']}, changed_keys={iteration['changed_keys']}")
         
-        print(f"\n✅ Live-apply executed with full tracking for {len(tuning_data['iterations'])} iterations")
+        print(f"\n[OK] Live-apply executed with full tracking for {len(tuning_data['iterations'])} iterations")
     
     def test_smoke_new_fields_present(self):
         """
@@ -343,9 +343,9 @@ class TestSoakSmoke:
             valid_sources = {"fills_volume", "fills_count", "weekly_rollup", "mock_default", "internal_fills", "existing", "fallback"}
             assert maker_taker_source in valid_sources, f"ITER_SUMMARY_{i}: maker_taker_source={maker_taker_source} not in {valid_sources}"
             
-            print(f"✓ ITER_SUMMARY_{i}: p95_latency={p95_latency:.1f}ms, maker_taker={maker_taker_ratio:.2%} (source={maker_taker_source})")
+            print(f"[OK] ITER_SUMMARY_{i}: p95_latency={p95_latency:.1f}ms, maker_taker={maker_taker_ratio:.2%} (source={maker_taker_source})")
         
-        print(f"\n✅ All new fields present and valid for 3 iterations")
+        print(f"\n[OK] All new fields present and valid for 3 iterations")
     
     def test_smoke_runtime_lt_2_minutes(self, benchmark=None):
         """
@@ -382,7 +382,7 @@ class TestSoakSmoke:
         assert result.returncode == 0
         assert duration < 120, f"Test too slow: {duration:.1f}s > 120s"
         
-        print(f"✅ Completed in {duration:.1f}s (within 2-minute limit)")
+        print(f"[OK] Completed in {duration:.1f}s (within 2-minute limit)")
 
 
 @pytest.mark.smoke
@@ -400,7 +400,7 @@ class TestSoakSmokeMarked:
         assert len(profiles) >= 3
         assert "steady_safe" in profiles
         
-        print("\n✅ Quick sanity passed")
+        print("\n[OK] Quick sanity passed")
 
 
 if __name__ == "__main__":
