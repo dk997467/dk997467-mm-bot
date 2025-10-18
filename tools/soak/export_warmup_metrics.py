@@ -10,7 +10,50 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Set, Union
+
+
+def skip_tags(skip_reason: Union[str, dict, list, None]) -> Set[str]:
+    """
+    Normalize skip_reason into a set of lowercase tags.
+    
+    Handles various formats:
+    - str: "velocity_guard" -> {"velocity_guard"}
+    - dict: {"velocity": True, "micro_steps_limit": True} -> {"velocity", "micro_steps_limit"}
+    - list: ["velocity", "cooldown"] -> {"velocity", "cooldown"}
+    - None: -> set()
+    
+    For dict values:
+    - If value is True: include key as tag
+    - If value is str/list: recursively extract tags
+    - If value is False/None: skip
+    """
+    if skip_reason is None:
+        return set()
+    
+    if isinstance(skip_reason, str):
+        return {skip_reason.lower()}
+    
+    if isinstance(skip_reason, list):
+        tags = set()
+        for item in skip_reason:
+            tags.update(skip_tags(item))
+        return tags
+    
+    if isinstance(skip_reason, dict):
+        tags = set()
+        for key, value in skip_reason.items():
+            if value is True:
+                # Key with True value -> add as tag
+                tags.add(key.lower())
+            elif value and not isinstance(value, bool):
+                # Non-empty, non-bool value -> recursively extract
+                tags.add(key.lower())
+                tags.update(skip_tags(value))
+        return tags
+    
+    # Unknown type -> return empty set (fail-safe)
+    return set()
 
 
 def load_iter_summaries(soak_dir: Path) -> List[Dict[str, Any]]:
@@ -52,6 +95,11 @@ def export_warmup_metrics(summaries: List[Dict[str, Any]], tuning: Dict[str, Any
     lines = []
     
     # Metadata
+    lines.append("# HELP warmup_exporter_error Whether exporter encountered an error (0=OK, 1=error)")
+    lines.append("# TYPE warmup_exporter_error gauge")
+    lines.append("warmup_exporter_error 0")
+    lines.append("")
+    
     lines.append("# HELP warmup_active Whether warm-up phase is currently active (1=yes, 0=no)")
     lines.append("# TYPE warmup_active gauge")
     
@@ -115,20 +163,22 @@ def export_warmup_metrics(summaries: List[Dict[str, Any]], tuning: Dict[str, Any
     }
     
     for iter_entry in tuning_iters:
-        skip_reason = iter_entry.get("skip_reason", "")
+        skip_reason = iter_entry.get("skip_reason", None)
+        tags = skip_tags(skip_reason)
         
-        if "velocity" in skip_reason.lower():
+        # Check tags for guard types (fail-safe with tag membership)
+        if "velocity" in tags or "velocity_guard" in tags:
             guard_counts["velocity"] += 1
-        elif "latency" in skip_reason.lower():
-            if "hard" in skip_reason.lower():
+        elif "latency" in tags or "latency_guard" in tags:
+            if "hard" in tags or "latency_hard" in tags:
                 guard_counts["latency_hard"] += 1
             else:
                 guard_counts["latency_soft"] += 1
-        elif "oscillation" in skip_reason.lower():
+        elif "oscillation" in tags or "oscillation_guard" in tags:
             guard_counts["oscillation"] += 1
-        elif "freeze" in skip_reason.lower():
+        elif "freeze" in tags or "partial_freeze" in tags:
             guard_counts["freeze"] += 1
-        elif "cooldown" in skip_reason.lower():
+        elif "cooldown" in tags:
             guard_counts["cooldown"] += 1
     
     for guard_type, count in guard_counts.items():
@@ -181,30 +231,70 @@ def main():
     
     args = parser.parse_args()
     
-    if not args.path.exists():
-        print(f"[ERROR] Soak directory not found: {args.path}", file=sys.stderr)
-        sys.exit(1)
-    
-    print(f"[INFO] Loading summaries from: {args.path}")
-    summaries = load_iter_summaries(args.path)
-    
-    if not summaries:
-        print("[ERROR] No ITER_SUMMARY files found", file=sys.stderr)
-        sys.exit(1)
-    
-    print(f"[INFO] Loaded {len(summaries)} iteration summaries")
-    
-    print(f"[INFO] Loading tuning report...")
-    tuning = load_tuning_report(args.path)
-    
-    print(f"[INFO] Exporting metrics to: {args.output}")
-    metrics_text = export_warmup_metrics(summaries, tuning)
-    
+    # Fail-safe: always write output (even if error)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(metrics_text, encoding='utf-8')
     
-    print(f"[OK] Metrics exported successfully")
-    print(f"[OK] Total lines: {len(metrics_text.splitlines())}")
+    try:
+        if not args.path.exists():
+            print(f"[ERROR] Soak directory not found: {args.path}", file=sys.stderr)
+            # Write minimal error metric
+            error_metrics = (
+                "# HELP warmup_exporter_error Whether exporter encountered an error (0=OK, 1=error)\n"
+                "# TYPE warmup_exporter_error gauge\n"
+                "warmup_exporter_error 1\n"
+            )
+            args.output.write_text(error_metrics, encoding='utf-8')
+            print(f"[WARN] Wrote error metric to: {args.output}")
+            sys.exit(0)  # Non-blocking in CI
+        
+        print(f"[INFO] Loading summaries from: {args.path}")
+        summaries = load_iter_summaries(args.path)
+        
+        if not summaries:
+            print("[WARN] No ITER_SUMMARY files found, writing minimal metrics", file=sys.stderr)
+            # Write minimal metric (no error, just no data)
+            minimal_metrics = (
+                "# HELP warmup_exporter_error Whether exporter encountered an error (0=OK, 1=error)\n"
+                "# TYPE warmup_exporter_error gauge\n"
+                "warmup_exporter_error 0\n"
+                "# No iteration data available\n"
+            )
+            args.output.write_text(minimal_metrics, encoding='utf-8')
+            print(f"[WARN] Wrote minimal metrics to: {args.output}")
+            sys.exit(0)  # Non-blocking in CI
+        
+        print(f"[INFO] Loaded {len(summaries)} iteration summaries")
+        
+        print(f"[INFO] Loading tuning report...")
+        tuning = load_tuning_report(args.path)
+        
+        print(f"[INFO] Exporting metrics to: {args.output}")
+        metrics_text = export_warmup_metrics(summaries, tuning)
+        
+        args.output.write_text(metrics_text, encoding='utf-8')
+        
+        print(f"[OK] Metrics exported successfully")
+        print(f"[OK] Total lines: {len(metrics_text.splitlines())}")
+    
+    except Exception as e:
+        # Fail-safe: log error and write error metric
+        print(f"[ERROR] Exporter crashed: {e}", file=sys.stderr)
+        print(f"[ERROR] Traceback:", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        
+        # Write error metric
+        error_metrics = (
+            "# HELP warmup_exporter_error Whether exporter encountered an error (0=OK, 1=error)\n"
+            "# TYPE warmup_exporter_error gauge\n"
+            "warmup_exporter_error 1\n"
+            f"# Error: {str(e)[:100]}\n"
+        )
+        args.output.write_text(error_metrics, encoding='utf-8')
+        print(f"[WARN] Wrote error metric to: {args.output}")
+        
+        # Exit 0 (non-blocking) so CI can continue
+        sys.exit(0)
 
 
 if __name__ == "__main__":
