@@ -215,9 +215,8 @@ rm -rf artifacts/soak/latest
 # Run 8-iteration soak with auto-tuning
 python -m tools.soak.run \
   --iterations 8 \
-  --artifact-root artifacts/soak/latest \
-  --auto-tune \
-  --mock
+  --mock \
+  --auto-tune
 
 # Verify deltas
 python -m tools.soak.verify_deltas_applied \
@@ -249,9 +248,8 @@ rm -rf artifacts/soak/latest
 # Run with isolation
 python -m tools.soak.run \
   --iterations 8 \
-  --artifact-root artifacts/soak/latest \
-  --auto-tune \
   --mock \
+  --auto-tune \
   --run-isolated
 
 # Check isolated directory was created

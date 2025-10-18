@@ -105,9 +105,8 @@ class SanityChecker:
         cmd = [
             self.python_exe, "-m", "tools.soak.run",
             "--iterations", str(self.smoke_iters),
-            "--artifact-root", str(self.src_dir),
-            "--auto-tune",
-            "--mock"
+            "--mock",
+            "--auto-tune"
         ]
         
         success, stdout, stderr = self.run_subprocess(cmd, section)
@@ -195,9 +194,8 @@ class SanityChecker:
         cmd = [
             self.python_exe, "-m", "tools.soak.run",
             "--iterations", str(self.post_iters),
-            "--artifact-root", str(self.src_dir),
-            "--auto-tune",
-            "--mock"
+            "--mock",
+            "--auto-tune"
         ]
         
         success, stdout, stderr = self.run_subprocess(cmd, section)
@@ -335,9 +333,8 @@ class SanityChecker:
         cmd = [
             self.python_exe, "-m", "tools.soak.run",
             "--iterations", str(self.post_iters),
-            "--artifact-root", str(self.src_dir),
-            "--auto-tune",
             "--mock",
+            "--auto-tune",
             "--run-isolated"
         ]
         

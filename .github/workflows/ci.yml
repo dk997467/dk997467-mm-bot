@@ -342,9 +342,8 @@ jobs:
           
           python -m tools.soak.run \
             --iterations 8 \
-            --artifact-root artifacts/soak/latest \
-            --auto-tune \
-            --mock
+            --mock \
+            --auto-tune
           
           if [ $? -ne 0 ]; then
             echo "❌ Soak run failed"
