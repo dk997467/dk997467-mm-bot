@@ -1100,6 +1100,30 @@ def main(argv=None) -> int:
                 print(f"| preset | ERROR | Failed to apply preset: {e} |")
                 return 1
         
+        # Initialize WarmupManager if --warmup flag is set
+        warmup_manager = None
+        if args.warmup and WARMUP_AVAILABLE:
+            try:
+                warmup_manager = WarmupManager(
+                    warmup_preset_name=args.warmup_preset,
+                    warmup_iterations=4,
+                    rampdown_steps=2
+                )
+                print(f"\n{'='*60}")
+                print(f"[WARMUP] Manager initialized")
+                print(f"[WARMUP] Preset: {args.warmup_preset}")
+                print(f"[WARMUP] Warmup iterations: 1-4")
+                print(f"[WARMUP] Ramp-down: iterations 5-6")
+                print(f"[WARMUP] Steady: iterations 7+")
+                print(f"{'='*60}\n")
+            except Exception as e:
+                print(f"[WARMUP] ERROR: Failed to initialize: {e}")
+                print(f"[WARMUP] Continuing without warmup...")
+                warmup_manager = None
+        elif args.warmup and not WARMUP_AVAILABLE:
+            print(f"[WARMUP] WARNING: --warmup flag set but WarmupManager not available")
+            print(f"[WARMUP] Install warmup_manager.py or check imports")
+        
         # PROMPT 2: Preview runtime overrides at startup
         print(f"\n{'='*60}")
         print(f"RUNTIME OVERRIDES (startup preview)")
@@ -1125,9 +1149,33 @@ def main(argv=None) -> int:
         
         # Iterate with auto-tuning
         for iteration in range(args.iterations):
+            iter_num = iteration + 1  # 1-indexed for display
+            
             print(f"\n{'='*60}")
-            print(f"[ITER {iteration + 1}/{args.iterations}] Starting iteration")
+            print(f"[ITER {iter_num}/{args.iterations}] Starting iteration")
             print(f"{'='*60}")
+            
+            # Apply warmup/rampdown adjustments if manager is active
+            warmup_phase = None
+            warmup_active = False
+            rampdown_active = False
+            
+            if warmup_manager:
+                # Log phase transition if needed
+                warmup_manager.log_phase_transition(iter_num)
+                
+                # Get phase info
+                warmup_phase = warmup_manager.get_phase_name(iter_num)
+                warmup_active = warmup_manager.is_warmup_phase(iter_num)
+                rampdown_active = warmup_manager.is_rampdown_phase(iter_num)
+                
+                # Apply warmup overrides to current_overrides
+                current_overrides = warmup_manager.apply_warmup_overrides(
+                    current_overrides, iter_num
+                )
+                
+                print(f"[WARMUP] Phase: {warmup_phase}")
+                print(f"[WARMUP] KPI Gate: {warmup_manager.get_kpi_gate_mode(iter_num)} mode")
             
             # Save current overrides for this iteration
             if current_overrides:
@@ -1387,9 +1435,32 @@ def main(argv=None) -> int:
                             with open(overrides_path_reload, 'r', encoding='utf-8') as f:
                                 current_overrides = json.load(f)
                         
+                        # Enrich ITER_SUMMARY with warmup metadata
+                        iter_summary_path = output_dir / f"ITER_SUMMARY_{iter_num}.json"
+                        if iter_summary_path.exists() and warmup_manager:
+                            try:
+                                with open(iter_summary_path, 'r', encoding='utf-8') as f:
+                                    iter_summary_data = json.load(f)
+                                
+                                # Add warmup metadata to summary
+                                iter_summary_data["summary"]["phase"] = warmup_phase
+                                iter_summary_data["summary"]["warmup_active"] = 1 if warmup_active else 0
+                                iter_summary_data["summary"]["warmup_iter_idx"] = iter_num if warmup_active else 0
+                                iter_summary_data["summary"]["rampdown_active"] = 1 if rampdown_active else 0
+                                
+                                # Save updated summary
+                                with open(iter_summary_path, 'w', encoding='utf-8') as f:
+                                    json.dump(iter_summary_data, f, indent=2)
+                                
+                                print(f"[WARMUP] Enriched ITER_SUMMARY_{iter_num} with phase metadata")
+                            
+                            except Exception as e:
+                                print(f"[WARMUP] WARN: Failed to enrich ITER_SUMMARY: {e}")
+                        
                         # PROMPT 7: SOFT KPI GATE for risk_ratio, adverse_p95, net_bps
                         # WARN: risk > 0.40 OR adverse_p95 > 3.0
                         # FAIL: risk > 0.50 OR net_bps < 2.0
+                        # WARMUP: FAIL -> WARN (no hard failures during warmup)
                         iter_summary_path = output_dir / f"ITER_SUMMARY_{iteration + 1}.json"
                         if iter_summary_path.exists():
                             try:
@@ -1401,8 +1472,12 @@ def main(argv=None) -> int:
                                 adverse_p95 = summary.get("adverse_bps_p95", 0.0)
                                 slippage_p95 = summary.get("slippage_bps_p95", 0.0)  # FIX 5: Add slippage
                                 net_bps = summary.get("net_bps", 0.0)
+                                p95_latency = summary.get("p95_latency_ms", 0.0)
                                 
-                                # Check FAIL conditions (most severe)
+                                # Get KPI gate mode from warmup manager
+                                gate_mode = warmup_manager.get_kpi_gate_mode(iter_num) if warmup_manager else "NORMAL"
+                                
+                                # Check FAIL conditions (most severe, but downgraded to WARN in warmup)
                                 fail_reasons = []
                                 if risk_ratio > 0.50:
                                     fail_reasons.append(f"risk={risk_ratio:.2%}>50%")
@@ -1415,16 +1490,25 @@ def main(argv=None) -> int:
                                     warn_reasons.append(f"risk={risk_ratio:.2%}>40%")
                                 if adverse_p95 > 3.0:
                                     warn_reasons.append(f"adverse_p95={adverse_p95:.2f}>3.0")
+                                if gate_mode == "WARN" and p95_latency > 350:
+                                    warn_reasons.append(f"p95={p95_latency:.0f}ms>350ms")
+                                
+                                # In WARN mode (warmup), downgrade FAIL to WARN
+                                if gate_mode == "WARN" and fail_reasons:
+                                    warn_reasons.extend(fail_reasons)
+                                    fail_reasons = []
                                 
                                 # FIX 5: Always print summary line with all metrics
                                 status = "FAIL" if fail_reasons else ("WARN" if warn_reasons else "OK")
                                 # POLISH: Risk rounded to 1 decimal place
-                                print(f"| kpi_gate | status={status} | net={net_bps:.2f} risk={risk_ratio:.1%} adv_p95={adverse_p95:.2f} sl_p95={slippage_p95:.2f} |")
+                                gate_label = f"{status}({gate_mode})" if gate_mode == "WARN" else status
+                                print(f"| kpi_gate | status={gate_label} | net={net_bps:.2f} risk={risk_ratio:.1%} adv_p95={adverse_p95:.2f} sl_p95={slippage_p95:.2f} p95={p95_latency:.0f}ms |")
                                 
                                 if fail_reasons:
                                     print(f"[ERROR] KPI gate failed - {', '.join(fail_reasons)}")
                                 elif warn_reasons:
-                                    print(f"[WARN] KPI gate warning - {', '.join(warn_reasons)}")
+                                    mode_note = " (warmup mode)" if gate_mode == "WARN" else ""
+                                    print(f"[WARN] KPI gate warning{mode_note} - {', '.join(warn_reasons)}")
                             
                             except Exception as e:
                                 print(f"[WARN] Could not check KPI gate: {e}")
