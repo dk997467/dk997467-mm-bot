@@ -205,7 +205,19 @@ class SanityChecker:
             return False, {"status": "FAIL", "reason": "run_failed"}
         
         # Run delta verification
-        soak_latest = self.src_dir / "soak" / "latest"
+        # Auto-detect where ITER_SUMMARY_* files are located
+        if list(self.src_dir.glob("ITER_SUMMARY_*.json")):
+            # Files are in root
+            target_path = self.src_dir
+            self.log(section, f"Auto-detected ITER_SUMMARY in root: {target_path}")
+        elif list((self.src_dir / "soak" / "latest").glob("ITER_SUMMARY_*.json")):
+            # Files are in soak/latest subdirectory
+            target_path = self.src_dir / "soak" / "latest"
+            self.log(section, f"Auto-detected ITER_SUMMARY in soak/latest: {target_path}")
+        else:
+            self.log(section, "ITER_SUMMARY_* files not found in expected locations", "ERROR")
+            return False, {"status": "FAIL", "reason": "iter_summary_not_found"}
+        
         reports_dir = self.src_dir / "reports" / "analysis"
         reports_dir.mkdir(parents=True, exist_ok=True)
         
@@ -213,7 +225,7 @@ class SanityChecker:
         
         cmd = [
             self.python_exe, "-m", "tools.soak.verify_deltas_applied",
-            "--path", str(soak_latest),
+            "--path", str(target_path),
             "--strict",
             "--json"
         ]

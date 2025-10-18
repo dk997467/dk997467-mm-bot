@@ -363,34 +363,40 @@ jobs:
           
           mkdir -p artifacts/soak/latest/reports/analysis
           
+          # Auto-detect where ITER_SUMMARY_* live
+          ROOT="artifacts/soak/latest"
+          if compgen -G "$ROOT/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT"
+          elif compgen -G "$ROOT/soak/latest/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT/soak/latest"
+          else
+            echo "Error: ITER_SUMMARY_* not found under $ROOT"
+            ls -lah "$ROOT" || true
+            exit 1
+          fi
+          echo "Using TARGET=$TARGET"
+          
           python -m tools.soak.verify_deltas_applied \
-            --path artifacts/soak/latest/soak/latest \
+            --path "$TARGET" \
             --strict \
             --json \
-            > artifacts/soak/latest/reports/analysis/DELTA_VERIFY_REPORT.json
+            > "$ROOT/reports/analysis/DELTA_VERIFY_REPORT.json"
           
           EXIT_CODE=$?
           
-          # Extract full_apply_ratio using heredoc
           FULL_APPLY_RATIO=$(python - <<'PY' 2>/dev/null || echo "0.0"
-          import json
+          import json, sys
           from pathlib import Path
-          p = Path('artifacts/soak/latest/reports/analysis/DELTA_VERIFY_REPORT.json')
-          if p.exists():
-              data = json.loads(p.read_text())
-              print(data.get('full_apply_ratio', 0.0))
-          else:
-              print(0.0)
+          p = Path("artifacts/soak/latest/reports/analysis/DELTA_VERIFY_REPORT.json")
+          print(json.loads(p.read_text()).get("full_apply_ratio", 0.0) if p.exists() else 0.0)
           PY
           )
-          
-          echo "full_apply_ratio=$FULL_APPLY_RATIO" >> $GITHUB_OUTPUT
+          echo "full_apply_ratio=$FULL_APPLY_RATIO" >> "$GITHUB_OUTPUT"
           
           if [ "$EXIT_CODE" -ne 0 ]; then
             echo "❌ Delta verification failed"
             exit 1
           fi
-          
           echo "✓ Delta verification passed (ratio: $FULL_APPLY_RATIO)"
           echo "================================================"
 
