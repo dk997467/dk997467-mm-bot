@@ -2,10 +2,10 @@
   "description": "Maker bias uplift v1: Gentle shift toward maker orders without impacting latency",
   "version": "1.0",
   "target_metrics": {
-    "maker_taker_ratio": "≥ 0.83",
-    "net_bps": "≥ 2.8",
-    "p95_latency_ms": "≤ 330",
-    "risk_ratio": "≤ 0.40"
+    "maker_taker_ratio": ">= 0.83",
+    "net_bps": ">= 2.8",
+    "p95_latency_ms": "<= 330",
+    "risk_ratio": "<= 0.40"
   },
   "changes": {
     "quoting": {
