@@ -358,12 +358,13 @@ jobs:
           echo "✓ Soak run completed"
           echo "================================================"
 
-      - name: Verify delta application
+      - name: Verify delta application (soft gate, threshold 60%)
         id: verify-deltas
         shell: bash
         run: |
           echo "================================================"
           echo "DELTA VERIFICATION (non-strict, soft gate)"
+          echo "Threshold: >=60.0% (PR mode)"
           echo "================================================"
           
           mkdir -p artifacts/soak/latest/reports/analysis
@@ -381,8 +382,11 @@ jobs:
           fi
           echo "Using TARGET=$TARGET"
           
-          # Run verifier WITHOUT --strict (it writes MD report)
-          python -m tools.soak.verify_deltas_applied --path "$TARGET" || true
+          # Run verifier with PR threshold (60%, non-strict)
+          python -m tools.soak.verify_deltas_applied \
+            --path "$TARGET" \
+            --threshold 0.60 \
+            || true
           
           # Find MD report (verifier writes it near TARGET)
           REPORT_MD="$ROOT/DELTA_VERIFY_REPORT.md"

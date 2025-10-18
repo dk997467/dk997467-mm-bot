@@ -216,11 +216,12 @@ jobs:
             --warmup \
             --preset maker_bias_uplift_v1
       
-      - name: Verify delta application (strict)
+      - name: Verify delta application (strict, threshold 95%)
         shell: bash
         run: |
           echo "================================================"
           echo "DELTA VERIFICATION (STRICT)"
+          echo "Threshold: >=95.0% (nightly mode)"
           echo "================================================"
           
           ROOT="artifacts/soak/latest"
@@ -233,7 +234,11 @@ jobs:
             exit 1
           fi
           
-          python -m tools.soak.verify_deltas_applied --path "$TARGET" --strict
+          # Run verifier with strict threshold (95%)
+          python -m tools.soak.verify_deltas_applied \
+            --path "$TARGET" \
+            --threshold 0.95 \
+            --strict
           
           if [ $? -ne 0 ]; then
             echo "❌ Strict delta verification FAILED"
