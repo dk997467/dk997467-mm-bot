@@ -202,6 +202,14 @@ shadow-redis-export:
 shadow-redis-export-stream:
 	python -m tools.shadow.export_to_redis --src artifacts/shadow/latest --mode stream --per-symbol
 
+.PHONY: dryrun dryrun-validate
+
+dryrun:
+	python -m tools.dryrun.run_dryrun --symbols BTCUSDT ETHUSDT --iterations 6 --duration 60
+
+dryrun-validate:
+	python -m tools.dryrun.run_dryrun --symbols BTCUSDT ETHUSDT --iterations 12 --duration 60
+
 .PHONY: pre-freeze pre-freeze-alt pre-freeze-fast
 
 pre-freeze:
