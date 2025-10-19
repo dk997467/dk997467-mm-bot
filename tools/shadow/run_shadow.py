@@ -384,7 +384,14 @@ class ShadowSimulator:
         
         return summary
     
-    async def run(self, iterations: int, duration: int, output_dir: str):
+    async def run(
+        self,
+        iterations: int,
+        duration: int,
+        output_dir: str,
+        redis_export_enabled: bool = False,
+        redis_export_url: str = "redis://localhost:6379"
+    ):
         """
         Run shadow mode for N iterations.
         
@@ -392,12 +399,30 @@ class ShadowSimulator:
             iterations: Number of monitoring windows
             duration: Duration per iteration (seconds)
             output_dir: Output directory for artifacts
+            redis_export_enabled: Enable Redis KPI export after each iteration (default: False)
+            redis_export_url: Redis connection URL for export (default: redis://localhost:6379)
         """
         await self.connect_feed()
         
         # Prepare output directory
         out_path = Path(output_dir)
         out_path.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize Redis exporter if enabled
+        redis_exporter = None
+        if redis_export_enabled:
+            try:
+                from tools.shadow.export_to_redis import RedisKPIExporter
+                redis_exporter = RedisKPIExporter(redis_url=redis_export_url, mode="hash")
+                print(f"[REDIS-EXPORT] Enabled (URL: {redis_export_url})")
+            except ImportError as e:
+                print(f"[REDIS-EXPORT] WARNING: Failed to import RedisKPIExporter: {e}")
+                print(f"[REDIS-EXPORT] Continuing without Redis export")
+                redis_exporter = None
+            except Exception as e:
+                print(f"[REDIS-EXPORT] WARNING: Failed to initialize Redis exporter: {e}")
+                print(f"[REDIS-EXPORT] Continuing without Redis export")
+                redis_exporter = None
         
         print(f"[SHADOW] Running {iterations} iterations, {duration}s each")
         print(f"[SHADOW] Output: {output_dir}")
@@ -415,6 +440,17 @@ class ShadowSimulator:
                 json.dump(summary, f, indent=2)
             
             print(f"[ITER {i}] Saved: {iter_file.name}")
+            
+            # Export to Redis if enabled
+            if redis_exporter:
+                try:
+                    symbol = summary.get("symbol", "UNKNOWN")
+                    success = redis_exporter.export_snapshot(summary, symbol=symbol)
+                    if success:
+                        print(f"[REDIS-EXPORT] Exported iteration {i} KPIs for {symbol}")
+                except Exception as e:
+                    print(f"[REDIS-EXPORT] WARNING: Export failed for iteration {i}: {e}")
+            
             print()
         
         # Write SHADOW_RUN_SUMMARY.json
@@ -525,6 +561,18 @@ def main():
         help="Require last_qty >= min_lot for fills (default: False)"
     )
     
+    # Redis export arguments
+    parser.add_argument(
+        "--redis-export",
+        action="store_true",
+        help="Enable Redis KPI export after each iteration (default: False)"
+    )
+    parser.add_argument(
+        "--redis-export-url",
+        default="redis://localhost:6379",
+        help="Redis connection URL for export (default: redis://localhost:6379)"
+    )
+    
     args = parser.parse_args()
     
     # Load per-symbol profile (for first symbol, CLI overrides profile)
@@ -561,7 +609,13 @@ def main():
     )
     
     # Run shadow mode
-    asyncio.run(simulator.run(args.iterations, args.duration, args.output))
+    asyncio.run(simulator.run(
+        args.iterations,
+        args.duration,
+        args.output,
+        redis_export_enabled=args.redis_export,
+        redis_export_url=args.redis_export_url
+    ))
 
 
 if __name__ == "__main__":
