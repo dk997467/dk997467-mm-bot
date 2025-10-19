@@ -1,0 +1,220 @@
+name: Dry-Run Validation (Shadow vs Reality)
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: 'Number of iterations'
+        required: false
+        default: '6'
+        type: choice
+        options:
+          - '6'
+          - '12'
+          - '24'
+      symbols:
+        description: 'Symbols (space-separated)'
+        required: false
+        default: 'BTCUSDT ETHUSDT'
+        type: string
+      duration:
+        description: 'Duration per iteration (seconds)'
+        required: false
+        default: '60'
+        type: number
+
+jobs:
+  dryrun-validation:
+    name: Dry-Run Validation
+    runs-on: ubuntu-latest
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt || echo "No requirements.txt"
+          pip install redis prometheus-client jsonschema
+      
+      - name: Phase 1 - Run Shadow Mode (with Redis export)
+        run: |
+          echo "=========================================="
+          echo "PHASE 1: SHADOW MODE + REDIS EXPORT"
+          echo "=========================================="
+          
+          python -m tools.shadow.run_shadow \
+            --source mock \
+            --symbols ${{ inputs.symbols || 'BTCUSDT ETHUSDT' }} \
+            --iterations ${{ inputs.iterations || '6' }} \
+            --duration ${{ inputs.duration || '60' }} \
+            --redis-export \
+            --redis-export-url redis://localhost:6379 \
+            --output artifacts/shadow/latest
+          
+          echo ""
+          echo "✓ Shadow Mode complete"
+          echo ""
+      
+      - name: Verify Shadow artifacts
+        run: |
+          echo "Checking Shadow Mode artifacts..."
+          
+          if [ ! -d "artifacts/shadow/latest" ]; then
+            echo "❌ Shadow artifacts directory not found!"
+            exit 1
+          fi
+          
+          iter_count=$(ls artifacts/shadow/latest/ITER_SUMMARY_*.json 2>/dev/null | wc -l)
+          echo "✓ Found $iter_count ITER_SUMMARY files"
+          
+          if [ "$iter_count" -lt "${{ inputs.iterations || '6' }}" ]; then
+            echo "❌ Expected ${{ inputs.iterations || '6' }} iterations, found $iter_count"
+            exit 1
+          fi
+      
+      - name: Verify Redis export
+        run: |
+          echo "Checking Redis export..."
+          
+          # Check if KPIs were exported to Redis
+          redis-cli -h localhost -p 6379 KEYS "shadow:kpi:*"
+          
+          # Get aggregated KPIs
+          echo ""
+          echo "Aggregated Shadow KPIs:"
+          redis-cli -h localhost -p 6379 HGETALL shadow:kpi:all
+          
+          # Verify key exists
+          if ! redis-cli -h localhost -p 6379 EXISTS shadow:kpi:all | grep -q "1"; then
+            echo "❌ Shadow KPIs not found in Redis!"
+            exit 1
+          fi
+          
+          echo ""
+          echo "✓ Redis export verified"
+      
+      - name: Phase 2 - Run Dry-Run Validation
+        run: |
+          echo "=========================================="
+          echo "PHASE 2: DRY-RUN VALIDATION"
+          echo "=========================================="
+          
+          python -m tools.dryrun.run_dryrun \
+            --redis-url redis://localhost:6379 \
+            --symbols ${{ inputs.symbols || 'BTCUSDT ETHUSDT' }} \
+            --iterations ${{ inputs.iterations || '6' }} \
+            --duration ${{ inputs.duration || '60' }} \
+            --output artifacts/dryrun/latest
+          
+          echo ""
+          echo "✓ Dry-Run validation complete"
+          echo ""
+      
+      - name: Display accuracy report
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "ACCURACY REPORT SUMMARY"
+          echo "=========================================="
+          
+          if [ -f "artifacts/dryrun/latest/DRYRUN_ACCURACY_REPORT.md" ]; then
+            cat artifacts/dryrun/latest/DRYRUN_ACCURACY_REPORT.md
+          else
+            echo "❌ Accuracy report not found!"
+            exit 1
+          fi
+      
+      - name: Check accuracy thresholds
+        continue-on-error: true
+        run: |
+          echo "Checking MAPE thresholds..."
+          
+          if [ -f "artifacts/dryrun/latest/DRYRUN_ACCURACY_REPORT.json" ]; then
+            # Check if any MAPE > 30% (FAIL threshold)
+            python3 << 'EOF'
+import json
+import sys
+
+with open("artifacts/dryrun/latest/DRYRUN_ACCURACY_REPORT.json", 'r') as f:
+    data = json.load(f)
+
+fail_count = 0
+warn_count = 0
+
+for symbol, metrics in data.get("accuracy", {}).items():
+    mape = metrics.get("mape", {})
+    for kpi, value in mape.items():
+        if value > 30:
+            print(f"❌ FAIL: {symbol} {kpi} MAPE = {value:.1f}% (> 30%)")
+            fail_count += 1
+        elif value > 15:
+            print(f"⚠️ WARN: {symbol} {kpi} MAPE = {value:.1f}% (> 15%)")
+            warn_count += 1
+
+print(f"\nSummary: {fail_count} failures, {warn_count} warnings")
+
+if fail_count > 0:
+    print("\n❌ Accuracy check FAILED - predictions are unreliable")
+    sys.exit(1)
+elif warn_count > 0:
+    print("\n⚠️ Accuracy check PASSED with warnings - monitor drift")
+    sys.exit(0)
+else:
+    print("\n✅ Accuracy check PASSED - excellent prediction accuracy")
+    sys.exit(0)
+EOF
+          else
+            echo "❌ JSON report not found!"
+            exit 1
+          fi
+      
+      - name: Upload Shadow artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadow-artifacts
+          path: |
+            artifacts/shadow/latest/**
+          retention-days: 7
+      
+      - name: Upload Dry-Run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dryrun-artifacts
+          path: |
+            artifacts/dryrun/latest/**
+          retention-days: 7
+      
+      - name: Summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "✅ DRY-RUN VALIDATION COMPLETE"
+          echo "=========================================="
+          echo ""
+          echo "Artifacts:"
+          echo "  - Shadow Mode: artifacts/shadow/latest/"
+          echo "  - Dry-Run: artifacts/dryrun/latest/"
+          echo "  - Accuracy Report: artifacts/dryrun/latest/DRYRUN_ACCURACY_REPORT.md"
+          echo ""
+
