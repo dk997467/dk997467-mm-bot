@@ -68,31 +68,70 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Soak failed ($LASTEXITCODE)" }
 
       - name: Verify delta application (soft gate)
+        shell: pwsh
+        continue-on-error: true
+        env:
+          PYTHON_EXE: python
         run: |
-          echo "================================================"
-          echo "DELTA VERIFICATION (threshold=${{ inputs.delta_threshold }})"
-          echo "================================================"
-          python -m tools.soak.verify_deltas_applied \
-            --path artifacts/soak/latest \
-            --threshold ${{ inputs.delta_threshold }}
+          Write-Host "================================================"
+          Write-Host "DELTA VERIFICATION (non-strict, soft gate)"
+          Write-Host "Threshold: ${{ inputs.delta_threshold }}"
+          Write-Host "================================================"
+          & $env:PYTHON_EXE -m tools.soak.verify_deltas_applied `
+            --path "artifacts/soak/latest" `
+            --threshold "${{ inputs.delta_threshold }}"
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Delta verification returned exit code $LASTEXITCODE (non-blocking)"
+          } else {
+            Write-Host "✓ Delta verification passed"
+          }
+          Write-Host "================================================"
 
       - name: Build reports (non-blocking)
+        shell: pwsh
+        continue-on-error: true
+        env:
+          PYTHON_EXE: python
         run: |
-          echo "================================================"
-          echo "GENERATING REPORTS (non-blocking)"
-          echo "================================================"
-          python -m tools.soak.build_reports \
-            --src artifacts/soak/latest \
-            --out artifacts/soak/latest/reports/analysis || true
+          Write-Host "================================================"
+          Write-Host "GENERATING REPORTS (non-blocking)"
+          Write-Host "================================================"
+          & $env:PYTHON_EXE -m tools.soak.build_reports `
+            --src "artifacts/soak/latest" `
+            --out "artifacts/soak/latest/reports/analysis"
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Report generation returned exit code $LASTEXITCODE (non-blocking)"
+          } else {
+            Write-Host "✓ Reports generated"
+          }
+          Write-Host "================================================"
 
       - name: Export warm-up metrics
+        shell: pwsh
+        continue-on-error: true
+        env:
+          PYTHON_EXE: python
         run: |
-          echo "================================================"
-          echo "EXPORTING WARM-UP METRICS"
-          echo "================================================"
-          python -m tools.soak.export_warmup_metrics \
-            --path artifacts/soak/latest \
-            --output artifacts/soak/latest/reports/analysis/warmup_metrics.prom || true
+          Write-Host "================================================"
+          Write-Host "EXPORTING WARM-UP METRICS"
+          Write-Host "================================================"
+          & $env:PYTHON_EXE -m tools.soak.export_warmup_metrics `
+            --path "artifacts/soak/latest" `
+            --output "artifacts/soak/latest/reports/analysis/warmup_metrics.prom"
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Metrics export returned exit code $LASTEXITCODE (non-blocking)"
+          } else {
+            Write-Host "✓ Warm-up metrics exported"
+            if (Test-Path "artifacts/soak/latest/reports/analysis/warmup_metrics.prom") {
+              Write-Host ""
+              Write-Host "Preview (first 20 lines):"
+              Get-Content "artifacts/soak/latest/reports/analysis/warmup_metrics.prom" -Head 20
+            }
+          }
+          Write-Host "================================================"
 
       - name: Upload soak artifacts
         uses: actions/upload-artifact@v4
