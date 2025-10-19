@@ -237,12 +237,118 @@ Shadow reports include **winsorized p95** (1% trim) alongside raw p95:
 
 ---
 
+## 🔄 Redis Streams Ingest
+
+Shadow Mode supports reading live market data from Redis Streams (Rust orderbook ingest).
+
+### **Architecture**
+
+```
+Rust Orderbook Ingest → Redis Streams (lob:ticks) → Shadow Mode
+                                                    ├─ Seq-Gap Guard
+                                                    ├─ Reordering Buffer (40ms)
+                                                    └─ LOB Simulation
+```
+
+### **Usage**
+
+```bash
+# Run with Redis ingest
+python -m tools.shadow.run_shadow \
+  --source redis \
+  --redis-url redis://localhost:6379 \
+  --redis-stream lob:ticks \
+  --redis-group shadow \
+  --symbols BTCUSDT ETHUSDT \
+  --iterations 48
+
+# Or use make target
+make shadow-redis
+```
+
+### **Parameters**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--source` | mock | Data source: mock, ws, **redis** |
+| `--redis-url` | redis://localhost:6379 | Redis connection URL |
+| `--redis-stream` | lob:ticks | Stream name |
+| `--redis-group` | shadow | Consumer group |
+| `--redis-consumer-id` | auto | Consumer ID (hostname-pid) |
+
+### **Features**
+
+**Seq-Gap Guard:**
+- Detects sequence gaps, duplicates, reordering
+- Metric: `shadow_seq_gaps_total{symbol}`
+- Warns on anomalies
+
+**Reordering Buffer:**
+- 40ms time-based buffering
+- Sorts ticks by `ts_server` before processing
+- Metric: `shadow_reordered_total{symbol}`
+
+**Backpressure Handling:**
+- Max buffer size: 4000 ticks
+- Drops oldest on overflow
+- Metric: `shadow_backpressure_drops_total{symbol}`
+
+**Ingest Lag:**
+- Tracks pending messages (XPENDING)
+- Metric: `shadow_ingest_lag_msgs{stream}`
+
+### **Metrics**
+
+```bash
+# Check ingest metrics
+curl -s localhost:9109/metrics | grep -E "shadow_(ingest_lag|seq_gaps|reordered|backpressure)"
+
+# Example output:
+# shadow_seq_gaps_total{symbol="BTCUSDT"} 0
+# shadow_reordered_total{symbol="BTCUSDT"} 12
+# shadow_backpressure_drops_total{symbol="BTCUSDT"} 0
+# shadow_ingest_lag_msgs{stream="lob:ticks"} 45
+```
+
+### **Rich Notes**
+
+When using Redis source, `ITER_SUMMARY.notes` includes ingest statistics:
+
+```
+commit=abc123 source=redis profile=moderate dwell_ms=25 min_lot=0.001 seq_gaps=0 reordered=12 bp_drops=0
+```
+
+### **Troubleshooting**
+
+**High Seq Gaps:**
+- Check Rust ingest health
+- Verify consumer group position (not too far behind)
+- Look for Redis connection issues
+
+**High Reordering:**
+- Normal for network jitter (expect < 5%)
+- If > 10%: check clock sync, network latency
+
+**Backpressure Drops:**
+- Should be 0 in normal operation
+- If > 0: reduce `--duration` or increase buffer size
+- Check downstream processing speed
+
+**High Ingest Lag:**
+- Shadow mode is falling behind stream
+- Reduce iteration duration
+- Check system load (CPU/memory)
+- Consider horizontal scaling (more consumers)
+
+---
+
 ## 🛠️ Makefile Shortcuts
 
 ### **Added Targets**
 
 ```makefile
 make shadow-run        # Run shadow mode (default: 6 iters, mock)
+make shadow-redis      # Redis ingest (48 iters, reports, audit)
 make shadow-audit      # Audit artifacts (min_windows=48, informational)
 make shadow-ci         # Run strict gate (min_windows=48, fail on HOLD)
 make shadow-report     # Build reports + audit (one-shot)
