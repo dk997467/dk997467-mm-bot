@@ -162,10 +162,26 @@ soak-audit-ci:
 soak-compare:
 	python -m tools.soak.compare_runs --a artifacts/soak/run_A --b artifacts/soak/latest
 
-.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-archive
+.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-archive
 
 shadow-run:
-	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --mock
+	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --source mock
+
+shadow-redis:
+	python -m tools.shadow.run_shadow \
+	  --source redis \
+	  --redis-url redis://localhost:6379 \
+	  --redis-stream lob:ticks \
+	  --redis-group shadow \
+	  --symbols BTCUSDT ETHUSDT \
+	  --profile moderate \
+	  --iterations 48 \
+	  --duration 60 \
+	  --touch_dwell_ms 25 \
+	  --require_volume \
+	  --min_lot 0.001 && \
+	python -m tools.shadow.build_shadow_reports --src artifacts/shadow/latest && \
+	python -m tools.shadow.audit_shadow_artifacts --base artifacts/shadow/latest --min_windows 48
 
 shadow-audit:
 	python -m tools.shadow.audit_shadow_artifacts --base artifacts/shadow/latest --min_windows 48

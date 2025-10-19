@@ -82,6 +82,8 @@ class MiniLOB:
 class ShadowSimulator:
     """
     Shadow mode simulator that consumes market data and simulates trades locally.
+    
+    Supports multiple data sources: mock, ws (WebSocket), redis (Redis Streams).
     """
     
     def __init__(
@@ -89,18 +91,29 @@ class ShadowSimulator:
         exchange: str = "bybit",
         symbols: List[str] = None,
         profile: str = "moderate",
-        mock: bool = True,
+        source: str = "mock",
         min_lot: float = 0.0,
         touch_dwell_ms: float = 25.0,
         require_volume: bool = False,
+        # Redis-specific parameters
+        redis_url: str = "redis://localhost:6379",
+        redis_stream: str = "lob:ticks",
+        redis_group: str = "shadow",
+        redis_consumer_id: Optional[str] = None,
     ):
         self.exchange = exchange
         self.symbols = symbols or ["BTCUSDT", "ETHUSDT"]
         self.profile = profile
-        self.mock = mock
+        self.source = source  # "mock", "ws", or "redis"
         self.min_lot = min_lot
         self.touch_dwell_ms = touch_dwell_ms
         self.require_volume = require_volume
+        
+        # Redis parameters
+        self.redis_url = redis_url
+        self.redis_stream = redis_stream
+        self.redis_group = redis_group
+        self.redis_consumer_id = redis_consumer_id
         
         # KPI tracking
         self.maker_count = 0
@@ -110,12 +123,21 @@ class ShadowSimulator:
         self.risk_ratios = []
         self.clock_drift_ewma = 0.0  # EWMA of clock drift
         
+        # Ingest statistics (for Redis source)
+        self.seq_gaps = 0
+        self.reordered = 0
+        self.bp_drops = 0
+        
     async def connect_feed(self):
-        """Connect to exchange WebSocket feed."""
-        if self.mock:
+        """Connect to data source (mock/ws/redis)."""
+        if self.source == "mock":
             print(f"[MOCK] Simulating {self.exchange} feed for {self.symbols}")
-        else:
-            print(f"[LIVE] Connecting to {self.exchange} WS feed...")
+        elif self.source == "redis":
+            print(f"[REDIS] Connecting to Redis Streams: {self.redis_stream}")
+            print(f"        URL: {self.redis_url}")
+            print(f"        Group: {self.redis_group}")
+        else:  # ws
+            print(f"[WS] Connecting to {self.exchange} WebSocket feed...")
             # TODO: Implement real WS connection
             # await websockets.connect(f"wss://{self.exchange}.com/ws")
     
@@ -230,26 +252,74 @@ class ShadowSimulator:
         # Collect market ticks
         start_time = time.time()
         ticks = []
-        samples = duration  # 1 sample per second
         
-        for tick_idx in range(samples):
-            await asyncio.sleep(0.1 if self.mock else 1.0)  # Mock: faster
+        if self.source == "redis":
+            # Read from Redis Streams with reordering buffer
+            from tools.shadow.ingest_redis import read_ticks_redis
+            from tools.shadow.reorder_buffer import ReorderBuffer
             
-            # Generate synthetic tick (mock mode)
-            if self.mock:
-                base_price = 50000.0 + random.uniform(-100, 100)
-                spread = random.uniform(0.5, 2.0)
+            buffer = ReorderBuffer(window_ms=40.0, max_size=4000)
+            
+            # Read ticks for duration
+            async def collect_redis_ticks():
+                deadline = start_time + duration
+                tick_count = 0
                 
-                tick = {
-                    "ts": time.time() - random.uniform(0.05, 0.15),  # Server lag
-                    "ts_server": time.time() - random.uniform(0.05, 0.15),
-                    "bid": base_price,
-                    "ask": base_price + spread,
-                    "bid_size": random.uniform(0.1, 5.0),
-                    "ask_size": random.uniform(0.1, 5.0),
-                    "last_qty": random.uniform(0.001, 0.5),
-                }
-                ticks.append(tick)
+                async for tick in read_ticks_redis(
+                    self.redis_url,
+                    self.redis_stream,
+                    self.redis_group,
+                    self.redis_consumer_id,
+                ):
+                    # Filter by symbol (only process relevant symbols)
+                    symbol = tick.get("symbol", "")
+                    if symbol not in self.symbols:
+                        continue
+                    
+                    # Track seq gaps
+                    if "_seq_gap_warning" in tick:
+                        self.seq_gaps += 1
+                    
+                    # Add to reorder buffer
+                    buffer.add(tick)
+                    tick_count += 1
+                    
+                    # Check deadline
+                    if time.time() >= deadline:
+                        break
+                
+                # Final flush
+                return buffer.flush(force=True)
+            
+            ticks = await collect_redis_ticks()
+            
+            # Update ingest stats
+            stats = buffer.get_stats()
+            self.reordered = sum(stats["reordered"].values())
+            self.bp_drops = sum(stats["backpressure_drops"].values())
+            
+        else:
+            # Mock or WS mode
+            samples = duration  # 1 sample per second
+            
+            for tick_idx in range(samples):
+                await asyncio.sleep(0.1 if self.source == "mock" else 1.0)
+                
+                # Generate synthetic tick (mock mode)
+                if self.source == "mock":
+                    base_price = 50000.0 + random.uniform(-100, 100)
+                    spread = random.uniform(0.5, 2.0)
+                    
+                    tick = {
+                        "ts": time.time() - random.uniform(0.05, 0.15),
+                        "ts_server": time.time() - random.uniform(0.05, 0.15),
+                        "bid": base_price,
+                        "ask": base_price + spread,
+                        "bid_size": random.uniform(0.1, 5.0),
+                        "ask_size": random.uniform(0.1, 5.0),
+                        "last_qty": random.uniform(0.001, 0.5),
+                    }
+                    ticks.append(tick)
         
         # Determine spread_bps based on profile
         spread_bps = 30.0 if self.profile == "moderate" else 15.0
@@ -266,15 +336,22 @@ class ShadowSimulator:
         adverse_p95 = random.uniform(1.5, 2.5)
         
         # Rich notes with metadata
-        source = "mock" if self.mock else "ws"
         commit_sha = _git_sha_short()
         notes = (
             f"commit={commit_sha} "
-            f"source={source} "
+            f"source={self.source} "
             f"profile={self.profile} "
             f"dwell_ms={self.touch_dwell_ms} "
             f"min_lot={self.min_lot}"
         )
+        
+        # Add ingest stats for Redis source
+        if self.source == "redis":
+            notes += (
+                f" seq_gaps={self.seq_gaps} "
+                f"reordered={self.reordered} "
+                f"bp_drops={self.bp_drops}"
+            )
         
         summary = {
             "iteration": iter_num,
@@ -398,15 +475,37 @@ def main():
         help="Trading profile (default: moderate)"
     )
     parser.add_argument(
-        "--mock",
-        action="store_true",
-        default=True,
-        help="Use mock data instead of real feeds (default: True)"
+        "--source",
+        default="mock",
+        choices=["mock", "ws", "redis"],
+        help="Data source: mock (synthetic), ws (WebSocket), redis (Redis Streams) (default: mock)"
     )
     parser.add_argument(
         "--output",
         default="artifacts/shadow/latest",
         help="Output directory (default: artifacts/shadow/latest)"
+    )
+    
+    # Redis-specific arguments
+    parser.add_argument(
+        "--redis-url",
+        default="redis://localhost:6379",
+        help="Redis connection URL (default: redis://localhost:6379)"
+    )
+    parser.add_argument(
+        "--redis-stream",
+        default="lob:ticks",
+        help="Redis stream name (default: lob:ticks)"
+    )
+    parser.add_argument(
+        "--redis-group",
+        default="shadow",
+        help="Redis consumer group name (default: shadow)"
+    )
+    parser.add_argument(
+        "--redis-consumer-id",
+        default=None,
+        help="Redis consumer ID (default: auto-generated)"
     )
     parser.add_argument(
         "--min_lot",
@@ -450,10 +549,15 @@ def main():
         exchange=args.exchange,
         symbols=args.symbols,
         profile=args.profile,
-        mock=args.mock,
+        source=args.source,
         min_lot=min_lot,
         touch_dwell_ms=touch_dwell_ms,
         require_volume=args.require_volume,
+        # Redis parameters
+        redis_url=args.redis_url,
+        redis_stream=args.redis_stream,
+        redis_group=args.redis_group,
+        redis_consumer_id=args.redis_consumer_id,
     )
     
     # Run shadow mode
