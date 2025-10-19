@@ -11,8 +11,13 @@ Usage:
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Dict, List
+
+# Fix Windows console encoding
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8')
 
 
 def load_iter_summaries(base_dir: Path) -> List[Dict]:

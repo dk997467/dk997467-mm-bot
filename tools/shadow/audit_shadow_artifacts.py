@@ -16,6 +16,10 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+# Fix Windows console encoding
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8')
+
 # Import robust KPI extraction from soak tools
 try:
     from tools.soak.audit_artifacts import robust_kpi_extract, compute_stats, check_readiness
