@@ -23,6 +23,18 @@ make soak
 ```
 ?????? ??????????? ? `artifacts/soak_reports/*.json`.
 
+**Post-Soak Analysis:**
+After a 24-iteration soak run, analyze results:
+```bash
+python -m tools.soak.audit_artifacts
+```
+Generates:
+- `POST_SOAK_AUDIT_SUMMARY.md` — Comprehensive report
+- `POST_SOAK_AUDIT_SUMMARY.json` — Machine-readable metrics
+- `POST_SOAK_ITER_TABLE.csv` — Per-iteration KPI table
+
+See [ARTIFACT_AUDIT_GUIDE.md](ARTIFACT_AUDIT_GUIDE.md) for details.
+
 ### CI Workflows (GitHub Actions)
 
 **Nightly Soak (24 iterations, warmup, strict gates):**
