@@ -61,6 +61,32 @@ def audit_shadow_artifacts(base_dir: str = "artifacts/shadow/latest") -> dict:
     
     print(f"✓ Found {len(iter_files)} iterations")
     
+    # Schema validation
+    print("  Validating schema...")
+    try:
+        import jsonschema
+        schema_path = Path("schema/iter_summary.schema.json")
+        if schema_path.exists():
+            with open(schema_path, 'r', encoding='utf-8') as f:
+                schema = json.load(f)
+            
+            for iter_file in iter_files:
+                with open(iter_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                jsonschema.validate(instance=data, schema=schema)
+            
+            print("  ✓ Schema validation passed")
+        else:
+            print("  ⚠ Schema file not found, skipping validation")
+    except ImportError:
+        print("  ⚠ jsonschema not installed, skipping validation")
+    except jsonschema.ValidationError as e:
+        print(f"  ✗ Schema validation FAILED: {e.message}")
+        print(f"    File: {e.instance}")
+        return {"readiness": {"pass": False, "failures": [f"Schema validation failed: {e.message}"]}}
+    except Exception as e:
+        print(f"  ⚠ Schema validation error: {e}")
+    
     # Load data
     iter_data = []
     for iter_file in iter_files:

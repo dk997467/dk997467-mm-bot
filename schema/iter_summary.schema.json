@@ -1,0 +1,103 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "IterSummary",
+  "description": "Schema for ITER_SUMMARY_*.json (shadow and soak modes)",
+  "type": "object",
+  "required": [
+    "iteration",
+    "timestamp",
+    "duration_seconds",
+    "exchange",
+    "symbols",
+    "profile",
+    "summary",
+    "mode"
+  ],
+  "properties": {
+    "iteration": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "duration_seconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "exchange": {
+      "type": "string"
+    },
+    "symbols": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "profile": {
+      "type": "string",
+      "enum": ["moderate", "aggressive"]
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "maker_count",
+        "taker_count",
+        "maker_taker_ratio",
+        "net_bps",
+        "p95_latency_ms",
+        "risk_ratio",
+        "slippage_bps_p95",
+        "adverse_bps_p95"
+      ],
+      "properties": {
+        "maker_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "taker_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maker_taker_ratio": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "net_bps": {
+          "type": "number"
+        },
+        "p95_latency_ms": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "risk_ratio": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "slippage_bps_p95": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "adverse_bps_p95": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "clock_drift_ms": {
+          "type": "number",
+          "description": "Clock drift EWMA (shadow mode only)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["shadow", "soak"]
+    }
+  },
+  "additionalProperties": false
+}
+
