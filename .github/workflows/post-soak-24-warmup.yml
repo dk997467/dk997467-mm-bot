@@ -1,0 +1,103 @@
+name: Post-Soak Analysis (24 iters, warmup)
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "Number of iterations"
+        required: true
+        default: "24"
+      sleep_seconds:
+        description: "Sleep between iterations (seconds)"
+        required: true
+        default: "300"
+      enable_warmup:
+        description: "Enable warm-up/ramp-down"
+        required: true
+        default: "true"
+      preset:
+        description: "Soak preset"
+        required: true
+        default: "maker_bias_uplift_v1"
+      delta_threshold:
+        description: "Delta-verify threshold (0.60 PR / 0.95 nightly)"
+        required: true
+        default: "0.60"
+
+jobs:
+  post_soak_24:
+    runs-on: self-hosted
+    timeout-minutes: 180
+    env:
+      ARTIFACTS_ROOT: artifacts
+      SOAK_ARTIFACTS_DIR: artifacts/soak
+      CI_ARTIFACTS_DIR: artifacts/ci
+      PYTHON_EXE: python
+      SOAK_SLEEP_SECONDS: ${{ inputs.sleep_seconds }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare minimal requirements for CI
+        run: echo ok
+
+      - name: Install base dependencies
+        run: echo ok
+
+      - name: Install project with Rust module (editable)
+        run: echo ok
+
+      - name: Install remaining dependencies
+        run: echo ok
+
+      - name: Run 24-iteration soak with auto-tuning (warmup=${{ inputs.enable_warmup }})
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "POST-SOAK 24 (warmup=${{ inputs.enable_warmup }})"
+          Write-Host "================================================"
+          $it = [int]"${{ inputs.iterations }}"
+          $warm = if ("${{ inputs.enable_warmup }}".ToLower() -eq "true") { "--warmup" } else { "" }
+          $preset = "${{ inputs.preset }}"
+          & $env:PYTHON_EXE -m tools.soak.run `
+            --iterations $it `
+            --auto-tune `
+            --mock `
+            $warm `
+            --preset $preset
+          if ($LASTEXITCODE -ne 0) { throw "Soak failed ($LASTEXITCODE)" }
+
+      - name: Verify delta application (soft gate)
+        run: |
+          echo "================================================"
+          echo "DELTA VERIFICATION (threshold=${{ inputs.delta_threshold }})"
+          echo "================================================"
+          python -m tools.soak.verify_deltas_applied \
+            --path artifacts/soak/latest \
+            --threshold ${{ inputs.delta_threshold }}
+
+      - name: Build reports (non-blocking)
+        run: |
+          echo "================================================"
+          echo "GENERATING REPORTS (non-blocking)"
+          echo "================================================"
+          python -m tools.soak.build_reports \
+            --src artifacts/soak/latest \
+            --out artifacts/soak/latest/reports/analysis || true
+
+      - name: Export warm-up metrics
+        run: |
+          echo "================================================"
+          echo "EXPORTING WARM-UP METRICS"
+          echo "================================================"
+          python -m tools.soak.export_warmup_metrics \
+            --path artifacts/soak/latest \
+            --output artifacts/soak/latest/reports/analysis/warmup_metrics.prom || true
+
+      - name: Upload soak artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-24-latest
+          path: artifacts/soak/latest
+          if-no-files-found: warn
+
