@@ -35,6 +35,36 @@ Generates:
 
 See [ARTIFACT_AUDIT_GUIDE.md](ARTIFACT_AUDIT_GUIDE.md) for details.
 
+### Shadow Mode (Live Feed Monitoring)
+
+After soak tests pass, validate strategy on real market feeds:
+```bash
+make shadow-run       # Run shadow mode (6 iters, mock)
+make shadow-audit     # Audit results
+```
+
+**Full pipeline:**
+```bash
+# 1. Run shadow mode
+python -m tools.shadow.run_shadow --iterations 6 --duration 60
+
+# 2. Build reports
+python -m tools.shadow.build_shadow_reports
+
+# 3. Audit (strict)
+python -m tools.shadow.audit_shadow_artifacts --fail-on-hold
+
+# 4. Compare with soak
+python -m tools.soak.compare_runs --a artifacts/soak/latest --b artifacts/shadow/latest
+```
+
+**GitHub Actions:**
+- Go to: **Actions** → **Shadow Mode** → **Run workflow**
+- Select: iterations, duration, profile, exchange
+- Generates: `POST_SHADOW_SNAPSHOT.json`, `POST_SHADOW_AUDIT_SUMMARY.json`
+
+See [SHADOW_MODE_GUIDE.md](SHADOW_MODE_GUIDE.md) for details.
+
 ### CI Workflows (GitHub Actions)
 
 **Nightly Soak (24 iterations, warmup, strict gates):**
