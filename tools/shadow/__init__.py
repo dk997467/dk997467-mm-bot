@@ -1,10 +1,9 @@
 """
-Shadow testing tools.
+Shadow Mode Package
 
-Modules:
-- shadow_baseline: Shadow baseline test runner for collecting stage metrics
+Live-feed monitoring mode that reads real orderbook data from exchanges,
+simulates order placements locally (without sending them), and generates
+post-run analytics comparable to soak tests.
 """
 
 __version__ = "1.0.0"
-
-
