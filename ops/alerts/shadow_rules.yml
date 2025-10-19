@@ -1,0 +1,126 @@
+# Prometheus Alert Rules for Shadow Mode
+#
+# These rules monitor Shadow Mode KPIs and trigger alerts when thresholds are breached.
+#
+# Integration:
+#   - Place in Prometheus rules directory
+#   - Reload Prometheus config: kill -HUP <pid>
+#   - Or: curl -X POST http://localhost:9090/-/reload
+#
+# Metrics:
+#   - shadow_edge_bps: Net edge in basis points
+#   - shadow_maker_taker_ratio: Maker/taker ratio
+#   - shadow_latency_ms: P95 latency in milliseconds
+#   - shadow_clock_drift_ms: Clock drift EWMA
+
+groups:
+- name: shadow.mode.rules
+  interval: 30s
+  rules:
+  
+  # Alert: Shadow edge below threshold
+  - alert: ShadowEdgeLow
+    expr: avg_over_time(shadow_edge_bps[15m]) < 2.5
+    for: 10m
+    labels:
+      severity: warning
+      component: shadow
+      kpi: edge
+    annotations:
+      summary: "Shadow Mode: Edge below threshold"
+      description: |
+        Average shadow_edge_bps < 2.5 over 15m window
+        Current: {{ $value | printf "%.2f" }} bps
+        Threshold: 2.5 bps
+        Check: Strategy configuration, market conditions
+      runbook: "https://docs/shadow-mode-troubleshooting#edge-low"
+  
+  # Alert: Maker/taker ratio below threshold
+  - alert: ShadowMakerLow
+    expr: avg_over_time(shadow_maker_taker_ratio[15m]) < 0.83
+    for: 10m
+    labels:
+      severity: warning
+      component: shadow
+      kpi: maker_taker
+    annotations:
+      summary: "Shadow Mode: Maker/taker ratio below threshold"
+      description: |
+        Average shadow_maker_taker_ratio < 0.83 over 15m window
+        Current: {{ $value | printf "%.3f" }}
+        Threshold: 0.83
+        Check: Spread configuration, LOB depth, fill logic
+      runbook: "https://docs/shadow-mode-troubleshooting#maker-low"
+  
+  # Alert: Latency above threshold
+  - alert: ShadowLatencyHigh
+    expr: avg_over_time(shadow_latency_ms[15m]) > 350
+    for: 10m
+    labels:
+      severity: warning
+      component: shadow
+      kpi: latency
+    annotations:
+      summary: "Shadow Mode: Latency above threshold"
+      description: |
+        Average shadow_latency_ms > 350ms over 15m window
+        Current: {{ $value | printf "%.0f" }}ms
+        Threshold: 350ms
+        Check: Network conditions, feed connectivity, clock drift
+      runbook: "https://docs/shadow-mode-troubleshooting#latency-high"
+  
+  # Alert: Risk ratio above threshold
+  - alert: ShadowRiskHigh
+    expr: avg_over_time(shadow_risk_ratio[15m]) > 0.40
+    for: 10m
+    labels:
+      severity: warning
+      component: shadow
+      kpi: risk
+    annotations:
+      summary: "Shadow Mode: Risk ratio above threshold"
+      description: |
+        Average shadow_risk_ratio > 0.40 over 15m window
+        Current: {{ $value | printf "%.3f" }}
+        Threshold: 0.40
+        Check: Position sizing, maker/taker balance
+      runbook: "https://docs/shadow-mode-troubleshooting#risk-high"
+  
+  # Alert: Clock drift excessive (>500ms)
+  - alert: ShadowClockDriftHigh
+    expr: avg_over_time(shadow_clock_drift_ms[10m]) > 500
+    for: 5m
+    labels:
+      severity: warning
+      component: shadow
+      kpi: clock_drift
+    annotations:
+      summary: "Shadow Mode: Excessive clock drift"
+      description: |
+        Average clock drift > 500ms over 10m window
+        Current: {{ $value | printf "%.0f" }}ms
+        This may indicate:
+        - Network latency spikes
+        - Server time sync issues
+        - Exchange API delays
+      runbook: "https://docs/shadow-mode-troubleshooting#clock-drift"
+  
+  # Alert: No shadow metrics (feed down)
+  - alert: ShadowMetricsMissing
+    expr: absent(shadow_edge_bps)
+    for: 5m
+    labels:
+      severity: critical
+      component: shadow
+      kpi: availability
+    annotations:
+      summary: "Shadow Mode: Metrics missing"
+      description: |
+        Shadow mode metrics not received for 5+ minutes
+        Possible causes:
+        - Shadow runner crashed
+        - Feed disconnected
+        - Prometheus scrape failing
+        Action: Check shadow runner logs and restart if needed
+      runbook: "https://docs/shadow-mode-troubleshooting#metrics-missing"
+
