@@ -150,3 +150,14 @@ soak-smoke:
 soak:
 	@python -c "import os; os.makedirs('artifacts/soak_reports', exist_ok=True)"
 	@python -c "import datetime; d=datetime.date.today().strftime('%%Y-%%m-%%d'); exec(open('temp_soak.py','w').write('print(\"artifacts/soak_reports/'+d+'.json\")'))" && python temp_soak.py > temp_path.txt && set /p OUT_PATH=<temp_path.txt && python -m tools.ops.soak_run --shadow-hours 6 --canary-hours 6 --live-hours 12 --tz Europe/Berlin --out %OUT_PATH% && del temp_path.txt temp_soak.py
+
+.PHONY: pre-freeze pre-freeze-alt pre-freeze-fast
+
+pre-freeze:
+	python -m tools.release.pre_freeze_sanity --src "artifacts/soak/latest" --smoke-iters 6 --post-iters 8 --run-isolated
+
+pre-freeze-alt:
+	python -m tools.release.pre_freeze_sanity --src "artifacts/soak/latest 1" --smoke-iters 6 --post-iters 8 --run-isolated
+
+pre-freeze-fast:
+	python -m tools.release.pre_freeze_sanity --src "artifacts/soak/latest" --smoke-iters 3 --post-iters 4

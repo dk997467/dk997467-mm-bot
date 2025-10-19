@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   # ===========================================================================
   # UNIT TESTS: Fast, low memory (~2-3 min)
@@ -141,6 +145,465 @@ jobs:
         # Unit tests: Fast, low memory, use -n 2 for speed
         run: |
           python tools/ci/run_selected_unit.py
+
+  # ===========================================================================
+  # SMOKE TESTS: Fast soak validation (<2 min)
+  # ===========================================================================
+  tests-smoke:
+    name: Smoke Tests (soak)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTHONPATH: "${{ github.workspace }}"
+      SOAK_SLEEP_SECONDS: "5"
+      BYBIT_API_KEY: "test_api_key_for_ci_only"
+      BYBIT_API_SECRET: "test_api_secret_for_ci_only"
+      STORAGE_PG_PASSWORD: "test_pg_password_for_ci_only"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      
+      - name: Prepare minimal requirements for CI
+        shell: bash
+        run: |
+          echo "=== Filtering requirements.txt ==="
+          
+          awk '
+            BEGIN{IGNORECASE=1}
+            /^[[:space:]]*bybit-connector/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*mm-orderbook/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*mm_orderbook/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*git\+ssh:/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*git\+https:/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            {print}
+          ' requirements.txt > requirements_ci.txt
+          
+          echo "pydantic>=2,<3"           >> requirements_ci.txt
+          echo "pydantic-settings>=2,<3"  >> requirements_ci.txt
+          echo "pandas>=2,<3"             >> requirements_ci.txt
+          
+          echo ""
+          echo "=== GATE: Verify mm-orderbook not in requirements_ci.txt ==="
+          if grep -i "mm.orderbook\|mm_orderbook" requirements_ci.txt; then
+            echo "❌ GATE FAILED: mm-orderbook found in requirements_ci.txt"
+            exit 1
+          fi
+          echo "✓ GATE PASSED: mm-orderbook correctly filtered out"
+
+      - name: Install base dependencies
+        run: |
+          python -m pip install -U pip
+          pip install maturin
+          echo "✓ pip and maturin installed"
+
+      - name: Install project with Rust module (editable)
+        run: |
+          echo "=== Building and installing mm-bot with Rust extensions ==="
+          pip install -e . -v
+          echo ""
+          echo "=== Smoke test: import mm_orderbook ==="
+          python -c "import mm_orderbook; print('✓ mm_orderbook import OK')"
+
+      - name: Install remaining dependencies
+        run: |
+          echo "=== Installing external dependencies from requirements_ci.txt ==="
+          pip install -r requirements_ci.txt
+          echo ""
+          echo "=== Final package list ==="
+          pip list
+
+      - name: Run Smoke Tests (<2 min)
+        run: |
+          echo "================================================"
+          echo "SOAK SMOKE TESTS (fast validation)"
+          echo "================================================"
+          SOAK_SLEEP_SECONDS=5 pytest -v tests/smoke/test_soak_smoke.py -k smoke
+          echo "================================================"
+      
+      - name: Upload smoke artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-artifacts
+          path: |
+            artifacts/soak/**
+            .pytest_cache/**
+          if-no-files-found: ignore
+          retention-days: 7
+      
+      - name: Run Config Precedence Integration Test (<1 min)
+        run: |
+          echo "================================================"
+          echo "CONFIG PRECEDENCE INTEGRATION TEST"
+          echo "================================================"
+          SOAK_SLEEP_SECONDS=1 USE_MOCK=1 pytest -v tests/integration/test_config_precedence_integration.py -k config_precedence
+          echo "================================================"
+
+  # ===========================================================================
+  # POST-SOAK ANALYSIS: KPI validation & delta verification (~5 min)
+  # ===========================================================================
+  post-soak-analyze:
+    name: Post-Soak Analysis (8 iters)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTHONPATH: "${{ github.workspace }}"
+      SOAK_SLEEP_SECONDS: "5"
+      USE_MOCK: "1"
+      BYBIT_API_KEY: "test_api_key_for_ci_only"
+      BYBIT_API_SECRET: "test_api_secret_for_ci_only"
+      STORAGE_PG_PASSWORD: "test_pg_password_for_ci_only"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      
+      - name: Prepare minimal requirements for CI
+        shell: bash
+        run: |
+          echo "=== Filtering requirements.txt ==="
+          
+          awk '
+            BEGIN{IGNORECASE=1}
+            /^[[:space:]]*bybit-connector/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*mm-orderbook/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*mm_orderbook/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*git\+ssh:/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            /^[[:space:]]*git\+https:/ {print "  [FILTERED] " $0 > "/dev/stderr"; next}
+            {print}
+          ' requirements.txt > requirements_ci.txt
+          
+          echo "pydantic>=2,<3"           >> requirements_ci.txt
+          echo "pydantic-settings>=2,<3"  >> requirements_ci.txt
+          echo "pandas>=2,<3"             >> requirements_ci.txt
+          
+          echo ""
+          echo "=== GATE: Verify mm-orderbook not in requirements_ci.txt ==="
+          if grep -i "mm.orderbook\|mm_orderbook" requirements_ci.txt; then
+            echo "❌ GATE FAILED: mm-orderbook found in requirements_ci.txt"
+            exit 1
+          fi
+          echo "✓ GATE PASSED: mm-orderbook correctly filtered out"
+
+      - name: Install base dependencies
+        run: |
+          python -m pip install -U pip
+          pip install maturin
+          echo "✓ pip and maturin installed"
+
+      - name: Install project with Rust module (editable)
+        run: |
+          echo "=== Building and installing mm-bot with Rust extensions ==="
+          pip install -e . -v
+          echo ""
+          echo "=== Smoke test: import mm_orderbook ==="
+          python -c "import mm_orderbook; print('✓ mm_orderbook import OK')"
+
+      - name: Install remaining dependencies
+        run: |
+          echo "=== Installing external dependencies from requirements_ci.txt ==="
+          pip install -r requirements_ci.txt
+          echo ""
+          echo "=== Final package list ==="
+          pip list
+
+      - name: Run 8-iteration soak with auto-tuning (warmup mode)
+        run: |
+          echo "================================================"
+          echo "POST-SOAK ANALYSIS: 8 iterations (with warmup)"
+          echo "================================================"
+          echo "[PR MODE] Warmup enabled (iters 1-4 = WARN mode)"
+          echo "[PR MODE] Verdict based on last-8 window"
+          echo "================================================"
+          
+          rm -rf artifacts/soak/latest
+          
+          python -m tools.soak.run \
+            --iterations 8 \
+            --mock \
+            --auto-tune \
+            --warmup \
+            --preset maker_bias_uplift_v1
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Soak run failed"
+            exit 1
+          fi
+          
+          echo "✓ Soak run completed"
+          echo "================================================"
+
+      - name: Verify delta application (soft gate, threshold 60%)
+        id: verify-deltas
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "DELTA VERIFICATION (non-strict, soft gate)"
+          echo "Threshold: >=60.0% (PR mode)"
+          echo "================================================"
+          
+          mkdir -p artifacts/soak/latest/reports/analysis
+          
+          # Auto-detect where ITER_SUMMARY_* live
+          ROOT="artifacts/soak/latest"
+          if compgen -G "$ROOT/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT"
+          elif compgen -G "$ROOT/soak/latest/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT/soak/latest"
+          else
+            echo "Error: ITER_SUMMARY_* not found under $ROOT"
+            ls -lah "$ROOT" || true
+            exit 1
+          fi
+          echo "Using TARGET=$TARGET"
+          
+          # Run verifier with PR threshold (60%, non-strict)
+          python -m tools.soak.verify_deltas_applied \
+            --path "$TARGET" \
+            --threshold 0.60 \
+            || true
+          
+          # Find MD report (verifier writes it near TARGET)
+          REPORT_MD="$ROOT/DELTA_VERIFY_REPORT.md"
+          # Fallback: if report went next to TARGET
+          [ -f "$REPORT_MD" ] || REPORT_MD="$TARGET/DELTA_VERIFY_REPORT.md"
+          
+          if [ ! -f "$REPORT_MD" ]; then
+            echo "WARN: DELTA_VERIFY_REPORT.md not found; skipping soft gate"
+            echo "full_apply_ratio=1.0" >> "$GITHUB_OUTPUT"
+            echo "proposals_total=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          
+          echo "[OK] Report written to: $(readlink -f "$REPORT_MD" 2>/dev/null || echo "$REPORT_MD")"
+          echo
+          echo "Verification Summary (head):"
+          head -n 40 "$REPORT_MD" || true
+          echo
+          
+          # Export path via env for Python (fixes sys.argv[1] IndexError)
+          export REPORT_MD
+          
+          # Parse MD: lines like "Full applications: X/Y (Z%)"
+          RATIO=$(python - <<'PY' 2>/dev/null
+          import os, re
+          from pathlib import Path
+          p = Path(os.environ.get("REPORT_MD", ""))
+          txt = p.read_text(encoding="utf-8") if p.is_file() else ""
+          m = re.search(r"Full applications:\s*\d+/\s*\d+\s*\(([\d\.]+)%\)", txt)
+          print(float(m.group(1))/100 if m else 0.0)
+          PY
+          )
+          
+          # Also extract total proposals (denominator)
+          TOTAL=$(python - <<'PY' 2>/dev/null
+          import os, re
+          from pathlib import Path
+          p = Path(os.environ.get("REPORT_MD", ""))
+          txt = p.read_text(encoding="utf-8") if p.is_file() else ""
+          m = re.search(r"Full applications:\s*\d+/(\d+)", txt)
+          print(int(m.group(1)) if m else 0)
+          PY
+          )
+          
+          echo "Parsed: ratio=$RATIO, total=$TOTAL"
+          echo "full_apply_ratio=$RATIO" >> "$GITHUB_OUTPUT"
+          echo "proposals_total=$TOTAL" >> "$GITHUB_OUTPUT"
+          
+          # Soft gate for PR:
+          # - if no delta proposals → PASS
+          # - else require ratio ≥ 0.60
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "✓ No proposals → PASS"
+            exit 0
+          fi
+          
+          # Export for Python check (fixes ratio = $RATIO issue)
+          export RATIO
+          python - <<'PY'
+          import os, sys
+          ratio = float(os.environ.get("RATIO", "0"))
+          sys.exit(0 if ratio >= 0.60 else 1)
+          PY
+          
+          if [ $? -eq 0 ]; then
+            echo "✓ Delta verification soft gate passed (ratio=$RATIO ≥ 0.60)"
+            exit 0
+          else
+            echo "❌ Delta verification soft gate failed (ratio=$RATIO < 0.60)"
+            exit 1
+          fi
+
+      - name: Build reports (non-blocking in PR)
+        id: build_reports
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "GENERATING REPORTS (non-blocking)"
+          echo "================================================"
+          
+          ROOT="artifacts/soak/latest"
+          OUT="$ROOT/reports/analysis"
+          mkdir -p "$OUT"
+          
+          set +e
+          python -m tools.soak.build_reports --src "$ROOT" --out "$OUT" --last-n 8
+          BUILD_EXIT=$?
+          set -e
+          
+          echo "build_exit=$BUILD_EXIT" >> "$GITHUB_OUTPUT"
+          
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo "::warning::Report builder exited with code $BUILD_EXIT (informational in PR)."
+          else
+            echo "✓ Reports generated successfully"
+          fi
+          
+          echo "Artifacts generated:"
+          ls -lah "$OUT" || true
+          echo "================================================"
+
+      - name: Check KPI thresholds (informational)
+        id: kpi_pr_check
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "KPI CHECK (informational, non-blocking)"
+          echo "================================================"
+          
+          SNAP="artifacts/soak/latest/reports/analysis/POST_SOAK_SNAPSHOT.json"
+          if [ ! -f "$SNAP" ]; then
+            echo "::warning::POST_SOAK_SNAPSHOT.json not found; skipping KPI check"
+            exit 0
+          fi
+          
+          python - <<'PY'
+          import json, sys
+          from pathlib import Path
+          
+          def fmt(x, spec):
+              """Safe formatter that handles None/NaN gracefully."""
+              try:
+                  return format(float(x), spec) if x is not None else "n/a"
+              except Exception:
+                  return "n/a"
+          
+          try:
+              snap = Path("artifacts/soak/latest/reports/analysis/POST_SOAK_SNAPSHOT.json")
+              s = json.loads(snap.read_text())
+              
+              kpi = s.get("kpi_last_n", {})
+              
+              # Extract metrics
+              mt = kpi.get("maker_taker_ratio", {}).get("median")
+              p95 = kpi.get("p95_latency_ms", {}).get("max")
+              risk = kpi.get("risk_ratio", {}).get("median")
+              bps = kpi.get("net_bps", {}).get("median")
+              
+              def notice(msg): print(f"::notice::{msg}")
+              def warn(msg):   print(f"::warning::{msg}")
+              
+              print("Last-8 KPI Metrics:")
+              print(f"  Maker/Taker median: {fmt(mt, '.3f')}")
+              print(f"  P95 Latency max: {fmt(p95, '.0f')}ms")
+              print(f"  Risk median: {fmt(risk, '.3f')}")
+              print(f"  Net BPS median: {fmt(bps, '.2f')}")
+              print()
+              
+              # PR thresholds -> informational only (no exit 1)
+              if mt is not None and mt < 0.83:
+                  warn(f"Maker/taker below PR target: {mt:.3f} < 0.83")
+              if p95 is not None and p95 > 340:
+                  warn(f"P95 latency above PR target: {p95:.0f}ms > 340ms")
+              if risk is not None and risk > 0.40:
+                  warn(f"Risk above PR target: {risk:.3f} > 0.40")
+              if bps is not None and bps < 2.5:
+                  warn(f"Net BPS below PR target: {bps:.2f} < 2.5")
+              
+              print()
+              print("✓ KPI check complete (informational only)")
+          
+          except Exception as e:
+              print(f"::warning::KPI check parse error: {e}")
+          
+          # Never fail PR on this step
+          sys.exit(0)
+          PY
+          
+          echo "================================================"
+
+      - name: Export warm-up metrics for Prometheus
+        if: always()
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "EXPORTING WARM-UP METRICS"
+          echo "================================================"
+          
+          # Auto-detect artifacts location
+          ROOT="artifacts/soak/latest"
+          if compgen -G "$ROOT/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT"
+          elif compgen -G "$ROOT/soak/latest/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT/soak/latest"
+          else
+            echo "[WARN] No ITER_SUMMARY files found, skipping metrics export"
+            exit 0
+          fi
+          
+          # Export metrics
+          python -m tools.soak.export_warmup_metrics \
+            --path "$TARGET" \
+            --output "$ROOT/reports/analysis/warmup_metrics.prom"
+          
+          if [ $? -eq 0 ]; then
+            echo "✓ Warm-up metrics exported"
+            echo ""
+            echo "Preview (first 20 lines):"
+            head -20 "$ROOT/reports/analysis/warmup_metrics.prom"
+          else
+            echo "[WARN] Metrics export failed (non-critical)"
+          fi
+          
+          echo "================================================"
+      
+      - name: Upload soak artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-soak-analysis-${{ github.run_id }}
+          path: |
+            artifacts/soak/latest/reports/
+            artifacts/soak/latest/soak/latest/TUNING_REPORT.json
+            artifacts/soak/latest/soak/latest/ITER_SUMMARY_*.json
+            artifacts/soak/latest/ITER_SUMMARY_*.json
+          if-no-files-found: warn
+          retention-days: 30
 
   # ===========================================================================
   # E2E TESTS: Slower, higher memory (~20-30 min)

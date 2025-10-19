@@ -1,0 +1,112 @@
+name: Soak Test (72h)
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_hours:
+        description: 'Soak duration in hours'
+        required: false
+        default: '72'
+        type: string
+      mock_mode:
+        description: 'Use mock data for testing'
+        required: false
+        default: 'false'
+        type: boolean
+
+concurrency:
+  group: soak-test
+  cancel-in-progress: false
+
+jobs:
+  soak:
+    name: Run Soak Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 4380  # 73 hours max
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Minimal dependencies for soak runner
+          # (stdlib-only script, no external deps needed)
+      
+      - name: Run soak test
+        id: soak
+        continue-on-error: true
+        run: |
+          MOCK_FLAG=""
+          if [ "${{ inputs.mock_mode }}" = "true" ]; then
+            MOCK_FLAG="--mock"
+          fi
+          
+          python -m tools.soak.run \
+            --hours ${{ inputs.duration_hours }} \
+            --export-json artifacts/reports/soak_metrics.json \
+            --export-md artifacts/reports/SOAK_RESULTS.md \
+            --gate-summary artifacts/reports/gates_summary.json \
+            $MOCK_FLAG
+          
+          echo "EXIT_CODE=$?" >> $GITHUB_OUTPUT
+      
+      - name: Upload soak artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-test-results-${{ github.run_id }}
+          path: |
+            artifacts/reports/soak_metrics.json
+            artifacts/reports/SOAK_RESULTS.md
+            artifacts/reports/gates_summary.json
+          if-no-files-found: warn
+          retention-days: 90
+      
+      - name: Comment PR with results (if applicable)
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const mdPath = 'artifacts/reports/SOAK_RESULTS.md';
+            
+            if (!fs.existsSync(mdPath)) {
+              console.log('No results file found');
+              return;
+            }
+            
+            const results = fs.readFileSync(mdPath, 'utf8');
+            const exitCode = '${{ steps.soak.outputs.EXIT_CODE }}';
+            
+            const emoji = exitCode === '0' ? '✅' : '❌';
+            const comment = `## ${emoji} Soak Test Results\n\n${results}`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+      
+      - name: Check soak test result
+        if: always()
+        run: |
+          EXIT_CODE="${{ steps.soak.outputs.EXIT_CODE }}"
+          
+          if [ "$EXIT_CODE" = "0" ]; then
+            echo "✅ Soak test PASSED"
+            exit 0
+          else
+            echo "❌ Soak test FAILED"
+            echo "Check uploaded artifacts for details"
+            exit 1
+          fi
+

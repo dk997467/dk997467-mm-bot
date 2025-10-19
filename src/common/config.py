@@ -387,6 +387,125 @@ class FeesConfig:
 
 
 @dataclass
+class PipelineConfig:
+    """Pipeline architecture configuration."""
+    enabled: bool = False  # Feature flag: enable pipeline architecture
+    sample_stage_tracing: float = 0.2  # Fraction of ticks to trace (0.0-1.0)
+    
+    def __post_init__(self):
+        """Validate pipeline configuration."""
+        if not (0.0 <= self.sample_stage_tracing <= 1.0):
+            raise ValueError("sample_stage_tracing must be between 0.0 and 1.0")
+
+
+@dataclass
+class MDCacheConfig:
+    """Market data cache configuration."""
+    enabled: bool = False  # Feature flag: enable MD cache
+    ttl_ms: int = 100  # Cache TTL in milliseconds
+    max_depth: int = 50  # Max orderbook depth to cache
+    stale_ok: bool = True  # Allow stale-while-refresh mode
+    invalidate_on_ws_gap_ms: int = 300  # Invalidate if WS gap > this
+    max_inflight_refresh: int = 1  # Max concurrent refreshes per symbol
+    
+    # Freshness safeguards
+    fresh_ms_for_pricing: int = 60  # Max age for pricing/spread decisions
+    skip_pricing_on_stale: bool = False  # Skip pricing if stale (vs widen spread)
+    
+    def __post_init__(self):
+        """Validate MD cache configuration."""
+        if self.ttl_ms < 10 or self.ttl_ms > 5000:
+            raise ValueError("ttl_ms must be between 10 and 5000")
+        if self.max_depth < 1 or self.max_depth > 200:
+            raise ValueError("max_depth must be between 1 and 200")
+        if self.invalidate_on_ws_gap_ms < 50 or self.invalidate_on_ws_gap_ms > 10000:
+            raise ValueError("invalidate_on_ws_gap_ms must be between 50 and 10000")
+        if self.fresh_ms_for_pricing < 10 or self.fresh_ms_for_pricing > self.ttl_ms:
+            raise ValueError(f"fresh_ms_for_pricing must be between 10 and {self.ttl_ms}")
+
+
+@dataclass
+class StageBudgetsConfig:
+    """Stage performance budgets for CI gates."""
+    enabled: bool = True
+    regress_pct_threshold: float = 3.0  # Fail if regression > +3%
+    baseline_path: str = "artifacts/baseline/stage_budgets.json"
+    
+    # Default p95 budgets (ms)
+    fetch_md_p95_ms: float = 60.0
+    spread_p95_ms: float = 15.0
+    guards_p95_ms: float = 12.0
+    inventory_p95_ms: float = 12.0
+    queue_aware_p95_ms: float = 15.0
+    emit_p95_ms: float = 35.0
+    tick_total_p95_ms: float = 150.0
+    
+    def __post_init__(self):
+        """Validate stage budgets configuration."""
+        if self.regress_pct_threshold < 0.0 or self.regress_pct_threshold > 100.0:
+            raise ValueError("regress_pct_threshold must be between 0.0 and 100.0")
+
+
+@dataclass
+class SymbolScoreboardConfig:
+    """Symbol-level performance scoreboard configuration."""
+    enabled: bool = False  # Feature flag
+    rolling_window_sec: int = 300  # 5 minutes rolling window
+    ema_alpha: float = 0.1  # EMA smoothing factor (0.0-1.0)
+    min_samples: int = 10  # Minimum samples before score is valid
+    
+    # Score weights
+    weight_net_bps: float = 0.4
+    weight_fill_rate: float = 0.2
+    weight_slippage: float = 0.2
+    weight_queue_edge: float = 0.1
+    weight_adverse_penalty: float = 0.1
+    
+    def __post_init__(self):
+        """Validate scoreboard configuration."""
+        if not (0.0 < self.ema_alpha <= 1.0):
+            raise ValueError("ema_alpha must be between 0.0 and 1.0")
+        if self.rolling_window_sec < 60:
+            raise ValueError("rolling_window_sec must be at least 60")
+        
+        # Validate weights sum to 1.0
+        total_weight = (
+            self.weight_net_bps + self.weight_fill_rate + 
+            self.weight_slippage + self.weight_queue_edge + 
+            self.weight_adverse_penalty
+        )
+        if abs(total_weight - 1.0) > 0.01:
+            raise ValueError(f"Score weights must sum to 1.0, got {total_weight}")
+
+
+@dataclass
+class DynamicAllocatorConfig:
+    """Dynamic allocator configuration for per-symbol limits."""
+    enabled: bool = False  # Feature flag
+    rebalance_period_s: int = 30  # Rebalance every 30 seconds
+    min_weight: float = 0.1  # Minimum weight (clamp)
+    max_weight: float = 3.0  # Maximum weight (clamp)
+    hysteresis_threshold: float = 0.05  # Minimum change to trigger rebalance
+    
+    # Whitelist/Blacklist
+    whitelist: List[str] = field(default_factory=list)  # Only trade these symbols
+    blacklist: List[str] = field(default_factory=list)  # Never trade these symbols
+    
+    # Auto-blacklist thresholds
+    auto_blacklist_net_bps: float = -5.0  # Blacklist if net_bps < -5.0 consistently
+    auto_blacklist_window_min: int = 30  # Over 30 minute window
+    
+    def __post_init__(self):
+        """Validate allocator configuration."""
+        if self.rebalance_period_s < 10:
+            raise ValueError("rebalance_period_s must be at least 10")
+        if not (0.0 < self.min_weight < self.max_weight):
+            raise ValueError("Must have 0 < min_weight < max_weight")
+        if not (0.0 <= self.hysteresis_threshold <= 1.0):
+            raise ValueError("hysteresis_threshold must be between 0.0 and 1.0")
+
+
+@dataclass
 class AllocatorConfig:
     smoothing: AllocatorSmoothingConfig = field(default_factory=AllocatorSmoothingConfig)
 
@@ -1586,6 +1705,12 @@ class Config:
     allocator: 'AllocatorConfig' = field(default_factory=AllocatorConfig)
     fees: 'FeesConfig' = field(default_factory=FeesConfig)
     
+    # New pipeline and allocator configs
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    stage_budgets: StageBudgetsConfig = field(default_factory=StageBudgetsConfig)
+    symbol_scoreboard: SymbolScoreboardConfig = field(default_factory=SymbolScoreboardConfig)
+    dynamic_allocator: DynamicAllocatorConfig = field(default_factory=DynamicAllocatorConfig)
+    
     # Legacy configurations (kept for backward compatibility)
     storage: StorageConfig = field(default_factory=StorageConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
@@ -1934,6 +2059,13 @@ class AppConfig:
     guards: GuardsConfig = field(default_factory=GuardsConfig)
     allocator: AllocatorConfig = field(default_factory=AllocatorConfig)
     fees: FeesConfig = field(default_factory=FeesConfig)
+    
+    # New pipeline and allocator configs
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    stage_budgets: StageBudgetsConfig = field(default_factory=StageBudgetsConfig)
+    symbol_scoreboard: SymbolScoreboardConfig = field(default_factory=SymbolScoreboardConfig)
+    dynamic_allocator: DynamicAllocatorConfig = field(default_factory=DynamicAllocatorConfig)
+    md_cache: MDCacheConfig = field(default_factory=MDCacheConfig)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

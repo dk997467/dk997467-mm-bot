@@ -23,6 +23,23 @@ make soak
 ```
 ?????? ??????????? ? `artifacts/soak_reports/*.json`.
 
+### CI Workflows (GitHub Actions)
+
+**Nightly Soak (24 iterations, warmup, strict gates):**
+- Go to: **Actions** → **Nightly Soak (24 iters, warmup)** → **Run workflow**
+- Parameters:
+  - `ref`: Branch or tag (default: `main`)
+  - `iterations`: Number of iterations (default: `24`)
+  - `warmup`: Enable warm-up (default: `true`)
+  - `auto_tune`: Enable auto-tuning (default: `true`)
+  - `sleep_seconds`: Sleep between iterations (default: `300`)
+- Features:
+  - Runs 24 iterations with warm-up and auto-tuning
+  - Strict delta verification (threshold ≥95%)
+  - Strict KPI gates (last-8 window)
+  - Exports warm-up metrics for Prometheus
+  - Uploads all artifacts (retention: 60 days)
+
 ### READY-gate
 ???????? ???????????:
 ```bash

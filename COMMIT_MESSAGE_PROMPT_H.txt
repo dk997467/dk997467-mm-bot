@@ -1,0 +1,106 @@
+feat(reports): диагностика «минусового edge» в EDGE_REPORT (PROMPT H)
+
+Добавлена расширенная диагностическая информация в EDGE_REPORT.json
+для быстрого анализа причин отрицательного net_bps и блокировок.
+
+ИЗМЕНЕНИЯ:
+
+1. Component Breakdown (tools/reports/edge_metrics.py):
+   - compute_component_breakdown(): расчёт всех компонент net_bps
+     * gross_bps, fees_eff_bps, slippage_bps, adverse_bps, inventory_bps, net_bps
+   - Formula (approximate): net_bps = gross - fees - slippage - adverse - inventory
+   - Добавлено в totals.component_breakdown
+
+2. Negative Edge Drivers (tools/reports/edge_metrics.py):
+   - compute_neg_edge_drivers(): топ-2 компонента по вкладу в минус
+   - Активируется только при net_bps < 0
+   - Сортирует по абсолютному значению (descending)
+   - Пример: ["slippage_bps", "adverse_bps"]
+   - Добавлено в totals.neg_edge_drivers
+
+3. Block Reasons Statistics (tools/reports/edge_metrics.py):
+   - compute_block_reasons(): статистика блокировок из audit.jsonl
+   - Для каждой причины (min_interval, concurrency, risk, throttle):
+     * count: количество блокировок
+     * ratio: доля от общего числа
+   - Пример: {"min_interval": {"count": 3, "ratio": 0.6}, ...}
+   - Добавлено в totals.block_reasons
+
+4. Updated Integration (tools/reports/edge_metrics.py):
+   - compute_edge_metrics(): теперь включает diagnostics в totals
+   - Новые поля добавлены к extended_totals
+
+5. Updated Marker (tools/reports/edge_report.py):
+   - Маркер изменён: FIELDS=extended → FIELDS=diagnostics
+   - Указывает на наличие диагностических полей
+
+6. Tests (tests/unit/test_edge_diagnostics.py):
+   - test_component_breakdown: проверка расчёта компонент
+   - test_component_breakdown_missing_fields: обработка пропущенных полей
+   - test_neg_edge_drivers_positive_net_bps: пустой список для положительного net_bps
+   - test_neg_edge_drivers_negative_net_bps: правильные топ-2 драйверы
+   - test_block_reasons_no_audit_data: нулевые значения без данных
+   - test_block_reasons_with_audit_data: правильный подсчёт
+   - test_block_reasons_only_min_interval: 100% одной причины
+   - test_block_reasons_unknown_reason_ignored: игнорирование неизвестных
+
+7. E2E Tests (tests/e2e/test_edge_report_kpi_gate.py):
+   - Обновлён test_edge_report_generation: проверка новых полей
+   - Новый test_edge_report_negative_net_bps: проверка neg_edge_drivers
+   - Новый test_edge_report_with_block_reasons: проверка block_reasons из audit.jsonl
+   - Исправлен test_kpi_gate_warn: exit code 0 для WARN (PROMPT G)
+
+СТРУКТУРА EDGE_REPORT.json:
+
+{
+  "totals": {
+    "net_bps": -2.5,
+    "gross_bps": 5.0,
+    // ... (existing fields) ...
+    
+    // DIAGNOSTICS (PROMPT H):
+    "component_breakdown": {
+      "gross_bps": 5.0,
+      "fees_eff_bps": 2.0,
+      "slippage_bps": 3.5,
+      "adverse_bps": 2.5,
+      "inventory_bps": 0.5,
+      "net_bps": -2.5
+    },
+    "neg_edge_drivers": ["slippage_bps", "adverse_bps"],
+    "block_reasons": {
+      "min_interval": {"count": 3, "ratio": 0.6},
+      "concurrency": {"count": 1, "ratio": 0.2},
+      "risk": {"count": 1, "ratio": 0.2},
+      "throttle": {"count": 0, "ratio": 0.0}
+    }
+  }
+}
+
+MARKER:
+
+  | edge_report | OK | FIELDS=diagnostics |
+
+USE CASES:
+
+1. Диагностика минусового edge:
+   - net_bps = -1.78 → проверить neg_edge_drivers
+   - Пример: ["slippage_bps", "adverse_bps"]
+   - Действие: уменьшить агрессивность стратегии
+
+2. Анализ блокировок:
+   - Много CANCEL/REPLACE → проверить block_reasons
+   - Пример: min_interval = 75% → увеличить min_interval_ms
+
+ACCEPTANCE:
+
+  ✅ EDGE_REPORT.json содержит component_breakdown
+  ✅ EDGE_REPORT.json содержит block_reasons
+  ✅ При net_bps < 0: neg_edge_drivers непустой
+  ✅ При net_bps >= 0: neg_edge_drivers пустой
+  ✅ Маркер обновлён на FIELDS=diagnostics
+
+TEST RESULTS: 15/15 passed (9 unit + 6 e2e)
+
+Связано: PROMPT G (KPI Gate safe-mode), PROMPT C (extended metrics)
+

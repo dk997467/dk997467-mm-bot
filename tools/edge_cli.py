@@ -7,7 +7,9 @@ from tools.edge_audit import build_report, write_json_atomic
 
 
 def _write_text_atomic(path: str, content: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    dirname = os.path.dirname(path)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='ascii', newline='') as f:
         f.write(content)

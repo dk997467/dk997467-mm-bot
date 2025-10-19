@@ -85,6 +85,54 @@ jobs:
       - name: Run fast e2e (verbose, targeted)
         run: |
           pytest -vv -s --maxfail=1 tests/e2e/test_full_stack_validation.py
+      
+      - name: Generate readiness score (deterministic)
+        run: |
+          CI_FAKE_UTC="1970-01-01T00:00:00Z" \
+            python -m tools.release.readiness_score \
+            --out-json artifacts/reports/readiness.json
+      
+      - name: Validate readiness gate
+        id: readiness
+        continue-on-error: true
+        run: |
+          python -m tools.ci.validate_readiness artifacts/reports/readiness.json
+      
+      - name: Golden regression check
+        id: golden
+        continue-on-error: true
+        run: |
+          # Check if golden files exist
+          if [ -f "tests/golden/EDGE_REPORT_case1.json" ] && [ -f "artifacts/golden/EDGE_REPORT_latest.json" ]; then
+            python -m tools.tests.golden_compare \
+              --baseline tests/golden/EDGE_REPORT_case1.json \
+              --actual artifacts/golden/EDGE_REPORT_latest.json \
+              --fail-on-drift
+          else
+            echo "[WARN] Golden files not found, skipping regression check"
+            exit 0
+          fi
+      
+      - name: Check gates
+        if: always()
+        run: |
+          READINESS_EXIT="${{ steps.readiness.outcome }}"
+          GOLDEN_EXIT="${{ steps.golden.outcome }}"
+          
+          echo "Readiness Gate: $READINESS_EXIT"
+          echo "Golden Regression: $GOLDEN_EXIT"
+          
+          if [ "$READINESS_EXIT" != "success" ]; then
+            echo "❌ Readiness gate FAILED"
+            exit 1
+          fi
+          
+          if [ "$GOLDEN_EXIT" = "failure" ]; then
+            echo "❌ Golden regression detected"
+            exit 1
+          fi
+          
+          echo "✅ All gates passed"
 
       - name: Upload artifacts (90 days by default)
         if: always()
@@ -96,4 +144,216 @@ jobs:
             .pytest_cache/**
           if-no-files-found: ignore
           retention-days: 30
+
+  # ===========================================================================
+  # SOAK TESTS WITH STRICT GATES: For nightly validation
+  # ===========================================================================
+  soak-strict:
+    name: Soak Tests (strict gates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTHONPATH: "${{ github.workspace }}"
+      SOAK_SLEEP_SECONDS: "10"
+      BYBIT_API_KEY: "test_api_key_for_ci_only"
+      BYBIT_API_SECRET: "test_api_secret_for_ci_only"
+      STORAGE_PG_PASSWORD: "test_pg_password_for_ci_only"
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      
+      - name: Prepare minimal requirements for CI
+        shell: bash
+        run: |
+          awk '
+            BEGIN{IGNORECASE=1}
+            /^[[:space:]]*bybit-connector/ {next}
+            /^[[:space:]]*mm-orderbook/ {next}
+            /^[[:space:]]*mm_orderbook/ {next}
+            /^[[:space:]]*git\+/ {next}
+            {print}
+          ' requirements.txt > requirements_ci.txt
+          
+          echo "pydantic>=2,<3" >> requirements_ci.txt
+          echo "pydantic-settings>=2,<3" >> requirements_ci.txt
+          echo "pandas>=2,<3" >> requirements_ci.txt
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          pip install maturin
+          pip install -e . -v
+          pip install -r requirements_ci.txt
+      
+      - name: Run soak (24 iterations, strict, with warmup)
+        run: |
+          echo "================================================"
+          echo "NIGHTLY SOAK: 24 iterations (strict mode)"
+          echo "================================================"
+          echo "[NIGHTLY MODE] Warmup enabled for realistic testing"
+          echo "[NIGHTLY MODE] Strict gates: last-8 must PASS"
+          echo "[NIGHTLY MODE] Delta verify: full_apply_ratio >= 0.95"
+          echo "================================================"
+          
+          rm -rf artifacts/soak/latest
+          python -m tools.soak.run \
+            --iterations 24 \
+            --mock \
+            --auto-tune \
+            --warmup \
+            --preset maker_bias_uplift_v1
+      
+      - name: Verify delta application (strict, threshold 95%)
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "DELTA VERIFICATION (STRICT)"
+          echo "Threshold: >=95.0% (nightly mode)"
+          echo "================================================"
+          
+          ROOT="artifacts/soak/latest"
+          if compgen -G "$ROOT/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT"
+          elif compgen -G "$ROOT/soak/latest/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT/soak/latest"
+          else
+            echo "Error: ITER_SUMMARY_* not found"
+            exit 1
+          fi
+          
+          # Run verifier with strict threshold (95%)
+          python -m tools.soak.verify_deltas_applied \
+            --path "$TARGET" \
+            --threshold 0.95 \
+            --strict
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Strict delta verification FAILED"
+            exit 1
+          fi
+          echo "✓ Strict delta verification passed"
+      
+      - name: Build reports (strict, blocking)
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "GENERATING REPORTS (STRICT)"
+          echo "================================================"
+          
+          ROOT="artifacts/soak/latest"
+          OUT="$ROOT/reports/analysis"
+          mkdir -p "$OUT"
+          
+          python -m tools.soak.build_reports --src "$ROOT" --out "$OUT" --last-n 8
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Report generation FAILED"
+            exit 1
+          fi
+          echo "✓ Reports generated"
+      
+      - name: Enforce KPI thresholds (strict)
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "KPI THRESHOLD ENFORCEMENT (STRICT)"
+          echo "================================================"
+          
+          SNAP="artifacts/soak/latest/reports/analysis/POST_SOAK_SNAPSHOT.json"
+          if [ ! -f "$SNAP" ]; then
+            echo "❌ POST_SOAK_SNAPSHOT.json not found"
+            exit 2
+          fi
+          
+          python - <<'PY'
+          import json, sys
+          from pathlib import Path
+          
+          snap = Path("artifacts/soak/latest/reports/analysis/POST_SOAK_SNAPSHOT.json")
+          s = json.loads(snap.read_text())
+          
+          kpi = s.get("kpi_last_n", {})
+          goals = s.get("goals_met", {})
+          
+          print("Last-8 KPI Results:")
+          print(f'  Maker/Taker: {kpi.get("maker_taker_ratio", {}).get("mean", 0):.3f} (target >= 0.83)')
+          print(f'  P95 Latency: {kpi.get("p95_latency_ms", {}).get("max", 999):.0f}ms (target <= 340ms)')
+          print(f'  Risk Ratio: {kpi.get("risk_ratio", {}).get("median", 1):.3f} (target <= 0.40)')
+          print(f'  Net BPS: {kpi.get("net_bps", {}).get("mean", 0):.2f} (target >= 2.5)')
+          print()
+          
+          failed = []
+          for goal_name, goal_met in goals.items():
+              status = '✓' if goal_met else '✗'
+              print(f'{status} {goal_name}: {goal_met}')
+              if not goal_met:
+                  failed.append(goal_name)
+          
+          if failed:
+              print()
+              print(f'❌ KPI GATE FAILED: {len(failed)} goal(s) not met')
+              print(f'   Failed: {", ".join(failed)}')
+              sys.exit(1)
+          else:
+              print()
+              print('✓ All KPI goals met')
+          PY
+          
+          echo "================================================"
+          echo "✓ STRICT KPI validation passed"
+          echo "================================================"
+      
+      - name: Export warm-up metrics for Prometheus
+        if: always()
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "EXPORTING WARM-UP METRICS (NIGHTLY)"
+          echo "================================================"
+          
+          ROOT="artifacts/soak/latest"
+          if compgen -G "$ROOT/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT"
+          elif compgen -G "$ROOT/soak/latest/ITER_SUMMARY_*.json" > /dev/null; then
+            TARGET="$ROOT/soak/latest"
+          else
+            echo "[WARN] No ITER_SUMMARY files found"
+            exit 0
+          fi
+          
+          python -m tools.soak.export_warmup_metrics \
+            --path "$TARGET" \
+            --output "$ROOT/reports/analysis/warmup_metrics.prom"
+          
+          if [ $? -eq 0 ]; then
+            echo "✓ Warm-up metrics exported (nightly)"
+          fi
+          
+          echo "================================================"
+      
+      - name: Upload soak artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-soak-strict-${{ github.run_id }}
+          path: |
+            artifacts/soak/latest/reports/
+            artifacts/soak/latest/soak/latest/TUNING_REPORT.json
+            artifacts/soak/latest/soak/latest/ITER_SUMMARY_*.json
+            artifacts/soak/latest/ITER_SUMMARY_*.json
+          if-no-files-found: warn
+          retention-days: 60
 

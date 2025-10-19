@@ -1,0 +1,159 @@
+feat(soak): runtime auto-tuning between iterations with guardrails and persisted overrides
+
+Implemented comprehensive runtime auto-tuning system for soak tests that automatically
+adjusts trading profile parameters between iterations based on EDGE_REPORT metrics.
+
+## Core Components
+
+- `strategy/edge_sentinel.py` (enhanced)
+  * Added runtime overrides support (read from ENV/file)
+  * Load from MM_RUNTIME_OVERRIDES_JSON or artifacts/soak/runtime_overrides.json
+  * Apply overrides with limits enforcement (min/max for each field)
+  * Track all adjustments with timestamps, from/to values, and reasons
+  * Enhanced save_applied_profile to include full state:
+    - profile: Profile name (e.g. "S1")
+    - base: Base profile values (before overrides)
+    - overrides_runtime: Current runtime overrides
+    - runtime_adjustments: Full history of all adjustments
+    - applied: Final applied profile
+  * New methods:
+    - load_runtime_overrides() — Load from ENV/file
+    - apply_runtime_overrides() — Apply with limits
+    - track_runtime_adjustment() — Track history
+
+- `tools/soak/run.py` (enhanced)
+  * Added --auto-tune CLI flag to enable runtime tuning
+  * Implemented compute_tuning_adjustments() with 5 trigger conditions:
+    1. cancel_ratio > 0.55 → ↑ min_interval_ms, ↓ replace_rate_per_min
+    2. adverse_bps_p95 > 4 OR slippage_bps_p95 > 3 → ↑ base_spread_bps_delta
+    3. order_age_p95_ms > 330 → ↓ replace_rate_per_min, ↑ tail_age_ms
+    4. ws_lag_p95_ms > 120 → ↑ min_interval_ms
+    5. net_bps < 2.5 (only if no other triggers) → ↑ base_spread_bps_delta
+  * Implemented 4 safety guardrails:
+    1. Max 2 changes per field per iteration (prevents oscillation)
+    2. Multi-fail guard: if 3+ independent triggers → only calm down
+    3. Spread delta cap: max 0.1 change per iteration
+    4. Limits enforcement: clamp all values to safe ranges
+  * Iterative tuning loop:
+    - Load current runtime_overrides.json
+    - Apply to sentinel
+    - Run iteration (or generate mock EDGE_REPORT)
+    - Compute adjustments based on metrics
+    - Save new runtime_overrides.json for next iteration
+  * Enhanced mock mode to generate problematic then improving metrics
+
+## Runtime Limits
+
+Fields that can be adjusted at runtime:
+```
+min_interval_ms: (50, 300)
+replace_rate_per_min: (120, 360)
+base_spread_bps_delta: (0.0, 0.6)
+impact_cap_ratio: (0.04, 0.12)
+tail_age_ms: (400, 1000)
+```
+
+## Markers
+
+Runtime overrides:
+```
+| runtime_overrides | OK | SOURCE=env/file |
+| runtime_adjust | OK | FIELD=min_interval_ms FROM=60 TO=80 REASON=cancel_ratio>0.55 |
+```
+
+Iteration tuning:
+```
+| soak_iter_tune | OK | ADJUSTMENTS=2 net_bps=2.62 cancel=0.48 age_p95=312 lag_p95=90 |
+| soak_iter_tune | OK | ADJUSTMENTS=0 metrics_stable |
+| soak_iter_tune | SKIP | REASON=multi_fail_guard |
+```
+
+## Tests
+
+All tests PASSING (15 total):
+
+- `tests/unit/test_runtime_tuning.py` (11 tests)
+  * Trigger logic (cancel_ratio, adverse/slippage, order_age, ws_lag, net_bps)
+  * Limits enforcement
+  * Multi-fail guard
+  * Spread delta cap
+  * Max 2 changes per field
+  * No adjustments when metrics good
+  * Incremental adjustment building
+
+- `tests/e2e/test_soak_autotune_dry.py` (4 tests)
+  * Multi-iteration simulation (3 iterations)
+  * Flag requirement check
+  * S1 profile integration
+  * Markers and JSON structure validation
+
+## Usage
+
+Mini-soak with auto-tuning (mock):
+```bash
+MM_PROFILE=S1 python -m tools.soak.run \
+    --iterations 3 \
+    --mock \
+    --auto-tune
+```
+
+Staging soak (6h, no secrets):
+```bash
+MM_PROFILE=S1 MM_ALLOW_MISSING_SECRETS=1 \
+python -m tools.soak.run \
+    --hours 6 \
+    --auto-tune
+```
+
+Production soak (24-72h):
+```bash
+MM_PROFILE=S1 python -m tools.soak.run \
+    --hours 24 \
+    --auto-tune
+```
+
+Manual override via ENV:
+```bash
+export MM_RUNTIME_OVERRIDES_JSON='{"min_interval_ms":100,"replace_rate_per_min":250}'
+```
+
+Manual override via file:
+```bash
+echo '{"min_interval_ms":100}' > artifacts/soak/runtime_overrides.json
+```
+
+## Expected Outcomes
+
+With auto-tuning enabled:
+- net_bps converges to ≥ 2.5
+- cancel_ratio stays ≤ 0.55
+- order_age_p95 stays ≤ 330ms
+- maker_share maintains ≥ 85%
+- System self-corrects when metrics degrade
+
+Typical convergence: 3-5 iterations
+
+## Integration
+
+Works seamlessly with previous prompts:
+- **Prompt A (Profile S1):** Auto-tuning adjusts S1 parameters
+- **Prompt B (Safe Mode):** Works without secrets
+- **Prompt C (Extended EDGE_REPORT):** Uses P95 metrics and ratios
+
+## Acceptance
+
+✅ --auto-tune flag creates runtime_overrides.json
+✅ applied_profile.json updated with runtime_adjustments
+✅ Markers printed for all tuning decisions
+✅ Limits and guardrails enforced
+✅ All tests PASS (15/15)
+✅ Mock mode generates realistic metric progression
+✅ Multi-fail guard prevents aggressive adjustments
+✅ Adjustments build incrementally
+✅ No linter errors
+✅ Deterministic output (frozen time)
+
+---
+
+Co-authored-by: Claude (Anthropic)
+

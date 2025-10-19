@@ -1,0 +1,108 @@
+groups:
+  - name: soak_test_alerts
+    interval: 30s
+    rules:
+      # HARD GATE: Latency P95 too high
+      - alert: SoakLatencyP95High
+        expr: histogram_quantile(0.95, rate(mm_stage_duration_ms_bucket{stage="tick_total"}[5m])) > 150
+        for: 10m
+        labels:
+          severity: critical
+          gate: hard
+          component: latency
+        annotations:
+          summary: "Soak test: Latency P95 exceeds threshold"
+          description: "Tick latency P95 is {{ $value | humanize }}ms (threshold: 150ms)"
+          action: "Check system load, network latency, and processing bottlenecks"
+      
+      # HARD GATE: High deadline miss rate
+      - alert: SoakDeadlineMissRate
+        expr: rate(mm_deadline_miss_total[5m]) > 0.02
+        for: 10m
+        labels:
+          severity: critical
+          gate: hard
+          component: deadline
+        annotations:
+          summary: "Soak test: Deadline miss rate too high"
+          description: "Deadline miss rate is {{ $value | humanizePercentage }} (threshold: 2%)"
+          action: "Investigate tick processing delays and optimize critical path"
+      
+      # HARD GATE: Edge BPS degradation
+      - alert: SoakEdgeDegradation
+        expr: mm_edge_bps_ema24h < 2.0
+        for: 30m
+        labels:
+          severity: critical
+          gate: hard
+          component: edge
+        annotations:
+          summary: "Soak test: Edge BPS below target"
+          description: "Edge BPS (24h EMA) is {{ $value | humanize }} (threshold: 2.0)"
+          action: "Review spread calibration, maker/taker balance, and fee optimization"
+      
+      # HARD GATE: MD Cache hit ratio too low
+      - alert: SoakMDCacheHitRatio
+        expr: rate(mm_md_cache_hit_total[5m]) / (rate(mm_md_cache_hit_total[5m]) + rate(mm_md_cache_miss_total[5m])) < 0.70
+        for: 15m
+        labels:
+          severity: critical
+          gate: hard
+          component: md_cache
+        annotations:
+          summary: "Soak test: MD Cache hit ratio too low"
+          description: "MD Cache hit ratio is {{ $value | humanizePercentage }} (threshold: 70%)"
+          action: "Check cache TTL, refresh rates, and WS connection stability"
+      
+      # SOFT GATE: Maker/Taker imbalance
+      - alert: SoakMakerTakerImbalance
+        expr: mm_maker_share_ratio < 0.85
+        for: 30m
+        labels:
+          severity: warning
+          gate: soft
+          component: maker_taker
+        annotations:
+          summary: "Soak test: Maker share below target"
+          description: "Maker share is {{ $value | humanizePercentage }} (threshold: 85%)"
+          action: "Review taker cap, spread aggressiveness, and queue-ETA nudge"
+      
+      # SOFT GATE: WebSocket lag
+      - alert: SoakWSLagHigh
+        expr: mm_ws_lag_max_ms > 200
+        for: 15m
+        labels:
+          severity: warning
+          gate: soft
+          component: websocket
+        annotations:
+          summary: "Soak test: WebSocket lag too high"
+          description: "WS lag max is {{ $value | humanize }}ms (threshold: 200ms)"
+          action: "Check network connectivity, WS reconnection logic, and server load"
+      
+      # CRITICAL: Circuit breaker open
+      - alert: SoakCircuitBreakerOpen
+        expr: mm_circuit_breaker_state{state="open"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          gate: hard
+          component: circuit_breaker
+        annotations:
+          summary: "Soak test: Circuit breaker is OPEN"
+          description: "Circuit breaker has been open for {{ $value | humanizeDuration }}"
+          action: "Investigate root cause of repeated failures triggering circuit breaker"
+      
+      # CRITICAL: Guard trip
+      - alert: SoakGuardTrip
+        expr: rate(mm_guard_trip_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          gate: hard
+          component: guards
+        annotations:
+          summary: "Soak test: Safety guard triggered"
+          description: "Guard '{{ $labels.guard }}' triggered at rate {{ $value | humanize }}/s"
+          action: "Review guard thresholds and system behavior causing trips"
+

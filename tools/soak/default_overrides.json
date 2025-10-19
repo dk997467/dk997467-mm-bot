@@ -1,0 +1,9 @@
+{
+  "base_spread_bps_delta": 0.14,
+  "impact_cap_ratio": 0.09,
+  "max_delta_ratio": 0.14,
+  "min_interval_ms": 65,
+  "replace_rate_per_min": 280,
+  "tail_age_ms": 620
+}
+

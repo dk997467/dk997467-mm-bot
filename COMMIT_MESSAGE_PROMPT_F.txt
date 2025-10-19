@@ -1,0 +1,54 @@
+feat(autotune): add Age Relief mechanism for order aging correction
+
+Implements PROMPT F - soft correction that reduces order_age_p95_ms
+WITHOUT harming execution quality (adverse/slippage).
+
+Problem:
+- High order_age_p95_ms (>330ms) previously triggered "calming" adjustments
+- These would reduce replace_rate and increase wait times
+- Reduced aggressiveness could miss profitable opportunities
+
+Solution - Age Relief:
+  Trigger: order_age > 330 AND adverse ≤ 4 AND slippage ≤ 3
+  Action: Make strategy MORE aggressive (but safely)
+    - min_interval_ms -= 10 (min: 50)
+    - replace_rate_per_min += 30 (max: 330)
+  
+  Key: NOT a failure - doesn't increment fail_count
+
+Changes:
+- tools/soak/run.py
+  * Replaced old order_age trigger with Age Relief
+  * Extract metrics once at top (avoid duplication)
+  * Age Relief only applies when execution quality is good
+  * Updated mock data to demonstrate Age Relief
+  * Markers: | autotune | AGE_RELIEF | field from=X to=Y |
+
+- tests/unit/test_runtime_tuning.py
+  * test_trigger_age_relief_applied: verifies Age Relief works
+  * test_trigger_age_relief_not_applied_bad_adverse: verifies safety (adverse > 4)
+  * test_trigger_age_relief_not_applied_bad_slippage: verifies safety (slippage > 3)
+  * test_trigger_age_relief_respects_limits: verifies min/max limits
+
+Markers:
+  | autotune | AGE_RELIEF | min_interval_ms from=60 to=50 |
+  | autotune | AGE_RELIEF | replace_rate_per_min from=300 to=330 |
+  | autotune | AGE_RELIEF | order_age=350ms adverse=3.30 slippage=2.35 |
+
+Impact:
+✅ Reduces order age when safe to do so
+✅ Doesn't harm execution quality (conditional trigger)
+✅ More aggressive = better performance in good conditions
+✅ Doesn't trigger multi-fail guard (not a failure)
+✅ Respects all safety limits (50ms min, 330/min max)
+
+Acceptance Test:
+  MM_PROFILE=S1 python -m tools.soak.run --iterations 3 --auto-tune --mock
+  → Age Relief triggers in iterations 2-3 (good execution quality)
+  → min_interval: 60 → 50 (at limit)
+  → replace_rate: 270 → 300 → 330 (at limit)
+  → Markers printed for all adjustments
+
+Tests: 14/14 unit tests passing
+Refs: PROMPT_F_AGE_RELIEF_COMPLETE.md
+

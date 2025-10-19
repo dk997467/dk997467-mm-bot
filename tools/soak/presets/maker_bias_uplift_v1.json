@@ -1,0 +1,59 @@
+{
+  "description": "Maker bias uplift v1: Gentle shift toward maker orders without impacting latency",
+  "version": "1.0",
+  "target_metrics": {
+    "maker_taker_ratio": ">= 0.83",
+    "net_bps": ">= 2.8",
+    "p95_latency_ms": "<= 330",
+    "risk_ratio": "<= 0.40"
+  },
+  "changes": {
+    "quoting": {
+      "base_spread_bps_delta": {
+        "op": "add",
+        "value": 0.01,
+        "reason": "Widen spread slightly to improve maker profitability"
+      },
+      "min_interval_ms": {
+        "op": "add",
+        "value": 15,
+        "reason": "Reduce rebid frequency to favor existing orders"
+      },
+      "replace_rate_per_min": {
+        "op": "mul",
+        "value": 0.90,
+        "reason": "10% reduction in order replacement rate"
+      }
+    },
+    "impact": {
+      "impact_cap_ratio": {
+        "op": "mul",
+        "value": 0.95,
+        "reason": "5% more conservative impact estimation"
+      },
+      "max_delta_ratio": {
+        "op": "mul",
+        "value": 0.95,
+        "reason": "5% smaller position deltas for stability"
+      }
+    },
+    "taker_rescue": {
+      "rescue_max_ratio": {
+        "op": "mul",
+        "value": 0.85,
+        "reason": "15% reduction in taker rescue aggressiveness"
+      },
+      "min_edge_bps": {
+        "op": "add",
+        "value": 0.5,
+        "reason": "Higher threshold for taker entry (+0.5 bps)"
+      },
+      "cooldown_ms": {
+        "op": "add",
+        "value": 250,
+        "reason": "Longer cooldown between taker rescues (+250ms)"
+      }
+    }
+  }
+}
+

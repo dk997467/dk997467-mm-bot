@@ -1,0 +1,17 @@
+{
+  "base_spread_bps_delta":0.14,
+  "engine":{
+    "min_interval_ms":5,
+    "tail_age_ms":30
+  },
+  "impact_cap_ratio":0.09,
+  "max_delta_ratio":0.14,
+  "min_interval_ms":65,
+  "replace_rate_per_min":280,
+  "risk":{
+    "base_spread_bps_delta":0.01999999999999999,
+    "impact_cap_ratio":-0.009999999999999995,
+    "max_delta_ratio":-0.010000000000000009
+  },
+  "tail_age_ms":620
+}

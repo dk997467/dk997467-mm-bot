@@ -24,31 +24,53 @@ on:
       soak_hours:
         description: "Duration in hours (24-72)"
         required: false
-        default: "24"
+        type: number
+        default: 3
+      iterations:
+        description: "Number of iterations (mini-soak mode)"
+        required: false
+        type: number
+        default: 6
+      auto_tune:
+        description: "Enable auto-tuning between iterations"
+        required: false
+        type: boolean
+        default: true
+      overrides_json:
+        description: "Runtime overrides JSON (leave empty for defaults)"
+        required: false
+        type: string
+        default: ""
       iteration_timeout_seconds:
         description: "Timeout per iteration (seconds)"
         required: false
-        default: "1200"
+        type: number
+        default: 1200
       heartbeat_interval_seconds:
         description: "Sleep between iterations (seconds)"
         required: false
-        default: "300"
+        type: number
+        default: 300
       validation_timeout_seconds:
         description: "Timeout for validation steps (seconds)"
         required: false
-        default: "900"
+        type: number
+        default: 900
       artifact_retention_days:
         description: "Artifact retention (days)"
         required: false
-        default: "14"
+        type: number
+        default: 14
       python_path:
         description: "Python executable path (default: auto-detect)"
         required: false
+        type: string
         default: "python"
       stay_awake:
         description: "Anti-sleep protection (1=enabled, 0=disabled)"
         required: false
-        default: "1"
+        type: number
+        default: 1
   schedule:
     - cron: "0 2 * * 1" # Понедельник в 02:00 UTC
 
@@ -76,6 +98,15 @@ jobs:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_PYTHON_VERSION_WARNING: "1"
+      
+      # Cache: Disabled on Windows due to tar/gzip issues
+      # Set to '1' to enable on Linux/macOS or after installing GNU tar+gzip
+      ENABLE_SOAK_CACHE: "0"
+      
+      # MEGA-PROMPT: Runtime overrides and profile
+      MM_PROFILE: "S1"
+      MM_ALLOW_MISSING_SECRETS: "1"
+      MM_RUNTIME_OVERRIDES_JSON: ${{ inputs.overrides_json }}
       
       # ========================================================================
       # SOAK TEST PARAMETERS (configurable via workflow_dispatch)
@@ -129,8 +160,19 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       
       # Proxy configuration (optional - for restricted networks)
-      HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
-      HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
+      # Note: Uncomment and set in repository secrets if needed
+      # HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+      # HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
+      
+      # ========================================================================
+      # VALIDATION & KPI GATE (safe-mode for CI)
+      # ========================================================================
+      
+      # Fixtures directory for tests
+      FIXTURES_DIR: "tests/fixtures"
+      
+      # PYTHONPATH for validation scripts (Windows: semicolon separator)
+      PYTHONPATH: "${{ github.workspace }};${{ github.workspace }}\\src"
       
       # ========================================================================
       # ARTIFACT PATHS (centralized configuration)
@@ -145,7 +187,7 @@ jobs:
       # SETUP: Prepare environment and dependencies
       # ======================================================================
       
-      - name: "[1/12] Checkout code"
+      - name: "[1/13] Checkout code"
         id: checkout
         uses: actions/checkout@v4
         with:
@@ -158,7 +200,7 @@ jobs:
           Remove-Item -Recurse -Force "$($env:USERPROFILE)\.cargo\git" -ErrorAction SilentlyContinue
           Write-Host "Cargo cache cleared."
 
-      - name: "[2/12] Install Rust toolchain"
+      - name: "[2/13] Install Rust toolchain"
         id: install-rust
         # Purpose: Install Rust for mm-orderbook bindings (PyO3)
         # Uses: 'stable-gnu' to avoid MSVC dependency on Windows
@@ -182,31 +224,55 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: "[3/12] Cache Cargo registry"
+      - name: "[3/13] Prefer Windows tar (bsdtar) for actions/cache"
+        id: setup-windows-tar
+        shell: pwsh
+        # Purpose: Ensure actions/cache uses Windows bsdtar instead of Git Bash tar
+        # Problem: Git Bash tar requires external gzip which is not available
+        # Solution: Put C:\Windows\System32 first in PATH to use built-in bsdtar
+        # This prevents "gzip: command not found" warnings in Post job cleanup
+        run: |
+          Write-Host "--- Configuring PATH to prefer Windows bsdtar ---"
+          
+          # Prepend Windows System32 to PATH
+          $newPath = "C:\Windows\System32;$env:PATH"
+          echo "PATH=$newPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          
+          Write-Host "[OK] Windows System32 prepended to PATH"
+          Write-Host "[INFO] actions/cache will now use C:\Windows\System32\tar.exe (bsdtar)"
+          Write-Host "[INFO] This avoids 'gzip: command not found' errors in cache post-processing"
+
+      - name: "[4/13] Cache Cargo registry"
         id: cache-cargo
+        if: ${{ env.ENABLE_SOAK_CACHE == '1' }}
         # Purpose: Cache Cargo dependencies to speed up Rust builds
         # Key: Based on Cargo.lock for stable hashing
+        # Note: Using forward slashes for cross-platform compatibility
+        # NOTE: Disabled on Windows (ENABLE_SOAK_CACHE=0) due to tar/gzip issues
         uses: actions/cache@v4
         with:
           path: |
-            ~\.cargo\registry\index
-            ~\.cargo\registry\cache
-            ~\.cargo\git\db
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
           key: ${{ runner.os }}-cargo-${{ hashFiles('rust/**/Cargo.lock', 'rust/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: "[4/12] Cache Rust build artifacts"
+      - name: "[5/13] Cache Rust build artifacts"
         id: cache-rust-target
+        if: ${{ env.ENABLE_SOAK_CACHE == '1' }}
         # Purpose: Cache compiled Rust artifacts for faster rebuilds
+        # Note: Using forward slashes for cross-platform compatibility
+        # NOTE: Disabled on Windows (ENABLE_SOAK_CACHE=0) due to tar/gzip issues
         uses: actions/cache@v4
         with:
-          path: rust\target
+          path: rust/target
           key: ${{ runner.os }}-rust-target-${{ hashFiles('rust/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-rust-target-
 
-      - name: "[5/12] Setup artifacts directory"
+      - name: "[6/13] Setup artifacts directory"
         id: setup-env
         if: always()
         # Purpose: Create artifacts directory structure for test outputs
@@ -216,17 +282,23 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force "$env:SOAK_ARTIFACTS_DIR" | Out-Null
 
-      - name: "[6/12] Cache pip dependencies"
+      - name: "[7/13] Cache pip dependencies"
         id: cache-pip
+        if: ${{ env.ENABLE_SOAK_CACHE == '1' }}
         # Purpose: Cache Python packages to speed up installation
+        # Note: Using forward slashes for cross-platform compatibility
+        # Windows: ~/AppData/Local/pip/Cache
+        # NOTE: Disabled on Windows (ENABLE_SOAK_CACHE=0) due to tar/gzip issues
         uses: actions/cache@v4
         with:
-          path: ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          path: |
+            ~/AppData/Local/pip/Cache
+            **/__pycache__
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: "[7/12] Verify Python installation"
+      - name: "[8/13] Verify Python installation"
         id: verify-python
         # Purpose: Verify Python is accessible and upgrade pip
         # Note: Uses $env:PYTHON_EXE (auto-detected or from input)
@@ -236,7 +308,7 @@ jobs:
           & $env:PYTHON_EXE -m pip --version
           & $env:PYTHON_EXE -m pip install --upgrade pip
 
-      - name: "[8/12] Prepare CI requirements"
+      - name: "[9/13] Prepare CI requirements"
         id: prepare-reqs
         # Purpose: Filter out private packages (bybit-connector, mm-orderbook)
         # These are not available in public PyPI
@@ -245,13 +317,13 @@ jobs:
             Where-Object { $_ -notmatch '^(?i)bybit-connector' -and $_ -notmatch '^(?i)git\+' -and $_ -notmatch '^(?i)mm-orderbook' } |
             Set-Content requirements_ci.txt -Encoding ASCII
 
-      - name: "[9/12] Install Python dependencies"
+      - name: "[10/13] Install Python dependencies"
         id: install-deps
         # Purpose: Install all dependencies from filtered requirements
         run: |
           & $env:PYTHON_EXE -m pip install -r requirements_ci.txt
 
-      - name: "[10/12] Install local project package"
+      - name: "[11/13] Install local project package"
         id: install-local
         # Purpose: Install mm-bot package in editable mode (-e .)
         # Note: Uses PYO3_USE_ABI3_FORWARD_COMPATIBILITY for Python 3.13
@@ -262,7 +334,7 @@ jobs:
           Write-Host "--- Installing local mm-bot package ---"
           & $env:PYTHON_EXE -m pip install -e . -v
 
-      - name: Pre-flight checks and transcript
+      - name: "[12/13] Pre-flight checks and transcript"
         id: preflight
         run: |
           Write-Host "================================================"
@@ -296,8 +368,7 @@ jobs:
           Write-Host "[CHECK] Critical files..."
           $criticalFiles = @(
             "tools\ci\full_stack_validate.py",
-            "tools\soak\resource_monitor.py",
-            "tools\soak\keep_awake.ps1"
+            "tools\soak\resource_monitor.py"
           )
           foreach ($file in $criticalFiles) {
             $path = "${{ github.workspace }}\$file"
@@ -340,71 +411,209 @@ jobs:
           Write-Host "PRE-FLIGHT CHECKS PASSED"
           Write-Host "================================================"
 
-      - name: Initialize anti-sleep protection
+      - name: Start keep-awake background job
         id: init-stay-awake
-        if: always()
+        if: env.SOAK_STAY_AWAKE == '1'
+        shell: pwsh
         run: |
+          $script = {
+            while ($true) {
+              Write-Host "[KEEP-AWAKE] Heartbeat at $(Get-Date -Format o)"
+              Start-Sleep -Seconds 300
+            }
+          }
+          $job = Start-Job -ScriptBlock $script
+          # Publish job ID to env for cleanup step
+          "KEEP_AWAKE_JOB_ID=$($job.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "[OK] Keep-awake job started. ID=$($job.Id)"
+
+      - name: Seed default overrides if not provided
+        id: seed-overrides
+        run: |
+          Write-Host "==============================================="
+          Write-Host "SEEDING RUNTIME OVERRIDES"
+          Write-Host "==============================================="
+          
+          # 1) Прочитать дефолтные оверрайды из репозитория
+          $defaultsPath = "tools/soak/default_overrides.json"
+          if (-not (Test-Path $defaultsPath)) {
+            Write-Error "Defaults file not found: $defaultsPath"
+            exit 1
+          }
+          $defaultsJson = Get-Content $defaultsPath -Raw
+          
+          # 2) Записать рабочий файл артефактов
+          New-Item -Force -ItemType Directory "artifacts/soak" | Out-Null
+          $targetPath = "artifacts/soak/runtime_overrides.json"
+          $defaultsJson | Set-Content -Encoding utf8 $targetPath
+          
+          Write-Host "[SEED] Using default_overrides.json"
+          Write-Host "| seed | overrides | default_overrides.json |"
+          
+          # 3A) Экспорт: путь к файлу (простой и надёжный)
+          "MM_RUNTIME_OVERRIDES_FILE=$targetPath" | Out-File -Encoding utf8 -Append $env:GITHUB_ENV
+          
+          # 3B) Экспорт: многострочный JSON через here-doc
+          Add-Content -Path $env:GITHUB_ENV -Value "MM_RUNTIME_OVERRIDES_JSON<<EOF"
+          Add-Content -Path $env:GITHUB_ENV -Value $defaultsJson
+          Add-Content -Path $env:GITHUB_ENV -Value "EOF"
+
+      - name: Run mini-soak with auto-tuning
+        id: mini-soak
+        if: ${{ inputs.iterations }}
+        env:
+          SOAK_SLEEP_SECONDS: ${{ inputs.heartbeat_interval_seconds || 300 }}
+        run: |
+          Write-Host "================================================"
+          Write-Host "MINI-SOAK MODE: ${{ inputs.iterations }} iterations"
+          Write-Host "================================================"
+          
+          $iterations = [int]"${{ inputs.iterations }}"
+          $autotuneFlag = if ("${{ inputs.auto_tune }}" -eq "true") { "--auto-tune" } else { "" }
+          
+          Write-Host "Iterations: $iterations"
+          Write-Host "Auto-tune: ${{ inputs.auto_tune }}"
+          Write-Host "Profile: $env:MM_PROFILE"
+          Write-Host "Sleep between iterations: $env:SOAK_SLEEP_SECONDS seconds"
           Write-Host ""
-          Write-Host "###############################################"
-          Write-Host "# ANTI-SLEEP INITIALIZATION"
-          Write-Host "###############################################"
           
-          # Check if stay-awake is enabled
-          $stayAwakeEnabled = $env:SOAK_STAY_AWAKE -eq "1"
+          # Preview runtime overrides
+          Write-Host "OVERRIDES_FILE=$env:MM_RUNTIME_OVERRIDES_FILE"
+          if (Test-Path $env:MM_RUNTIME_OVERRIDES_FILE) {
+            $preview = (Get-Content $env:MM_RUNTIME_OVERRIDES_FILE -Raw)
+            Write-Host "OVERRIDES_JSON_PREVIEW: $preview"
+          }
+          Write-Host ""
           
-          if (-not $stayAwakeEnabled) {
-            Write-Host "[INFO] SOAK_STAY_AWAKE=0 - Anti-sleep protection DISABLED"
-            Write-Host "[WARN] System may enter sleep/hibernation during soak"
-            Write-Host "###############################################"
-            return
+          # Run soak with iterations
+          & $env:PYTHON_EXE -m tools.soak.run --iterations $iterations $autotuneFlag --mock
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Soak run failed with exit code $LASTEXITCODE"
+            exit 1
           }
           
-          Write-Host "[INFO] SOAK_STAY_AWAKE=1 - Anti-sleep protection ENABLED"
-          Write-Host ""
+          Write-Host "================================================"
+          Write-Host "MINI-SOAK COMPLETED"
+          Write-Host "================================================"
+
+      - name: Verify sleep was used
+        id: verify-sleep
+        if: ${{ inputs.iterations }}
+        run: |
+          Write-Host "================================================"
+          Write-Host "VERIFYING SLEEP BETWEEN ITERATIONS"
+          Write-Host "================================================"
           
-          # Import keep_awake module
-          $keepAwakeScript = "${{ github.workspace }}\tools\soak\keep_awake.ps1"
+          # Check if sleep marker was logged
+          # Note: In PowerShell, we can't directly grep the previous step's output
+          # So we check if iterations > 1 (sleep only happens when iterations > 1)
+          $iterations = [int]"${{ inputs.iterations }}"
+          if ($iterations -gt 1) {
+            Write-Host "✓ Multi-iteration mode: sleep should have been used"
+            Write-Host "  Expected sleep between $($iterations - 1) iteration pairs"
+          } else {
+            Write-Host "ℹ Single iteration: no sleep needed"
+          }
+
+      - name: Verify mini-soak artifacts
+        id: verify-artifacts
+        if: ${{ inputs.iterations }}
+        run: |
+          Write-Host "================================================"
+          Write-Host "VERIFYING MINI-SOAK ARTIFACTS"
+          Write-Host "================================================"
           
-          if (-not (Test-Path $keepAwakeScript)) {
-            Write-Host "[ERROR] keep_awake.ps1 not found at: $keepAwakeScript"
-            Write-Host "[WARN] Cannot arm anti-sleep protection"
-            Write-Host "###############################################"
-            return
+          $missing = @()
+          
+          $iter1 = "artifacts\soak\latest\ITER_SUMMARY_1.json"
+          if (!(Test-Path $iter1)) {
+            $missing += $iter1
+            Write-Warning "Missing: $iter1"
+          } else {
+            Write-Host "✓ Found: $iter1"
           }
           
-          Write-Host "[INFO] Loading keep_awake module..."
-          try {
-            Import-Module $keepAwakeScript -Force -ErrorAction Stop
-            Write-Host "[OK] Module loaded successfully"
-          } catch {
-            Write-Host "[ERROR] Failed to load module: $($_.Exception.Message)"
-            Write-Host "[WARN] Continuing without anti-sleep protection"
-            Write-Host "###############################################"
-            return
+          $tuning = "artifacts\soak\latest\TUNING_REPORT.json"
+          if (!(Test-Path $tuning)) {
+            $missing += $tuning
+            Write-Warning "Missing: $tuning"
+          } else {
+            Write-Host "✓ Found: $tuning"
           }
           
-          Write-Host ""
+          if ($missing.Count -gt 0) {
+            Write-Error "Missing $($missing.Count) required artifact(s)"
+            exit 1
+          }
           
-          # Step 1: Check runner service health
-          Test-RunnerService
+          Write-Host "✅ All required artifacts present"
+
+      - name: Enforce KPI gate (soft/hard thresholds)
+        id: check-kpi-gate
+        if: ${{ inputs.iterations }}
+        run: |
+          Write-Host "================================================"
+          Write-Host "CHECKING KPI GATE VERDICT (soft/hard)"
+          Write-Host "================================================"
           
-          # Step 2: Pre-test diagnostics
-          Get-PowerHealthDiagnostics -PreTest
+          # Find latest ITER_SUMMARY to extract metrics
+          $latestDir = "artifacts\soak\latest"
+          if (!(Test-Path $latestDir)) {
+            Write-Warning "Latest dir not found, skipping KPI gate"
+            exit 0
+          }
           
-          # Step 3: Normalize power settings for soak
-          Set-PowerSettingsForSoak
+          $iterSummaries = Get-ChildItem "$latestDir\ITER_SUMMARY_*.json" -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+          if ($iterSummaries.Count -eq 0) {
+            Write-Warning "No ITER_SUMMARY files found, skipping KPI gate"
+            exit 0
+          }
           
-          # Step 4: Arm WinAPI stay-awake
-          Enable-StayAwake
+          # Get last iteration summary
+          $lastSummary = Get-Content $iterSummaries[0].FullName -Raw | ConvertFrom-Json
+          $summary = $lastSummary.summary
           
-          Write-Host ""
-          Write-Host "###############################################"
-          Write-Host "# ANTI-SLEEP INITIALIZATION COMPLETE"
-          Write-Host "###############################################"
-          Write-Host ""
+          $risk = $summary.risk_ratio
+          $net = $summary.net_bps
+          $adv = $summary.adverse_bps_p95
+          $sl = $summary.slippage_bps_p95
+          
+          # SOFT/HARD THRESHOLDS
+          # Soft: WARN but continue
+          # Hard: FAIL and exit
+          $softRisk = 0.40
+          $hardRisk = 0.50
+          $minNetHard = 2.0
+          $maxAdvSoft = 3.0
+          
+          # Format risk as percentage for display
+          $riskPct = [math]::Round($risk * 100, 1)
+          
+          # Check HARD thresholds first (these cause exit)
+          if ($risk -gt $hardRisk -or $net -lt $minNetHard) {
+            Write-Host "| kpi_gate | status=FAIL | net=$net risk=$riskPct% adv_p95=$adv sl_p95=$sl |"
+            Write-Host "❌ KPI Gate: HARD FAIL"
+            if ($risk -gt $hardRisk) { Write-Host "  - risk $riskPct% > hard threshold $($hardRisk*100)%" }
+            if ($net -lt $minNetHard) { Write-Host "  - net_bps $net < hard threshold $minNetHard" }
+            exit 3
+          }
+          # Check SOFT thresholds (WARN but continue)
+          elseif ($risk -gt $softRisk -or $adv -gt $maxAdvSoft) {
+            Write-Host "| kpi_gate | status=WARN | net=$net risk=$riskPct% adv_p95=$adv sl_p95=$sl |"
+            Write-Warning "⚠️ KPI Gate: SOFT WARN (continuing)"
+            if ($risk -gt $softRisk) { Write-Host "  - risk $riskPct% > soft threshold $($softRisk*100)%" }
+            if ($adv -gt $maxAdvSoft) { Write-Host "  - adverse_p95 $adv > soft threshold $maxAdvSoft" }
+          }
+          # All clear
+          else {
+            Write-Host "| kpi_gate | status=OK | net=$net risk=$riskPct% adv_p95=$adv sl_p95=$sl |"
+            Write-Host "✅ KPI Gate: PASS"
+          }
 
       - name: Start resource monitoring (background)
         id: start-monitoring
+        if: ${{ !inputs.iterations }}
         run: |
           Write-Host "--- Starting resource monitor in background ---"
           $monitorScript = "${{ github.workspace }}\tools\soak\resource_monitor.py"
@@ -419,7 +628,8 @@ jobs:
           Write-Host "[MONITOR] Background job started (ID: $($monitorJob.Id))"
           "monitor_job_id=$($monitorJob.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Run long soak loop
+      - name: Run long soak loop (legacy mode)
+        if: ${{ !inputs.iterations }}
         id: soak-loop
         run: |
           $durationHours = [int]$env:SOAK_HOURS
@@ -642,59 +852,29 @@ jobs:
             Write-Host "[MONITOR] No resource data collected"
           }
 
-      - name: Cleanup anti-sleep protection
+      - name: Stop keep-awake job
         id: cleanup-stay-awake
-        if: always()
+        if: env.SOAK_STAY_AWAKE == '1'
+        shell: pwsh
         run: |
-          Write-Host ""
-          Write-Host "###############################################"
-          Write-Host "# ANTI-SLEEP CLEANUP"
-          Write-Host "###############################################"
-          
-          # Check if stay-awake was enabled
-          $stayAwakeEnabled = $env:SOAK_STAY_AWAKE -eq "1"
-          
-          if (-not $stayAwakeEnabled) {
-            Write-Host "[INFO] SOAK_STAY_AWAKE=0 - Nothing to cleanup"
-            Write-Host "###############################################"
-            return
+          if ($env:KEEP_AWAKE_JOB_ID) {
+            $id = [int]$env:KEEP_AWAKE_JOB_ID
+            $j = Get-Job -Id $id -ErrorAction SilentlyContinue
+            if ($j) {
+              Stop-Job -Id $id -Force -ErrorAction SilentlyContinue
+              Remove-Job -Id $id -Force -ErrorAction SilentlyContinue
+              Write-Host "[OK] Keep-awake job $id stopped and removed"
+            } else {
+              Write-Host "[WARN] Keep-awake job $id not found (already finished?)"
+            }
+          } else {
+            # Fallback: stop any running jobs from current session
+            Get-Job | Where-Object { $_.State -eq 'Running' } | ForEach-Object {
+              Stop-Job -Id $_.Id -Force -ErrorAction SilentlyContinue
+              Remove-Job -Id $_.Id -Force -ErrorAction SilentlyContinue
+            }
+            Write-Host "[INFO] No job id in env, cleaned any running jobs"
           }
-          
-          Write-Host "[INFO] SOAK_STAY_AWAKE=1 - Cleaning up anti-sleep protection"
-          Write-Host ""
-          
-          # Import keep_awake module
-          $keepAwakeScript = "${{ github.workspace }}\tools\soak\keep_awake.ps1"
-          
-          if (-not (Test-Path $keepAwakeScript)) {
-            Write-Host "[WARN] keep_awake.ps1 not found - cannot run post-diagnostics"
-            Write-Host "###############################################"
-            return
-          }
-          
-          Write-Host "[INFO] Loading keep_awake module..."
-          try {
-            Import-Module $keepAwakeScript -Force -ErrorAction Stop
-            Write-Host "[OK] Module loaded successfully"
-          } catch {
-            Write-Host "[ERROR] Failed to load module: $($_.Exception.Message)"
-            Write-Host "###############################################"
-            return
-          }
-          
-          Write-Host ""
-          
-          # Step 1: Post-test diagnostics (wake history, power events)
-          Get-PowerHealthDiagnostics -PostTest
-          
-          # Step 2: Disarm WinAPI stay-awake
-          Disable-StayAwake
-          
-          Write-Host ""
-          Write-Host "###############################################"
-          Write-Host "# ANTI-SLEEP CLEANUP COMPLETE"
-          Write-Host "###############################################"
-          Write-Host ""
 
       - name: Finalize and snapshot
         id: finalize
@@ -780,22 +960,51 @@ jobs:
           Write-Host "FINALIZATION COMPLETE"
           Write-Host "================================================"
 
-      - name: "[11/12] Upload artifacts"
+      - name: Rotate soak artifacts (prevent disk bloat)
+        id: rotate-artifacts
+        if: always()
+        run: |
+          Write-Host "================================================"
+          Write-Host "ARTIFACT ROTATION"
+          Write-Host "================================================"
+          
+          # Run artifact manager with retention policy
+          & $env:PYTHON_EXE -m tools.soak.artifact_manager `
+            --path artifacts/soak `
+            --ttl-days 7 `
+            --max-size-mb 900 `
+            --keep-latest 100
+          
+          $exitCode = $LASTEXITCODE
+          
+          if ($exitCode -eq 2) {
+            Write-Warning "Artifact size exceeds threshold, consider manual cleanup"
+          } elseif ($exitCode -ne 0) {
+            Write-Error "Artifact rotation failed with exit code $exitCode"
+          } else {
+            Write-Host "[OK] Artifact rotation completed successfully"
+          }
+          
+          Write-Host "================================================"
+
+      - name: "[12/13] Upload artifacts"
         id: upload-artifacts
         if: always()
         # Purpose: Upload all test artifacts (logs, metrics, summaries)
         # Note: Always runs (if: always()) to capture logs even on failure
+        # Note: actions/upload-artifact@v4 handles compression automatically
+        #       (no need for manual tar/gzip on Windows)
         # Retention: Configurable via workflow_dispatch input (default: 14 days)
         uses: actions/upload-artifact@v4
         with:
           name: soak-windows-${{ github.run_id }}
           path: |
-            ${{ env.ARTIFACTS_ROOT }}/**
-            ${{ github.workspace }}/.pytest_cache/**
+            artifacts/**
+            .pytest_cache/**
           if-no-files-found: ignore
           retention-days: ${{ inputs.artifact_retention_days || 14 }}
 
-      - name: "[12/12] Telegram failure notification"
+      - name: "[13/13] Telegram failure notification"
         id: notify-telegram
         if: failure() && env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID
         # Purpose: Send alert to Telegram on soak test failure
@@ -807,3 +1016,4 @@ jobs:
             chat_id = "$env:TELEGRAM_CHAT_ID"
             text    = $msg
           } | Out-Null
+

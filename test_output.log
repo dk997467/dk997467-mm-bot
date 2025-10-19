@@ -1,0 +1,175 @@
+[INFO] Running mini-soak with auto-tuning: 6 iterations
+| overrides | OK | source=file |
+
+============================================================
+RUNTIME OVERRIDES (startup preview)
+============================================================
+  base_spread_bps_delta          = 0.16
+  impact_cap_ratio               = 0.08
+  max_delta_ratio                = 0.12
+  min_interval_ms                = 80
+  replace_rate_per_min           = 260
+  tail_age_ms                    = 770
+============================================================
+
+| iter_watch | STARTUP_APPLY | from=ITER_SUMMARY_6.json deltas=1 |
+  - tail_age_ms: 770.00 -> 800.00 (delta=+30.00)
+
+============================================================
+[ITER 1/6] Starting iteration
+============================================================
+[DETECT] neg_streak=1 (net_bps=-1.50)
+| autotune | DRIVER:slippage_bps | field=base_spread_bps_delta from=0.16 to=0.18 |
+| autotune | DRIVER:slippage_bps | field=tail_age_ms from=800 to=850 |
+| autotune | DRIVER:adverse_bps | field=impact_cap_ratio from=0.08 to=0.06 |
+| autotune | DRIVER:adverse_bps | field=max_delta_ratio from=0.12 to=0.10 |
+| autotune | DRIVER:block_minint | field=min_interval_ms from=80 to=100 |
+| autotune | DRIVER:concurrency | field=replace_rate_per_min from=260 to=230 |
+| soak_iter_tune | SKIP | REASON=multi_fail_guard |
+| iter_watch | TUNE | risk=17.00% net=-1.50 action={max_delta_ratio=-0.01, base_spread_bps_delta=+0.02} |
+[iter_watcher] Wrote ITER_SUMMARY_1.json
+[iter_watcher] Updated TUNING_REPORT.json (total iterations: 32)
+| iter_watch | SUMMARY | iter=1 net=-1.50 risk=17.00% sl_p95=3.50 adv_p95=5.00 kpi=FAIL |
+| iter_watch | SUGGEST | {"max_delta_ratio": -0.009999999999999995, "base_spread_bps_delta": 0.01999999999999999} |
+| iter_watch | RATIONALE | DRIVER: adverse_p95=5.00 > 3.5 -> max_delta -0.01 (floor 0.10) | DRIVER: slippage_p95=3.50 > 2.5 -> spread +0.02 (cap 0.25) |
+| iter_watch | APPLY | iter=1 params=2 |
+  max_delta_ratio: 0.12 -> 0.11 (delta=-0.01)
+  base_spread_bps_delta: 0.16 -> 0.18 (delta=+0.02)
+
+| iter_watch | SELF_CHECK | Diff for runtime_overrides.json (iter 1) |
+  - base_spread_bps_delta: 0.16 -> 0.18
+  - max_delta_ratio: 0.12000000000000001 -> 0.11000000000000001
+
+| kpi_gate | OK | risk_ratio=17.00% |
+| soak | SLEEP | 5s |
+
+============================================================
+[ITER 2/6] Starting iteration
+============================================================
+[DETECT] neg_streak=2 (net_bps=-0.80)
+[FALLBACK] Triggering conservative fallback (neg_streak=2)
+| autotune | FALLBACK_CONSERVATIVE | triggered=1 |
+| autotune | FALLBACK_CONSERVATIVE | applied=1 | min_interval_ms=80->100 replace_rate_per_min=260->200 spread_delta=0.18->0.20 |
+| soak_iter_tune | OK | ADJUSTMENTS=0 metrics_stable |
+| iter_watch | TUNE | risk=33.00% net=-0.80 action={max_delta_ratio=-0.01, base_spread_bps_delta=+0.02} |
+[iter_watcher] Wrote ITER_SUMMARY_2.json
+[iter_watcher] Updated TUNING_REPORT.json (total iterations: 33)
+| iter_watch | SUMMARY | iter=2 net=-0.80 risk=33.00% sl_p95=3.20 adv_p95=4.50 kpi=FAIL |
+| iter_watch | SUGGEST | {"max_delta_ratio": -0.009999999999999995, "base_spread_bps_delta": 0.01999999999999999} |
+| iter_watch | RATIONALE | DRIVER: adverse_p95=4.50 > 3.5 -> max_delta -0.01 (floor 0.10) | DRIVER: slippage_p95=3.20 > 2.5 -> spread +0.02 (cap 0.25) |
+| iter_watch | APPLY_SKIP | reason=same_signature |
+| kpi_gate | OK | risk_ratio=33.00% |
+| soak | SLEEP | 5s |
+
+============================================================
+[ITER 3/6] Starting iteration
+============================================================
+| autotune | AGE_RELIEF | min_interval_ms from=80 to=70 |
+| autotune | AGE_RELIEF | replace_rate_per_min from=260 to=290 |
+| autotune | AGE_RELIEF | order_age=350ms adverse=3.10 slippage=2.20 |
+| soak_iter_tune | OK | ADJUSTMENTS=2 net_bps=3.00 cancel=0.38 age_p95=350 lag_p95=105 |
+  - age_relief_interval_80->70
+  - age_relief_replace_260->290
+[iter_watcher] Wrote ITER_SUMMARY_3.json
+[iter_watcher] Updated TUNING_REPORT.json (total iterations: 34)
+| iter_watch | SUMMARY | iter=3 net=3.00 risk=68.00% sl_p95=2.20 adv_p95=3.10 kpi=PASS |
+| iter_watch | SUGGEST | (none) |
+| iter_watch | APPLY | SKIP | iter=3 no deltas |
+| kpi_gate | WARN | risk_ratio=68.00% > 50% |
+| soak | SLEEP | 5s |
+
+============================================================
+[ITER 4/6] Starting iteration
+============================================================
+| autotune | AGE_RELIEF | min_interval_ms from=80 to=70 |
+| autotune | AGE_RELIEF | replace_rate_per_min from=260 to=290 |
+| autotune | AGE_RELIEF | order_age=350ms adverse=2.90 slippage=2.05 |
+| soak_iter_tune | OK | ADJUSTMENTS=2 net_bps=3.10 cancel=0.33 age_p95=350 lag_p95=110 |
+  - age_relief_interval_80->70
+  - age_relief_replace_260->290
+[iter_watcher] Wrote ITER_SUMMARY_4.json
+[iter_watcher] Updated TUNING_REPORT.json (total iterations: 35)
+| iter_watch | SUMMARY | iter=4 net=3.10 risk=68.00% sl_p95=2.05 adv_p95=2.90 kpi=PASS |
+| iter_watch | SUGGEST | (none) |
+| iter_watch | APPLY | SKIP | iter=4 no deltas |
+| kpi_gate | WARN | risk_ratio=68.00% > 50% |
+| soak | SLEEP | 5s |
+
+============================================================
+[ITER 5/6] Starting iteration
+============================================================
+| autotune | AGE_RELIEF | min_interval_ms from=80 to=70 |
+| autotune | AGE_RELIEF | replace_rate_per_min from=260 to=290 |
+| autotune | AGE_RELIEF | order_age=350ms adverse=2.70 slippage=1.90 |
+| soak_iter_tune | OK | ADJUSTMENTS=2 net_bps=3.20 cancel=0.28 age_p95=350 lag_p95=115 |
+  - age_relief_interval_80->70
+  - age_relief_replace_260->290
+[iter_watcher] Wrote ITER_SUMMARY_5.json
+[iter_watcher] Updated TUNING_REPORT.json (total iterations: 36)
+| iter_watch | SUMMARY | iter=5 net=3.20 risk=68.00% sl_p95=1.90 adv_p95=2.70 kpi=PASS |
+| iter_watch | SUGGEST | (none) |
+| iter_watch | APPLY | SKIP | iter=5 no deltas |
+| kpi_gate | WARN | risk_ratio=68.00% > 50% |
+| soak | SLEEP | 5s |
+
+============================================================
+[ITER 6/6] Starting iteration
+============================================================
+| autotune | AGE_RELIEF | min_interval_ms from=80 to=70 |
+| autotune | AGE_RELIEF | replace_rate_per_min from=260 to=290 |
+| autotune | AGE_RELIEF | order_age=350ms adverse=2.50 slippage=1.75 |
+| soak_iter_tune | OK | ADJUSTMENTS=2 net_bps=3.30 cancel=0.23 age_p95=350 lag_p95=120 |
+  - age_relief_interval_80->70
+  - age_relief_replace_260->290
+[iter_watcher] Wrote ITER_SUMMARY_6.json
+[iter_watcher] Updated TUNING_REPORT.json (total iterations: 37)
+| iter_watch | SUMMARY | iter=6 net=3.30 risk=68.00% sl_p95=1.75 adv_p95=2.50 kpi=PASS |
+| iter_watch | SUGGEST | (none) |
+| iter_watch | APPLY | SKIP | iter=6 no deltas |
+| kpi_gate | WARN | risk_ratio=68.00% > 50% |
+
+============================================================
+[MINI-SOAK COMPLETE] 6 iterations with auto-tuning
+============================================================
+Final overrides: {
+  "base_spread_bps_delta": 0.18,
+  "impact_cap_ratio": 0.08,
+  "max_delta_ratio": 0.11000000000000001,
+  "min_interval_ms": 80,
+  "replace_rate_per_min": 260,
+  "tail_age_ms": 800
+}
+============================================================
+REAL DURATION (wall-clock): 0:00:25
+ITERATIONS COMPLETED: 6
+============================================================
+
+============================================================
+ITERATION TREND TABLE
+============================================================
+
+| iter | net_bps | risk   | adv_p95 | sl_p95 | minInt% | conc% |
+|-----:|--------:|-------:|--------:|-------:|--------:|------:|
+|    1 |   -1.50 | 17.00% |    5.00 |   3.50 |   50.0% | 33.0% |
+|    2 |   -0.80 | 33.00% |    4.50 |   3.20 |   40.0% | 27.0% |
+|    3 |    3.00 | 68.00% |    3.10 |   2.20 |   20.0% | 12.0% |
+|    4 |    3.10 | 68.00% |    2.90 |   2.05 |   20.0% | 12.0% |
+|    5 |    3.20 | 68.00% |    2.70 |   1.90 |   20.0% | 12.0% |
+|    6 |    3.30 | 68.00% |    2.50 |   1.75 |   20.0% | 12.0% |
+
+============================================================
+DECISION
+============================================================
+
+[WARN] Risk above target - last risk=68.0% > 45%
+       Recommendation: Switch to ultra_safe_overrides.json and re-run.
+       Command: cp artifacts/soak/ultra_safe_overrides.json artifacts/soak/runtime_overrides.json
+
+============================================================
+
+| iter_watch | SUMMARY | steady apply complete |
+  Total iterations: 6
+  Live-apply enabled: True
+  Final runtime overrides written to: artifacts/soak/runtime_overrides.json
+  Per-iteration summaries: artifacts/soak/latest/ITER_SUMMARY_*.json
+
