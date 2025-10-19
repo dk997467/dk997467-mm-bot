@@ -5,6 +5,8 @@ Shadow Mode Runner
 Connects to real exchange feeds (Bybit/KuCoin), simulates order placements
 locally without API writes, and generates KPI metrics comparable to soak tests.
 
+Supports per-symbol profiles and rich artifact metadata.
+
 Usage:
     python -m tools.shadow.run_shadow --iterations 6 --duration 60
     python -m tools.shadow.run_shadow --profile aggressive --mock
@@ -14,6 +16,7 @@ import argparse
 import asyncio
 import json
 import random
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +24,41 @@ from typing import Dict, List, Optional
 
 # Mock mode: Generate synthetic market data for testing
 MOCK_MODE = True  # Toggle to False for real WS feeds
+
+
+def _git_sha_short() -> str:
+    """Get short git commit SHA (fallback: 'unknown')."""
+    try:
+        result = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL
+        )
+        return result.strip()
+    except Exception:
+        return "unknown"
+
+
+def load_symbol_profile(symbol: str) -> Dict:
+    """
+    Load per-symbol profile overrides from profiles/shadow_profiles.json.
+    
+    Args:
+        symbol: Symbol name (e.g., "BTCUSDT")
+    
+    Returns:
+        Dict with profile parameters (empty if not found)
+    """
+    profile_path = Path("profiles/shadow_profiles.json")
+    if not profile_path.exists():
+        return {}
+    
+    try:
+        with open(profile_path, 'r', encoding='utf-8') as f:
+            profiles = json.load(f)
+        return profiles.get(symbol, {})
+    except Exception:
+        return {}
 
 
 class MiniLOB:
@@ -227,6 +265,17 @@ class ShadowSimulator:
         slippage_p95 = random.uniform(0.8, 1.5)
         adverse_p95 = random.uniform(1.5, 2.5)
         
+        # Rich notes with metadata
+        source = "mock" if self.mock else "ws"
+        commit_sha = _git_sha_short()
+        notes = (
+            f"commit={commit_sha} "
+            f"source={source} "
+            f"profile={self.profile} "
+            f"dwell_ms={self.touch_dwell_ms} "
+            f"min_lot={self.min_lot}"
+        )
+        
         summary = {
             "iteration": iter_num,
             "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -245,6 +294,7 @@ class ShadowSimulator:
                 "adverse_bps_p95": round(adverse_p95, 2),
                 "clock_drift_ms": round(drift_ms, 2),
             },
+            "notes": notes,
             "mode": "shadow",
         }
         
@@ -378,14 +428,31 @@ def main():
     
     args = parser.parse_args()
     
-    # Create simulator
+    # Load per-symbol profile (for first symbol, CLI overrides profile)
+    symbol_profile = load_symbol_profile(args.symbols[0]) if args.symbols else {}
+    
+    # Apply profile defaults (CLI args have priority)
+    # If CLI arg is still at default value, use profile value
+    min_lot = args.min_lot
+    touch_dwell_ms = args.touch_dwell_ms
+    
+    # Apply profile if CLI args are at default
+    if args.min_lot == 0.0 and "min_lot" in symbol_profile:
+        min_lot = symbol_profile["min_lot"]
+        print(f"[PROFILE] Using min_lot={min_lot} from profile for {args.symbols[0]}")
+    
+    if args.touch_dwell_ms == 25.0 and "touch_dwell_ms" in symbol_profile:
+        touch_dwell_ms = symbol_profile["touch_dwell_ms"]
+        print(f"[PROFILE] Using touch_dwell_ms={touch_dwell_ms} from profile for {args.symbols[0]}")
+    
+    # Create simulator with resolved parameters
     simulator = ShadowSimulator(
         exchange=args.exchange,
         symbols=args.symbols,
         profile=args.profile,
         mock=args.mock,
-        min_lot=args.min_lot,
-        touch_dwell_ms=args.touch_dwell_ms,
+        min_lot=min_lot,
+        touch_dwell_ms=touch_dwell_ms,
         require_volume=args.require_volume,
     )
     
