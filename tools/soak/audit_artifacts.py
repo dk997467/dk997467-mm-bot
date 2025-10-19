@@ -30,6 +30,15 @@ except ImportError:
     HAS_PANDAS = False
     print("[WARN] pandas not available; using manual tabulation", file=sys.stderr)
 
+# Try matplotlib for plots
+try:
+    import matplotlib
+    matplotlib.use('Agg')  # Non-interactive backend
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+
 
 # ==============================================================================
 # CONFIGURATION
@@ -185,9 +194,13 @@ def check_readiness(snapshot: dict, window_name: str = "last-8") -> Tuple[bool, 
 # MAIN ANALYSIS
 # ==============================================================================
 
-def audit_artifacts(base_dir: str = "artifacts/soak/latest") -> dict:
+def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: bool = False) -> dict:
     """
     Main audit function.
+    
+    Args:
+        base_dir: Base directory for soak artifacts
+        generate_plots: Generate PNG plots if matplotlib available
     
     Returns dict with analysis results.
     """
@@ -756,6 +769,49 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest") -> dict:
     print("=" * 80)
     print(f"🎯 FINAL VERDICT: {verdict}")
     print("=" * 80)
+    print()
+    
+    # ----- 12. Generate plots (optional) -----
+    if generate_plots:
+        print("[12/12] Generating plots...")
+        
+        if not HAS_MATPLOTLIB:
+            print("⚠ WARNING: matplotlib not available; skipping plots")
+        else:
+            plots_dir = out_dir / "plots"
+            plots_dir.mkdir(parents=True, exist_ok=True)
+            
+            kpi_columns = ["net_bps", "risk_ratio", "latency_p95_ms", "maker_taker_ratio"]
+            
+            if HAS_PANDAS:
+                for col in kpi_columns:
+                    try:
+                        plt.figure(figsize=(10, 6))
+                        plt.plot(df["iter"], df[col], marker='o', linestyle='-', linewidth=2)
+                        plt.xlabel("Iteration")
+                        plt.ylabel(col)
+                        plt.title(f"{col} vs Iteration")
+                        plt.grid(True, alpha=0.3)
+                        
+                        # Add threshold line if applicable
+                        if col in ["maker_taker_ratio", "net_bps", "p95_latency_ms", "risk_ratio"]:
+                            for metric, (op, threshold) in READINESS_THRESHOLDS.items():
+                                if metric == col or (metric == "p95_latency_ms" and col == "latency_p95_ms"):
+                                    plt.axhline(y=threshold, color='r', linestyle='--', 
+                                               label=f"Threshold {op} {threshold}")
+                                    plt.legend()
+                                    break
+                        
+                        plot_path = plots_dir / f"{col}.png"
+                        plt.savefig(plot_path, dpi=100, bbox_inches='tight')
+                        plt.close()
+                        print(f"  ✓ Saved: {plot_path.name}")
+                    except Exception as e:
+                        print(f"  ⚠ Failed to generate {col}.png: {e}")
+            else:
+                print("  ⚠ pandas not available; cannot generate plots")
+            
+            print()
     
     return json_summary
 
@@ -773,12 +829,31 @@ def main():
         default="artifacts/soak/latest",
         help="Base directory for soak artifacts (default: artifacts/soak/latest)"
     )
+    parser.add_argument(
+        "--fail-on-hold",
+        action="store_true",
+        help="Exit with code 1 if readiness is HOLD (default: False)"
+    )
+    parser.add_argument(
+        "--plots",
+        action="store_true",
+        help="Generate PNG plots if matplotlib available (default: False)"
+    )
     
     args = parser.parse_args()
     
     try:
-        audit_artifacts(args.base)
-        sys.exit(0)
+        result = audit_artifacts(args.base, generate_plots=args.plots)
+        readiness_pass = result.get("readiness", {}).get("pass", False)
+        
+        # Determine exit code
+        exit_code = 0
+        if args.fail_on_hold and not readiness_pass:
+            exit_code = 1
+        
+        verdict = "OK" if readiness_pass else "HOLD"
+        print(f"[EXIT] fail-on-hold: {args.fail_on_hold}, verdict: {verdict}, exit_code={exit_code}")
+        sys.exit(exit_code)
     except KeyboardInterrupt:
         print("\n[INTERRUPTED]")
         sys.exit(1)
