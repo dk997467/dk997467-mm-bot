@@ -23,6 +23,24 @@ from typing import Dict, List, Optional
 MOCK_MODE = True  # Toggle to False for real WS feeds
 
 
+class MiniLOB:
+    """Minimal LOB state for fill simulation."""
+    
+    def __init__(self):
+        self.best_bid = None  # (price, size)
+        self.best_ask = None  # (price, size)
+        self.last_trade_qty = 0.0
+    
+    def on_tick(self, tick: dict):
+        """Update LOB state from market tick."""
+        if "bid" in tick:
+            self.best_bid = (tick["bid"], tick.get("bid_size", 0.0))
+        if "ask" in tick:
+            self.best_ask = (tick["ask"], tick.get("ask_size", 0.0))
+        if "last_qty" in tick:
+            self.last_trade_qty = tick["last_qty"]
+
+
 class ShadowSimulator:
     """
     Shadow mode simulator that consumes market data and simulates trades locally.
@@ -34,11 +52,17 @@ class ShadowSimulator:
         symbols: List[str] = None,
         profile: str = "moderate",
         mock: bool = True,
+        min_lot: float = 0.0,
+        touch_dwell_ms: float = 25.0,
+        require_volume: bool = False,
     ):
         self.exchange = exchange
         self.symbols = symbols or ["BTCUSDT", "ETHUSDT"]
         self.profile = profile
         self.mock = mock
+        self.min_lot = min_lot
+        self.touch_dwell_ms = touch_dwell_ms
+        self.require_volume = require_volume
         
         # KPI tracking
         self.maker_count = 0
@@ -46,6 +70,7 @@ class ShadowSimulator:
         self.latencies = []
         self.net_bps_values = []
         self.risk_ratios = []
+        self.clock_drift_ewma = 0.0  # EWMA of clock drift
         
     async def connect_feed(self):
         """Connect to exchange WebSocket feed."""
@@ -55,6 +80,101 @@ class ShadowSimulator:
             print(f"[LIVE] Connecting to {self.exchange} WS feed...")
             # TODO: Implement real WS connection
             # await websockets.connect(f"wss://{self.exchange}.com/ws")
+    
+    def _compute_p95(self, values: List[float]) -> float:
+        """Compute 95th percentile."""
+        if not values:
+            return 0.0
+        sorted_vals = sorted(values)
+        idx = int(len(sorted_vals) * 0.95)
+        return sorted_vals[idx]
+    
+    def _simulate_lob_fills(
+        self,
+        ticks: List[Dict],
+        spread_bps: float,
+    ) -> tuple:
+        """
+        Simulate fills via LOB intersections.
+        
+        Virtual limits placed at best_bid - δ and best_ask + δ,
+        where δ = spread_bps * 1e-4 * mid.
+        
+        Fill conditions:
+        - BUY fill: best_ask <= buy_px, dwell >= touch_dwell_ms, volume OK
+        - SELL fill: best_bid >= sell_px, dwell >= touch_dwell_ms, volume OK
+        
+        Returns:
+            (maker_count, taker_count, maker_taker_ratio, p95_latency,
+             risk_ratio, net_bps, clock_drift_ms)
+        """
+        lob = MiniLOB()
+        maker = 0
+        taker = 0
+        lat_corr_ms = []
+        drift_ms = self.clock_drift_ewma
+        alpha = 0.05  # EWMA smoothing
+        
+        last_touch_buy = None
+        last_touch_sell = None
+        
+        for t in ticks:
+            # Clock-sync: server_ts → ingest_ts
+            server_ts = t.get("ts_server", t.get("ts", time.time()))
+            ingest_ts = time.time()
+            
+            drift_cur = (ingest_ts - server_ts) * 1000.0
+            drift_ms = (1 - alpha) * drift_ms + alpha * drift_cur
+            
+            latency_ms = max(0.0, (ingest_ts - server_ts) * 1000.0)
+            lat_corr_ms.append(latency_ms)
+            
+            lob.on_tick(t)
+            
+            if not (lob.best_bid and lob.best_ask):
+                continue
+            
+            mid = 0.5 * (lob.best_bid[0] + lob.best_ask[0])
+            delta = spread_bps * 1e-4 * mid
+            
+            buy_px = lob.best_bid[0] - delta
+            sell_px = lob.best_ask[0] + delta
+            
+            # BUY: fill if best_ask <= buy_px
+            if lob.best_ask[0] <= buy_px:
+                last_touch_buy = last_touch_buy or ingest_ts
+                dwell = (ingest_ts - last_touch_buy) * 1000.0
+                vol_ok = (lob.last_trade_qty >= self.min_lot) if self.require_volume else True
+                
+                if dwell >= self.touch_dwell_ms and vol_ok:
+                    maker += 1
+                    last_touch_buy = None
+            else:
+                last_touch_buy = None
+            
+            # SELL: fill if best_bid >= sell_px
+            if lob.best_bid[0] >= sell_px:
+                last_touch_sell = last_touch_sell or ingest_ts
+                dwell = (ingest_ts - last_touch_sell) * 1000.0
+                vol_ok = (lob.last_trade_qty >= self.min_lot) if self.require_volume else True
+                
+                if dwell >= self.touch_dwell_ms and vol_ok:
+                    maker += 1
+                    last_touch_sell = None
+            else:
+                last_touch_sell = None
+        
+        # Update EWMA
+        self.clock_drift_ewma = drift_ms
+        
+        # Compute metrics
+        total = max(1, maker + taker)
+        maker_taker = maker / total
+        p95 = self._compute_p95(lat_corr_ms)
+        risk_ratio = min(0.80, 1.0 - maker_taker)
+        net_bps = max(0.0, (maker_taker - 0.20) * 10.0)
+        
+        return maker, taker, maker_taker, p95, risk_ratio, net_bps, drift_ms
     
     async def simulate_iteration(self, iter_num: int, duration: int) -> Dict:
         """
@@ -69,53 +189,41 @@ class ShadowSimulator:
         """
         print(f"[ITER {iter_num}] Starting {duration}s shadow window...")
         
-        # Reset iteration metrics
-        iter_maker = 0
-        iter_taker = 0
-        iter_latencies = []
-        iter_net_bps = []
-        iter_risk = []
-        
-        # Simulate market data consumption
+        # Collect market ticks
         start_time = time.time()
+        ticks = []
         samples = duration  # 1 sample per second
         
-        for tick in range(samples):
+        for tick_idx in range(samples):
             await asyncio.sleep(0.1 if self.mock else 1.0)  # Mock: faster
             
-            # Simulate order decision
-            if random.random() < 0.7:  # 70% maker
-                iter_maker += 1
-                latency = random.uniform(180, 250)
-                edge = random.uniform(2.8, 3.5)
-            else:  # 30% taker
-                iter_taker += 1
-                latency = random.uniform(280, 340)
-                edge = random.uniform(2.0, 2.8)
-            
-            iter_latencies.append(latency)
-            iter_net_bps.append(edge)
-            
-            # Risk: simulate position risk
-            risk = random.uniform(0.25, 0.45)
-            iter_risk.append(risk)
+            # Generate synthetic tick (mock mode)
+            if self.mock:
+                base_price = 50000.0 + random.uniform(-100, 100)
+                spread = random.uniform(0.5, 2.0)
+                
+                tick = {
+                    "ts": time.time() - random.uniform(0.05, 0.15),  # Server lag
+                    "ts_server": time.time() - random.uniform(0.05, 0.15),
+                    "bid": base_price,
+                    "ask": base_price + spread,
+                    "bid_size": random.uniform(0.1, 5.0),
+                    "ask_size": random.uniform(0.1, 5.0),
+                    "last_qty": random.uniform(0.001, 0.5),
+                }
+                ticks.append(tick)
+        
+        # Determine spread_bps based on profile
+        spread_bps = 30.0 if self.profile == "moderate" else 15.0
+        
+        # Run LOB-based simulation
+        maker, taker, maker_taker, p95, risk, net_bps, drift_ms = self._simulate_lob_fills(
+            ticks, spread_bps
+        )
         
         elapsed = time.time() - start_time
         
-        # Compute statistics
-        total_trades = iter_maker + iter_taker
-        maker_taker_ratio = iter_maker / total_trades if total_trades > 0 else 0.0
-        
-        # P95 latency
-        sorted_lat = sorted(iter_latencies)
-        p95_idx = int(len(sorted_lat) * 0.95)
-        p95_latency = sorted_lat[p95_idx] if sorted_lat else 0.0
-        
-        # Medians
-        net_bps_median = sorted(iter_net_bps)[len(iter_net_bps) // 2] if iter_net_bps else 0.0
-        risk_median = sorted(iter_risk)[len(iter_risk) // 2] if iter_risk else 0.0
-        
-        # Slippage & adverse (mock)
+        # Slippage & adverse (mock approximations)
         slippage_p95 = random.uniform(0.8, 1.5)
         adverse_p95 = random.uniform(1.5, 2.5)
         
@@ -127,23 +235,25 @@ class ShadowSimulator:
             "symbols": self.symbols,
             "profile": self.profile,
             "summary": {
-                "maker_count": iter_maker,
-                "taker_count": iter_taker,
-                "maker_taker_ratio": round(maker_taker_ratio, 3),
-                "net_bps": round(net_bps_median, 2),
-                "p95_latency_ms": round(p95_latency, 1),
-                "risk_ratio": round(risk_median, 3),
+                "maker_count": maker,
+                "taker_count": taker,
+                "maker_taker_ratio": round(maker_taker, 3),
+                "net_bps": round(net_bps, 2),
+                "p95_latency_ms": round(p95, 1),
+                "risk_ratio": round(risk, 3),
                 "slippage_bps_p95": round(slippage_p95, 2),
                 "adverse_bps_p95": round(adverse_p95, 2),
+                "clock_drift_ms": round(drift_ms, 2),
             },
             "mode": "shadow",
         }
         
         print(f"[ITER {iter_num}] Completed: "
-              f"maker/taker={maker_taker_ratio:.3f}, "
-              f"edge={net_bps_median:.2f}, "
-              f"latency={p95_latency:.0f}ms, "
-              f"risk={risk_median:.3f}")
+              f"maker/taker={maker_taker:.3f}, "
+              f"edge={net_bps:.2f}, "
+              f"latency={p95:.0f}ms, "
+              f"risk={risk:.3f}, "
+              f"drift={drift_ms:.1f}ms")
         
         return summary
     
@@ -248,6 +358,23 @@ def main():
         default="artifacts/shadow/latest",
         help="Output directory (default: artifacts/shadow/latest)"
     )
+    parser.add_argument(
+        "--min_lot",
+        type=float,
+        default=0.0,
+        help="Minimum lot size for volume check (default: 0.0, disabled)"
+    )
+    parser.add_argument(
+        "--touch_dwell_ms",
+        type=float,
+        default=25.0,
+        help="Minimum dwell time at touch price in ms (default: 25.0)"
+    )
+    parser.add_argument(
+        "--require_volume",
+        action="store_true",
+        help="Require last_qty >= min_lot for fills (default: False)"
+    )
     
     args = parser.parse_args()
     
@@ -257,6 +384,9 @@ def main():
         symbols=args.symbols,
         profile=args.profile,
         mock=args.mock,
+        min_lot=args.min_lot,
+        touch_dwell_ms=args.touch_dwell_ms,
+        require_volume=args.require_volume,
     )
     
     # Run shadow mode
