@@ -1,0 +1,195 @@
+name: Shadow Mode
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: 'Number of iterations'
+        required: false
+        default: '6'
+        type: string
+      duration:
+        description: 'Duration per iteration (seconds)'
+        required: false
+        default: '60'
+        type: string
+      profile:
+        description: 'Profile (moderate/aggressive)'
+        required: false
+        default: 'moderate'
+        type: choice
+        options:
+          - moderate
+          - aggressive
+      exchange:
+        description: 'Exchange (bybit/kucoin)'
+        required: false
+        default: 'bybit'
+        type: choice
+        options:
+          - bybit
+          - kucoin
+
+concurrency:
+  group: shadow-mode
+  cancel-in-progress: false
+
+jobs:
+  shadow-test:
+    name: Shadow Mode Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTHONPATH: "${{ github.workspace }}"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Prepare minimal requirements for CI
+        shell: bash
+        run: |
+          awk '
+            BEGIN{IGNORECASE=1}
+            /^[[:space:]]*bybit-connector/ {next}
+            /^[[:space:]]*mm-orderbook/ {next}
+            /^[[:space:]]*mm_orderbook/ {next}
+            /^[[:space:]]*git\+/ {next}
+            {print}
+          ' requirements.txt > requirements_ci.txt
+          
+          echo "pydantic>=2,<3" >> requirements_ci.txt
+          echo "pydantic-settings>=2,<3" >> requirements_ci.txt
+          echo "pandas>=2,<3" >> requirements_ci.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          pip install maturin
+          pip install -e . -v
+          pip install -r requirements_ci.txt
+
+      - name: Run Shadow Mode
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "SHADOW MODE: Live Feed Monitoring"
+          echo "================================================"
+          echo "Iterations: ${{ inputs.iterations || '6' }}"
+          echo "Duration: ${{ inputs.duration || '60' }}s"
+          echo "Profile: ${{ inputs.profile || 'moderate' }}"
+          echo "Exchange: ${{ inputs.exchange || 'bybit' }}"
+          echo "================================================"
+          
+          python -m tools.shadow.run_shadow \
+            --iterations ${{ inputs.iterations || '6' }} \
+            --duration ${{ inputs.duration || '60' }} \
+            --profile ${{ inputs.profile || 'moderate' }} \
+            --exchange ${{ inputs.exchange || 'bybit' }} \
+            --mock \
+            --output artifacts/shadow/latest
+          
+          echo "✓ Shadow run completed"
+
+      - name: Build Shadow Reports
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "BUILDING SHADOW REPORTS"
+          echo "================================================"
+          
+          python -m tools.shadow.build_shadow_reports \
+            --src artifacts/shadow/latest \
+            --last-n 8
+          
+          echo "✓ Reports generated"
+
+      - name: Audit Shadow Artifacts (strict)
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "SHADOW AUDIT (STRICT MODE)"
+          echo "================================================"
+          
+          python -m tools.shadow.audit_shadow_artifacts \
+            --base artifacts/shadow/latest \
+            --fail-on-hold
+
+      - name: CI Gate (KPI validation)
+        if: always()
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "SHADOW CI GATE"
+          echo "================================================"
+          
+          python -m tools.shadow.ci_gates.shadow_gate \
+            --path artifacts/shadow/latest \
+            --min_maker_taker 0.83 \
+            --min_edge 2.5 \
+            --max_latency 350 \
+            --max_risk 0.40
+
+      - name: Upload Shadow Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadow-mode-${{ github.run_id }}
+          path: |
+            artifacts/shadow/latest/ITER_SUMMARY_*.json
+            artifacts/shadow/latest/SHADOW_RUN_SUMMARY.json
+            artifacts/shadow/latest/reports/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Comment to PR (if applicable)
+        if: always() && github.event.pull_request.number
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const summaryPath = 'artifacts/shadow/latest/reports/analysis/POST_SHADOW_AUDIT_SUMMARY.json';
+            
+            if (!fs.existsSync(summaryPath)) {
+              console.log('No audit summary found');
+              return;
+            }
+            
+            const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+            const pass = summary.readiness.pass;
+            const kpis = summary.snapshot_kpis;
+            
+            const verdict = pass ? '✅ READINESS: OK' : '❌ READINESS: HOLD';
+            
+            const comment = `### Shadow Mode Results
+            
+            ${verdict}
+            
+            **KPIs (last-8 window):**
+            - maker_taker_ratio: **${kpis.maker_taker_ratio.toFixed(3)}** (≥ 0.83)
+            - net_bps: **${kpis.net_bps.toFixed(2)}** (≥ 2.5)
+            - p95_latency_ms: **${kpis.p95_latency_ms.toFixed(0)}** (≤ 350)
+            - risk_ratio: **${kpis.risk_ratio.toFixed(3)}** (≤ 0.40)
+            `;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: comment
+            });
+
