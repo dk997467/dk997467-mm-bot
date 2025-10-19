@@ -398,6 +398,173 @@ pip install pandas
 
 ---
 
+## 🔧 Strict Mode / CI Integration
+
+The `--fail-on-hold` flag makes the audit exit with code 1 if readiness is **HOLD**.
+
+### **Example: Strict mode (for nightly CI)**
+
+```bash
+python -m tools.soak.audit_artifacts --base artifacts/soak/latest --fail-on-hold
+```
+
+**Exit codes:**
+- `0`: Readiness is **OK** (all KPIs pass)
+- `1`: Readiness is **HOLD** (one or more KPIs failed) **AND** `--fail-on-hold` is set
+
+**Usage in CI workflows:**
+
+```yaml
+- name: Post-Soak Audit (strict)
+  run: |
+    python -m tools.soak.audit_artifacts \
+      --base artifacts/soak/latest \
+      --fail-on-hold
+```
+
+**Output:**
+
+```
+🎯 FINAL VERDICT: READINESS: HOLD (2 KPI(s) failed)
+[EXIT] fail-on-hold: True, verdict: HOLD, exit_code=1
+```
+
+**Makefile shortcut:**
+
+```bash
+make soak-audit-ci  # Runs with --fail-on-hold
+```
+
+---
+
+## 💬 PR Summary
+
+The `emit_pr_summary.py` script generates a short markdown summary for posting to PR comments.
+
+### **Usage:**
+
+```bash
+python -m tools.soak.ci_gates.emit_pr_summary \
+  artifacts/soak/latest/reports/analysis/POST_SOAK_AUDIT_SUMMARY.json
+```
+
+**Output:**
+
+```markdown
+### Post-Soak Readiness (last-8 window)
+
+✅ READINESS: OK
+
+- maker_taker_ratio: **0.871** (≥ 0.83)
+- net_bps: **3.180** (≥ 2.9)
+- p95_latency_ms: **312** (≤ 330)
+- risk_ratio: **0.352** (≤ 0.40)
+```
+
+### **Integration in GitHub Actions:**
+
+```yaml
+- name: Build PR summary
+  if: github.event.pull_request.number
+  run: |
+    python -m tools.soak.ci_gates.emit_pr_summary > pr_summary.md
+
+- name: Comment to PR
+  if: github.event.pull_request.number
+  uses: actions/github-script@v7
+  with:
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    script: |
+      const fs = require('fs');
+      const body = fs.readFileSync('pr_summary.md', 'utf8');
+      await github.rest.issues.createComment({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        issue_number: context.payload.pull_request.number,
+        body
+      });
+```
+
+---
+
+## 🔄 Run Comparison
+
+The `compare_runs.py` tool compares two soak runs by their last-8 KPI snapshots.
+
+### **Usage:**
+
+```bash
+python -m tools.soak.compare_runs \
+  --a artifacts/soak/baseline \
+  --b artifacts/soak/latest
+```
+
+**Output (CSV):**
+
+```
+KPI,A,B,B-A (note: for latency smaller is better)
+maker_taker_ratio,0.850,0.871,0.021
+net_bps,3.050,3.180,0.130
+p95_latency_ms,325.000,312.000,-13.000
+risk_ratio,0.360,0.352,-0.008
+```
+
+**Interpretation:**
+- **B-A > 0**: B is higher than A
+- **B-A < 0**: B is lower than A
+- For `p95_latency_ms`: negative delta is **good** (lower latency)
+- For `risk_ratio`: negative delta is **good** (lower risk)
+
+**Makefile shortcut:**
+
+```bash
+make soak-compare  # Compares run_A vs latest
+```
+
+**Note:** Both runs must have been analyzed with `audit_artifacts` first.
+
+---
+
+## 📊 Plots
+
+The `--plots` flag generates PNG graphs of KPI trends (requires `matplotlib`).
+
+### **Usage:**
+
+```bash
+python -m tools.soak.audit_artifacts --base artifacts/soak/latest --plots
+```
+
+**Output files:**
+
+```
+artifacts/soak/latest/reports/analysis/plots/
+├── net_bps.png
+├── risk_ratio.png
+├── latency_p95_ms.png
+└── maker_taker_ratio.png
+```
+
+**Features:**
+- Line plots with markers
+- Threshold lines (from readiness gate)
+- Grid for easy reading
+- 10x6 inch size, 100 DPI
+
+**If matplotlib not installed:**
+
+```
+⚠ WARNING: matplotlib not available; skipping plots
+```
+
+**To install matplotlib:**
+
+```bash
+pip install matplotlib
+```
+
+---
+
 ## 📚 Related Tools
 
 | Tool | Purpose |
@@ -434,7 +601,7 @@ All KPIs within thresholds:
 ---
 
 **Last Updated:** 2025-10-19  
-**Script Version:** 1.0.0  
+**Script Version:** 1.1.0  
 **Python:** 3.11+  
-**Dependencies:** stdlib only (pandas optional)
+**Dependencies:** stdlib only (pandas optional, matplotlib optional)
 
