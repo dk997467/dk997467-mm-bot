@@ -162,7 +162,7 @@ soak-audit-ci:
 soak-compare:
 	python -m tools.soak.compare_runs --a artifacts/soak/run_A --b artifacts/soak/latest
 
-.PHONY: shadow-run shadow-audit shadow-ci
+.PHONY: shadow-run shadow-audit shadow-ci shadow-archive
 
 shadow-run:
 	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --mock
@@ -172,6 +172,9 @@ shadow-audit:
 
 shadow-ci:
 	python -m tools.shadow.audit_shadow_artifacts --base artifacts/shadow/latest --fail-on-hold
+
+shadow-archive:
+	python -m tools.ops.rotate_shadow_artifacts --max-keep 300
 
 .PHONY: pre-freeze pre-freeze-alt pre-freeze-fast
 
