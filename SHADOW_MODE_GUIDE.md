@@ -82,9 +82,35 @@ python -m tools.shadow.run_shadow --mock false
 - `--profile`: Trading profile (moderate/aggressive, default: moderate)
 - `--mock`: Use synthetic data for testing (default: True)
 - `--output`: Output directory (default: artifacts/shadow/latest)
+- `--min_lot`: Minimum lot size for volume check (default: 0.0, from profile)
+- `--touch_dwell_ms`: Dwell time at touch price in ms (default: 25.0, from profile)
+- `--require_volume`: Require last_qty >= min_lot for fills (default: False)
+
+**Per-Symbol Profiles:**
+
+Shadow Mode supports per-symbol parameter profiles in `profiles/shadow_profiles.json`:
+
+```json
+{
+  "BTCUSDT": {
+    "touch_dwell_ms": 25,
+    "min_lot": 0.001,
+    "comment": "Baseline - highly liquid"
+  },
+  "ETHUSDT": {
+    "touch_dwell_ms": 25,
+    "min_lot": 0.01,
+    "comment": "Baseline - high volume"
+  }
+}
+```
+
+**Priority:** CLI args > Profile > Defaults
+
+If CLI arg is at default value, profile value is used. Explicit CLI args override profile.
 
 **Output:**
-- `ITER_SUMMARY_N.json` — Per-iteration KPIs
+- `ITER_SUMMARY_N.json` — Per-iteration KPIs (with rich notes)
 - `SHADOW_RUN_SUMMARY.json` — Full run metadata
 
 ---
@@ -170,6 +196,45 @@ python -m tools.shadow.ci_gates.shadow_gate \
 - Market conditions are less predictable than mock
 - Shadow mode validates strategy stability, not perfection
 
+### **Min-Windows Gate**
+
+Shadow audit requires a minimum number of iterations for statistical significance:
+
+```bash
+python -m tools.shadow.audit_shadow_artifacts \
+  --base artifacts/shadow/latest \
+  --min_windows 48  # Default: 48
+```
+
+**Gate behavior:**
+- ❌ FAIL if `iterations < min_windows`
+- Early exit before schema validation
+- Default: 48 windows (recommended minimum)
+
+**Rationale:** 48+ iterations ensure:
+- Sufficient statistical power
+- Coverage of different market conditions
+- Reliable KPI estimates
+
+### **Winsorized p95 Latency**
+
+Shadow reports include **winsorized p95** (1% trim) alongside raw p95:
+
+| Symbol | Windows | p95 Latency | p95_w (1%) | Difference |
+|--------|---------|-------------|------------|------------|
+| BTCUSDT | 48 | 228ms | 210ms | -18ms (outliers) |
+
+**Winsorization:**
+- Trim 1% from each tail (2% total)
+- Compute p95 on remaining 98% of data
+- Reduces outlier impact on latency measurement
+- **Display only** (not stored in JSON artifacts)
+
+**Benefits:**
+- More robust latency estimate
+- Less sensitive to transient network spikes
+- Comparable across runs
+
 ---
 
 ## 🛠️ Makefile Shortcuts
@@ -178,8 +243,10 @@ python -m tools.shadow.ci_gates.shadow_gate \
 
 ```makefile
 make shadow-run        # Run shadow mode (default: 6 iters, mock)
-make shadow-audit      # Audit artifacts (informational)
-make shadow-ci         # Run strict gate (fail on HOLD)
+make shadow-audit      # Audit artifacts (min_windows=48, informational)
+make shadow-ci         # Run strict gate (min_windows=48, fail on HOLD)
+make shadow-report     # Build reports + audit (one-shot)
+make shadow-archive    # Rotate old artifacts (keep last 300)
 ```
 
 ### **Example Workflow**
