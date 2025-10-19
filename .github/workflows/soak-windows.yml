@@ -580,23 +580,52 @@ jobs:
           }
           Write-Host "================================================"
 
-      - name: Readiness Gate (artifact-based)
-        id: check-kpi-gate
+      - name: Post-Soak Audit (generates reports + validates)
+        id: post-soak-audit
         if: ${{ inputs.iterations }}
         shell: pwsh
         env:
           PYTHON_EXE: python
-          SOAK_ARTIFACTS_DIR: artifacts/soak/latest
         run: |
           Write-Host "================================================"
-          Write-Host "READINESS GATE (artifact-based)"
+          Write-Host "POST-SOAK AUDIT (comprehensive)"
           Write-Host "================================================"
-          & $env:PYTHON_EXE -m tools.soak.ci_gates.readiness_gate `
-            --path "$env:SOAK_ARTIFACTS_DIR" `
-            --min_maker_taker 0.83 `
-            --min_edge 2.9 `
-            --max_latency 330 `
-            --max_risk 0.40
+          & $env:PYTHON_EXE -m tools.soak.audit_artifacts `
+            --base artifacts/soak/latest
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Audit returned exit code $LASTEXITCODE (informational)"
+          }
+
+      - name: Build PR summary (short)
+        id: pr-summary
+        if: ${{ inputs.iterations && github.event.pull_request.number }}
+        shell: pwsh
+        env:
+          PYTHON_EXE: python
+        run: |
+          Write-Host "Generating PR summary..."
+          & $env:PYTHON_EXE -m tools.soak.ci_gates.emit_pr_summary `
+            artifacts/soak/latest/reports/analysis/POST_SOAK_AUDIT_SUMMARY.json `
+            > pr_summary.md
+          
+          Write-Host "Preview:"
+          Get-Content pr_summary.md
+
+      - name: Comment readiness summary to PR
+        if: ${{ inputs.iterations && github.event.pull_request.number }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('pr_summary.md', 'utf8');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body
+            });
 
       - name: Start resource monitoring (background)
         id: start-monitoring

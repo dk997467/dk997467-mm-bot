@@ -213,21 +213,19 @@ jobs:
           
           echo "================================================"
       
-      - name: Readiness Gate (strict)
+      - name: Post-Soak Audit (strict, fail on HOLD)
         if: always()
         shell: bash
-        env:
-          PYTHON_EXE: python
-          SOAK_ARTIFACTS_DIR: artifacts/soak/latest
         run: |
           set -euo pipefail
           
-          $PYTHON_EXE -m tools.soak.ci_gates.readiness_gate \
-            --path "${SOAK_ARTIFACTS_DIR}" \
-            --min_maker_taker 0.83 \
-            --min_edge 2.9 \
-            --max_latency 330 \
-            --max_risk 0.40
+          echo "================================================"
+          echo "POST-SOAK AUDIT (STRICT MODE)"
+          echo "================================================"
+          
+          python -m tools.soak.audit_artifacts \
+            --base artifacts/soak/latest \
+            --fail-on-hold
       
       - name: Upload soak artifacts
         if: always()
