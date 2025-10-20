@@ -11,7 +11,7 @@ on:
       mock_mode:
         description: 'Use mock data for testing'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
 concurrency:
@@ -28,6 +28,9 @@ jobs:
       BYBIT_API_KEY: "N/A"
       BYBIT_API_SECRET: "N/A"
       STORAGE_PG_PASSWORD: "N/A"
+      # Safe fallbacks for inputs (available in all trigger contexts)
+      DURATION_HOURS: ${{ github.event_name == 'workflow_dispatch' && inputs.duration_hours || '72' }}
+      MOCK_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mock_mode || false }}
     
     steps:
       - name: Checkout code
@@ -50,12 +53,12 @@ jobs:
         continue-on-error: true
         run: |
           MOCK_FLAG=""
-          if [ "${{ inputs.mock_mode }}" = "true" ]; then
+          if [ "${{ env.MOCK_MODE }}" = "true" ]; then
             MOCK_FLAG="--mock"
           fi
           
           python -m tools.soak.run \
-            --hours ${{ inputs.duration_hours }} \
+            --hours ${{ env.DURATION_HOURS }} \
             --export-json artifacts/reports/soak_metrics.json \
             --export-md artifacts/reports/SOAK_RESULTS.md \
             --gate-summary artifacts/reports/gates_summary.json \

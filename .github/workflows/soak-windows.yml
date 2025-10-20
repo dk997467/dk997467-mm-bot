@@ -92,7 +92,7 @@ jobs:
       
       # Python: Auto-detect from PATH or use custom path from input
       # Note: Removed hardcoded path for portability across runners
-      PYTHON_EXE: ${{ inputs.python_path || 'python' }}
+      PYTHON_EXE: ${{ github.event_name == 'workflow_dispatch' && inputs.python_path || 'python' }}
       
       # Pytest: Disable plugin autoload for predictability
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
@@ -106,30 +106,35 @@ jobs:
       # MEGA-PROMPT: Runtime overrides and profile
       MM_PROFILE: "S1"
       MM_ALLOW_MISSING_SECRETS: "1"
-      MM_RUNTIME_OVERRIDES_JSON: ${{ inputs.overrides_json }}
+      MM_RUNTIME_OVERRIDES_JSON: ${{ github.event_name == 'workflow_dispatch' && inputs.overrides_json || '' }}
       
       # ========================================================================
       # SOAK TEST PARAMETERS (configurable via workflow_dispatch)
       # ========================================================================
       
       # Duration: How long to run the soak test
-      SOAK_HOURS: ${{ inputs.soak_hours || '24' }}
+      SOAK_HOURS: ${{ github.event_name == 'workflow_dispatch' && inputs.soak_hours || '24' }}
       
       # Timeout: Max time per iteration (prevents hanging)
-      SOAK_ITERATION_TIMEOUT_SECONDS: ${{ inputs.iteration_timeout_seconds || '1200' }}
+      SOAK_ITERATION_TIMEOUT_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.iteration_timeout_seconds || '1200' }}
       
       # Heartbeat: Sleep between iterations (allows system cooldown)
-      SOAK_HEARTBEAT_INTERVAL_SECONDS: ${{ inputs.heartbeat_interval_seconds || '300' }}
+      SOAK_HEARTBEAT_INTERVAL_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.heartbeat_interval_seconds || '300' }}
       
       # Stay-awake: Prevent Windows sleep during soak (1=enabled, 0=disabled)
-      SOAK_STAY_AWAKE: ${{ inputs.stay_awake || '1' }}
+      SOAK_STAY_AWAKE: ${{ github.event_name == 'workflow_dispatch' && inputs.stay_awake || '1' }}
+      
+      # Mini-soak mode parameters (safe fallbacks for all trigger contexts)
+      SOAK_ITERATIONS: ${{ github.event_name == 'workflow_dispatch' && inputs.iterations || '' }}
+      SOAK_AUTO_TUNE: ${{ github.event_name == 'workflow_dispatch' && inputs.auto_tune || false }}
+      ARTIFACT_RETENTION_DAYS: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact_retention_days || '14' }}
       
       # ========================================================================
       # VALIDATION TIMEOUTS (for full_stack_validate.py)
       # ========================================================================
       
       # Step timeout: Max time per validation step
-      FSV_TIMEOUT_SEC: ${{ inputs.validation_timeout_seconds || '900' }}
+      FSV_TIMEOUT_SEC: ${{ github.event_name == 'workflow_dispatch' && inputs.validation_timeout_seconds || '900' }}
       
       # Retries: Allow flaky tests to retry once
       FSV_RETRIES: "1"
@@ -460,19 +465,19 @@ jobs:
 
       - name: Run mini-soak with auto-tuning
         id: mini-soak
-        if: ${{ inputs.iterations }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.iterations }}
         env:
-          SOAK_SLEEP_SECONDS: ${{ inputs.heartbeat_interval_seconds || 300 }}
+          SOAK_SLEEP_SECONDS: ${{ env.SOAK_HEARTBEAT_INTERVAL_SECONDS }}
         run: |
           Write-Host "================================================"
-          Write-Host "MINI-SOAK MODE: ${{ inputs.iterations }} iterations"
+          Write-Host "MINI-SOAK MODE: $env:SOAK_ITERATIONS iterations"
           Write-Host "================================================"
           
-          $iterations = [int]"${{ inputs.iterations }}"
-          $autotuneFlag = if ("${{ inputs.auto_tune }}" -eq "true") { "--auto-tune" } else { "" }
+          $iterations = [int]$env:SOAK_ITERATIONS
+          $autotuneFlag = if ($env:SOAK_AUTO_TUNE -eq "true") { "--auto-tune" } else { "" }
           
           Write-Host "Iterations: $iterations"
-          Write-Host "Auto-tune: ${{ inputs.auto_tune }}"
+          Write-Host "Auto-tune: $env:SOAK_AUTO_TUNE"
           Write-Host "Profile: $env:MM_PROFILE"
           Write-Host "Sleep between iterations: $env:SOAK_SLEEP_SECONDS seconds"
           Write-Host ""
@@ -499,7 +504,7 @@ jobs:
 
       - name: Verify sleep was used
         id: verify-sleep
-        if: ${{ inputs.iterations }}
+        if: ${{ env.SOAK_ITERATIONS != '' }}
         run: |
           Write-Host "================================================"
           Write-Host "VERIFYING SLEEP BETWEEN ITERATIONS"
@@ -508,7 +513,7 @@ jobs:
           # Check if sleep marker was logged
           # Note: In PowerShell, we can't directly grep the previous step's output
           # So we check if iterations > 1 (sleep only happens when iterations > 1)
-          $iterations = [int]"${{ inputs.iterations }}"
+          $iterations = [int]$env:SOAK_ITERATIONS
           if ($iterations -gt 1) {
             Write-Host "✓ Multi-iteration mode: sleep should have been used"
             Write-Host "  Expected sleep between $($iterations - 1) iteration pairs"
@@ -518,7 +523,7 @@ jobs:
 
       - name: Verify mini-soak artifacts
         id: verify-artifacts
-        if: ${{ inputs.iterations }}
+        if: ${{ env.SOAK_ITERATIONS != '' }}
         run: |
           Write-Host "================================================"
           Write-Host "VERIFYING MINI-SOAK ARTIFACTS"
@@ -551,7 +556,7 @@ jobs:
 
       - name: Guard - Skip reports if no ITER_SUMMARY yet
         id: guard-reports
-        if: ${{ inputs.iterations }}
+        if: ${{ env.SOAK_ITERATIONS != '' }}
         shell: pwsh
         run: |
           Write-Host "================================================"
@@ -570,7 +575,7 @@ jobs:
 
       - name: Build reports for POST_SOAK_SNAPSHOT
         id: build-reports
-        if: ${{ inputs.iterations && env.skip_reports != 'true' }}
+        if: ${{ env.SOAK_ITERATIONS != '' && env.skip_reports != 'true' }}
         continue-on-error: true
         shell: pwsh
         run: |
@@ -601,7 +606,7 @@ jobs:
 
       - name: Readiness Gate (artifact-based, non-strict for hourly runs)
         id: readiness-gate
-        if: ${{ inputs.iterations && env.skip_reports != 'true' }}
+        if: ${{ env.SOAK_ITERATIONS != '' && env.skip_reports != 'true' }}
         continue-on-error: true
         shell: pwsh
         run: |
@@ -632,7 +637,7 @@ jobs:
 
       - name: Write legacy readiness.json (compat)
         id: legacy-readiness
-        if: ${{ inputs.iterations && env.skip_reports != 'true' }}
+        if: ${{ env.SOAK_ITERATIONS != '' && env.skip_reports != 'true' }}
         continue-on-error: true
         shell: pwsh
         run: |
@@ -654,7 +659,7 @@ jobs:
 
       - name: Post-Soak Audit (generates reports + validates)
         id: post-soak-audit
-        if: ${{ inputs.iterations && env.skip_reports != 'true' }}
+        if: ${{ env.SOAK_ITERATIONS != '' && env.skip_reports != 'true' }}
         shell: pwsh
         env:
           PYTHON_EXE: python
@@ -671,7 +676,7 @@ jobs:
 
       - name: Build PR summary (short)
         id: pr-summary
-        if: ${{ inputs.iterations && github.event.pull_request.number }}
+        if: ${{ env.SOAK_ITERATIONS != '' && github.event_name == 'pull_request' && github.event.pull_request.number }}
         shell: pwsh
         env:
           PYTHON_EXE: python
@@ -685,7 +690,7 @@ jobs:
           Get-Content pr_summary.md
 
       - name: Comment readiness summary to PR
-        if: ${{ inputs.iterations && github.event.pull_request.number }}
+        if: ${{ env.SOAK_ITERATIONS != '' && github.event_name == 'pull_request' && github.event.pull_request.number }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -701,7 +706,7 @@ jobs:
 
       - name: Start resource monitoring (background)
         id: start-monitoring
-        if: ${{ !inputs.iterations }}
+        if: ${{ env.SOAK_ITERATIONS == '' }}
         run: |
           Write-Host "--- Starting resource monitor in background ---"
           $monitorScript = "${{ github.workspace }}\tools\soak\resource_monitor.py"
@@ -717,7 +722,7 @@ jobs:
           "monitor_job_id=$($monitorJob.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Run long soak loop (legacy mode)
-        if: ${{ !inputs.iterations }}
+        if: ${{ env.SOAK_ITERATIONS == '' }}
         id: soak-loop
         run: |
           $durationHours = [int]$env:SOAK_HOURS
@@ -1090,7 +1095,7 @@ jobs:
             artifacts/**
             .pytest_cache/**
           if-no-files-found: ignore
-          retention-days: ${{ inputs.artifact_retention_days || 14 }}
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
       - name: "[13/13] Telegram failure notification"
         id: notify-telegram
