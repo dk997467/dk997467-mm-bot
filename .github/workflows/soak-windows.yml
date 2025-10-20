@@ -716,8 +716,9 @@ jobs:
             & $env:PYTHON_EXE -m tools.soak.kpi_gate $kpi
           } else {
             Write-Host "Using ITER_SUMMARY glob: $iterGlob"
-            # ВАЖНО: передаём маску как строку — pwsh не разворачивает её для внешних программ
-            & $env:PYTHON_EXE -m tools.soak.kpi_gate --iter $iterGlob
+            # Pass glob as string - PowerShell doesn't expand it for external commands
+            # kpi_gate.py will handle glob expansion internally
+            & $env:PYTHON_EXE -m tools.soak.kpi_gate --iter "$iterGlob"
           }
           
           if ($LASTEXITCODE -ne 0) {
