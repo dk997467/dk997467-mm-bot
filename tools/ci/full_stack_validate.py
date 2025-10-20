@@ -500,13 +500,29 @@ def run_dashboards() -> Dict[str, Any]:
 
 
 def check_secrets_available() -> bool:
-    """Check if required secrets are available."""
+    """
+    Check if required secrets are available.
+    
+    For soak/offline mode (SOAK_OFFLINE=1), missing secrets are treated as warning, not failure.
+    """
     required_secrets = ['BYBIT_API_KEY', 'BYBIT_API_SECRET', 'STORAGE_PG_PASSWORD']
     
     # Check if any required secret is missing or is a dummy value
+    missing = []
     for secret in required_secrets:
         value = os.environ.get(secret, '')
-        if not value or value.lower() in ('', 'dummy', 'test', 'none'):
+        if not value or value.lower() in ('', 'dummy', 'test', 'none', 'n/a'):
+            missing.append(secret)
+    
+    # Для soak/offline это предупреждение, не причина падать
+    offline = os.environ.get("SOAK_OFFLINE", "0") == "1"
+    
+    if missing:
+        if offline:
+            print(f"[WARN] Missing secrets in SOAK_OFFLINE mode: {missing}", file=sys.stderr)
+            print(f"[WARN] This is expected for offline soak tests", file=sys.stderr)
+        else:
+            print(f"[INFO] Missing or dummy secrets: {missing}", file=sys.stderr)
             return False
     
     return True
