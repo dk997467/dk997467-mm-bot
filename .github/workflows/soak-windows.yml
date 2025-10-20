@@ -185,6 +185,7 @@ jobs:
       
       ARTIFACTS_ROOT: "${{ github.workspace }}/artifacts"
       SOAK_ARTIFACTS_DIR: "artifacts/soak/latest"
+      SOAK_OUT_DIR: "artifacts/soak/latest"
       CI_ARTIFACTS_DIR: "${{ github.workspace }}/artifacts/ci"
 
     steps:
@@ -677,7 +678,6 @@ jobs:
       - name: List Soak Artifacts (Windows)
         id: list-artifacts-win
         if: ${{ env.SOAK_ITERATIONS != '' }}
-        continue-on-error: true
         shell: pwsh
         working-directory: ${{ github.workspace }}
         run: |
@@ -688,6 +688,7 @@ jobs:
           Write-Host "workspace=${{ github.workspace }}"
           Write-Host "PYTHONPATH=$env:PYTHONPATH"
           Write-Host "SOAK_ARTIFACTS_DIR=$env:SOAK_ARTIFACTS_DIR"
+          Write-Host "SOAK_OUT_DIR=$env:SOAK_OUT_DIR"
           Write-Host ""
           Write-Host "Artifacts in artifacts\soak\latest:"
           if (Test-Path "artifacts\soak\latest") {
@@ -703,7 +704,9 @@ jobs:
             Write-Host "Found $count ITER_SUMMARY files"
             $iterFiles | Format-Table Name, Length -AutoSize
           } else {
-            Write-Warning "No ITER_SUMMARY files found"
+            Write-Host "::error::No ITER_SUMMARY_*.json produced in artifacts/soak/latest (check soak producer step)."
+            Write-Error "No ITER_SUMMARY files found - cannot run KPI gate"
+            exit 1
           }
 
       - name: KPI Gate (explicit path or iter mask)

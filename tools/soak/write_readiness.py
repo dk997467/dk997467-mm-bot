@@ -105,7 +105,7 @@ def main():
     
     outp.write_text(json.dumps(readiness, indent=2), encoding="utf-8")
     
-    print(f"[write_readiness] status={status} → {outp}")
+    print(f"[write_readiness] status={status} -> {outp}")
     print(f"[write_readiness] maker_taker={mk:.3f} (>= {args.min_maker_taker})")
     print(f"[write_readiness] net_bps={nb:.2f} (>= {args.min_edge})")
     print(f"[write_readiness] p95_latency_ms={lt:.0f} (<= {args.max_latency})")

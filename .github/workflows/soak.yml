@@ -35,6 +35,8 @@ jobs:
       PYTHONPATH: ${{ github.workspace }}
       # Soak artifacts directory for kpi_gate fallback
       SOAK_ARTIFACTS_DIR: artifacts/soak/latest
+      # Soak output directory for iteration files
+      SOAK_OUT_DIR: artifacts/soak/latest
     
     steps:
       - name: Checkout code
@@ -81,6 +83,7 @@ jobs:
           echo "workspace=${{ github.workspace }}"
           echo "PYTHONPATH=$PYTHONPATH"
           echo "SOAK_ARTIFACTS_DIR=$SOAK_ARTIFACTS_DIR"
+          echo "SOAK_OUT_DIR=$SOAK_OUT_DIR"
           echo ""
           echo "Artifacts in artifacts/soak/latest:"
           ls -lah artifacts/soak/latest || echo "Directory not found"
@@ -88,7 +91,14 @@ jobs:
           echo "ITER_SUMMARY files:"
           ITER_COUNT=$(ls artifacts/soak/latest/ITER_SUMMARY_*.json 2>/dev/null | wc -l || echo 0)
           echo "Found $ITER_COUNT ITER_SUMMARY files"
-          ls -lah artifacts/soak/latest/ITER_SUMMARY_*.json 2>/dev/null || echo "No ITER_SUMMARY files found"
+          
+          if [ "$ITER_COUNT" -eq "0" ]; then
+            echo "::error::No ITER_SUMMARY_*.json produced in artifacts/soak/latest (check soak producer step)."
+            echo "No ITER_SUMMARY files found - cannot run KPI gate"
+            exit 1
+          else
+            ls -lah artifacts/soak/latest/ITER_SUMMARY_*.json
+          fi
         shell: bash
       
       - name: Build Soak KPI (if builder exists)
