@@ -184,7 +184,7 @@ jobs:
       # ========================================================================
       
       ARTIFACTS_ROOT: "${{ github.workspace }}/artifacts"
-      SOAK_ARTIFACTS_DIR: "${{ github.workspace }}/artifacts/soak"
+      SOAK_ARTIFACTS_DIR: "artifacts/soak/latest"
       CI_ARTIFACTS_DIR: "${{ github.workspace }}/artifacts/ci"
 
     steps:
@@ -679,10 +679,16 @@ jobs:
         if: ${{ env.SOAK_ITERATIONS != '' }}
         continue-on-error: true
         shell: pwsh
+        working-directory: ${{ github.workspace }}
         run: |
           Write-Host "================================================"
           Write-Host "SOAK ARTIFACTS DIAGNOSTIC (Windows)"
           Write-Host "================================================"
+          Write-Host "PWD=$((Get-Location).Path)"
+          Write-Host "workspace=${{ github.workspace }}"
+          Write-Host "PYTHONPATH=$env:PYTHONPATH"
+          Write-Host "SOAK_ARTIFACTS_DIR=$env:SOAK_ARTIFACTS_DIR"
+          Write-Host ""
           Write-Host "Artifacts in artifacts\soak\latest:"
           if (Test-Path "artifacts\soak\latest") {
             Get-ChildItem -Path "artifacts\soak\latest" -ErrorAction SilentlyContinue | Format-Table Name, Length, LastWriteTime -AutoSize
@@ -693,6 +699,8 @@ jobs:
           Write-Host "ITER_SUMMARY files:"
           $iterFiles = Get-ChildItem -Path "artifacts\soak\latest\ITER_SUMMARY_*.json" -ErrorAction SilentlyContinue
           if ($iterFiles) {
+            $count = $iterFiles.Count
+            Write-Host "Found $count ITER_SUMMARY files"
             $iterFiles | Format-Table Name, Length -AutoSize
           } else {
             Write-Warning "No ITER_SUMMARY files found"
@@ -703,6 +711,7 @@ jobs:
         if: ${{ env.SOAK_ITERATIONS != '' }}
         continue-on-error: true
         shell: pwsh
+        working-directory: ${{ github.workspace }}
         run: |
           Write-Host "================================================"
           Write-Host "KPI GATE (Windows)"
@@ -727,9 +736,10 @@ jobs:
 
       - name: Write readiness.json (Windows)
         id: write-readiness-win
-        if: ${{ env.SOAK_ITERATIONS != '' }}
+        if: always()
         continue-on-error: true
         shell: pwsh
+        working-directory: ${{ github.workspace }}
         run: |
           Write-Host "================================================"
           Write-Host "WRITING READINESS.JSON (Windows)"
@@ -1170,6 +1180,19 @@ jobs:
             .pytest_cache/**
           if-no-files-found: ignore
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+      
+      - name: Upload full artifacts on failure (Windows)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-windows-failure-debug-${{ github.run_id }}
+          path: |
+            artifacts/**
+            *.log
+            **/*.err.log
+            .pytest_cache/**
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: "[13/13] Telegram failure notification"
         id: notify-telegram

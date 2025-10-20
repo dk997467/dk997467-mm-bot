@@ -31,6 +31,10 @@ jobs:
       # Safe fallbacks for inputs (available in all trigger contexts)
       DURATION_HOURS: ${{ github.event_name == 'workflow_dispatch' && inputs.duration_hours || '72' }}
       MOCK_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mock_mode || false }}
+      # PYTHONPATH for correct module imports
+      PYTHONPATH: ${{ github.workspace }}
+      # Soak artifacts directory for kpi_gate fallback
+      SOAK_ARTIFACTS_DIR: artifacts/soak/latest
     
     steps:
       - name: Checkout code
@@ -68,20 +72,29 @@ jobs:
       
       - name: List Soak Artifacts (Linux)
         if: always()
+        working-directory: ${{ github.workspace }}
         run: |
           echo "================================================"
-          echo "SOAK ARTIFACTS DIAGNOSTIC"
+          echo "SOAK ARTIFACTS DIAGNOSTIC (Linux)"
           echo "================================================"
+          echo "PWD=$(pwd)"
+          echo "workspace=${{ github.workspace }}"
+          echo "PYTHONPATH=$PYTHONPATH"
+          echo "SOAK_ARTIFACTS_DIR=$SOAK_ARTIFACTS_DIR"
+          echo ""
           echo "Artifacts in artifacts/soak/latest:"
           ls -lah artifacts/soak/latest || echo "Directory not found"
           echo ""
           echo "ITER_SUMMARY files:"
+          ITER_COUNT=$(ls artifacts/soak/latest/ITER_SUMMARY_*.json 2>/dev/null | wc -l || echo 0)
+          echo "Found $ITER_COUNT ITER_SUMMARY files"
           ls -lah artifacts/soak/latest/ITER_SUMMARY_*.json 2>/dev/null || echo "No ITER_SUMMARY files found"
         shell: bash
       
       - name: Build Soak KPI (if builder exists)
         if: always()
         continue-on-error: true
+        working-directory: ${{ github.workspace }}
         run: |
           if python -c "import importlib; importlib.import_module('tools.soak.build_soak_reports')" 2>/dev/null; then
             python -m tools.soak.build_soak_reports --in artifacts/soak/latest --out artifacts/soak/latest/SOAK_KPI.json
@@ -93,9 +106,10 @@ jobs:
       - name: KPI Gate (explicit path or iter mask)
         if: always()
         continue-on-error: true
+        working-directory: ${{ github.workspace }}
         run: |
           echo "================================================"
-          echo "KPI GATE"
+          echo "KPI GATE (Linux)"
           echo "================================================"
           if [ -f artifacts/soak/latest/SOAK_KPI.json ] && [ -s artifacts/soak/latest/SOAK_KPI.json ]; then
             echo "Using SOAK_KPI.json"
@@ -109,9 +123,10 @@ jobs:
       - name: Write readiness.json (Linux)
         if: always()
         continue-on-error: true
+        working-directory: ${{ github.workspace }}
         run: |
           echo "================================================"
-          echo "WRITING READINESS.JSON"
+          echo "WRITING READINESS.JSON (Linux)"
           echo "================================================"
           python -m tools.soak.write_readiness \
             --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
@@ -137,8 +152,21 @@ jobs:
             artifacts/reports/gates_summary.json
             artifacts/reports/readiness.json
             artifacts/soak/latest/SOAK_KPI.json
+            artifacts/soak/latest/ITER_SUMMARY_*.json
           if-no-files-found: warn
           retention-days: 90
+      
+      - name: Upload full artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-failure-debug-${{ github.run_id }}
+          path: |
+            artifacts/**
+            ./*.log
+            **/*.err.log
+          if-no-files-found: ignore
+          retention-days: 30
       
       - name: Comment PR with results (if applicable)
         if: always() && github.event_name == 'pull_request'
