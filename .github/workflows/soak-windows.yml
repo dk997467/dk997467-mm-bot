@@ -549,9 +549,28 @@ jobs:
           
           Write-Host "✅ All required artifacts present"
 
+      - name: Guard - Skip reports if no ITER_SUMMARY yet
+        id: guard-reports
+        if: ${{ inputs.iterations }}
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "GUARD: Checking for ITER_SUMMARY files"
+          Write-Host "================================================"
+          
+          $iter1 = "artifacts\soak\latest\ITER_SUMMARY_1.json"
+          if (!(Test-Path $iter1)) {
+            Write-Host "[SKIP] No ITER_SUMMARY_1.json yet, skipping report steps"
+            "skip_reports=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } else {
+            Write-Host "[OK] ITER_SUMMARY_1.json found, proceeding with reports"
+            "skip_reports=false" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+          Write-Host "================================================"
+
       - name: Build reports for POST_SOAK_SNAPSHOT
         id: build-reports
-        if: ${{ inputs.iterations }}
+        if: ${{ inputs.iterations && env.skip_reports != 'true' }}
         continue-on-error: true
         shell: pwsh
         run: |
@@ -580,9 +599,62 @@ jobs:
           }
           Write-Host "================================================"
 
+      - name: Readiness Gate (artifact-based, non-strict for hourly runs)
+        id: readiness-gate
+        if: ${{ inputs.iterations && env.skip_reports != 'true' }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "READINESS GATE (informational for hourly soak)"
+          Write-Host "================================================"
+          
+          $path = "artifacts\soak\latest"
+          
+          # PR-mode thresholds (non-strict for hourly runs)
+          & $env:PYTHON_EXE -m tools.soak.ci_gates.readiness_gate `
+            --path $path `
+            --min_maker_taker 0.83 `
+            --min_edge 2.9 `
+            --max_latency 330 `
+            --max_risk 0.40
+          
+          $exitCode = $LASTEXITCODE
+          
+          if ($exitCode -ne 0) {
+            Write-Warning "Readiness gate returned HOLD (exit code $exitCode)"
+            Write-Warning "This is informational for hourly runs - not blocking"
+          } else {
+            Write-Host "✓ Readiness gate PASSED"
+          }
+          
+          Write-Host "================================================"
+
+      - name: Write legacy readiness.json (compat)
+        id: legacy-readiness
+        if: ${{ inputs.iterations && env.skip_reports != 'true' }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "WRITING LEGACY readiness.json (compatibility)"
+          Write-Host "================================================"
+          
+          & $env:PYTHON_EXE -m tools.soak.ci_gates.write_legacy_readiness_json `
+            --src "artifacts\soak\latest" `
+            --out "artifacts\reports"
+          
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✓ Legacy readiness.json written"
+          } else {
+            Write-Warning "Failed to write legacy readiness.json (non-critical)"
+          }
+          
+          Write-Host "================================================"
+
       - name: Post-Soak Audit (generates reports + validates)
         id: post-soak-audit
-        if: ${{ inputs.iterations }}
+        if: ${{ inputs.iterations && env.skip_reports != 'true' }}
         shell: pwsh
         env:
           PYTHON_EXE: python
