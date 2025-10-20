@@ -23,6 +23,11 @@ jobs:
     name: Run Soak Test
     runs-on: ubuntu-latest
     timeout-minutes: 4380  # 73 hours max
+    env:
+      SOAK_OFFLINE: "1"
+      BYBIT_API_KEY: "N/A"
+      BYBIT_API_SECRET: "N/A"
+      STORAGE_PG_PASSWORD: "N/A"
     
     steps:
       - name: Checkout code
