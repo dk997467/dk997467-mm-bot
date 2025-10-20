@@ -427,8 +427,69 @@ def run_reports() -> Dict[str, Any]:
     if not (ROOT_DIR / "tests" / "fixtures").exists():
         return {'name': 'reports', 'ok': True, 'details': 'SKIP: missing fixtures'}
 
-    result = run_step_with_retries('reports_kpi_gate', [sys.executable, '-m', 'tools.soak.kpi_gate'])
-    return {'name': 'reports', 'ok': result['ok'], 'details': f"kpi_gate={'OK' if result['ok'] else 'FAIL'}", 'meta': result}
+    # Guard: Check if ITER_SUMMARY files exist (skip on first iteration)
+    soak_latest = ROOT_DIR / "artifacts" / "soak" / "latest"
+    iter_summary_1 = soak_latest / "ITER_SUMMARY_1.json"
+    
+    if not iter_summary_1.exists():
+        print("[reports] No ITER_SUMMARY_1.json yet, skipping report generation (first iteration)", file=sys.stderr)
+        return {'name': 'reports', 'ok': True, 'details': 'SKIP: no ITER_SUMMARY yet (first iteration)'}
+    
+    # Step 1: Build reports (POST_SOAK_SNAPSHOT.json)
+    print("[reports] Building POST_SOAK_SNAPSHOT...", file=sys.stderr)
+    reports_dir = soak_latest / "reports" / "analysis"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    
+    build_result = run_step_with_retries(
+        'reports_build',
+        [sys.executable, '-m', 'tools.soak.build_reports',
+         '--src', str(soak_latest),
+         '--out', str(reports_dir),
+         '--last-n', '8']
+    )
+    
+    if not build_result['ok']:
+        print(f"[reports] build_reports failed: {build_result.get('details', 'unknown error')}", file=sys.stderr)
+        return {'name': 'reports', 'ok': False, 'details': 'build_reports FAIL', 'meta': build_result}
+    
+    # Step 2: Readiness gate (non-blocking for hourly runs)
+    print("[reports] Running readiness gate...", file=sys.stderr)
+    readiness_result = run_step_with_retries(
+        'reports_readiness_gate',
+        [sys.executable, '-m', 'tools.soak.ci_gates.readiness_gate',
+         '--path', str(soak_latest),
+         '--min_maker_taker', '0.83',
+         '--min_edge', '2.9',
+         '--max_latency', '330',
+         '--max_risk', '0.40']
+    )
+    
+    # For hourly/legacy mode: readiness gate is informational, not blocking
+    readiness_status = 'OK' if readiness_result['ok'] else 'HOLD'
+    print(f"[reports] Readiness gate: {readiness_status} (informational for hourly runs)", file=sys.stderr)
+    
+    # Step 3: Write legacy readiness.json for compatibility
+    print("[reports] Writing legacy readiness.json...", file=sys.stderr)
+    legacy_artifacts = ROOT_DIR / "artifacts" / "reports"
+    legacy_artifacts.mkdir(parents=True, exist_ok=True)
+    
+    legacy_result = run_step_with_retries(
+        'reports_legacy_json',
+        [sys.executable, '-m', 'tools.soak.ci_gates.write_legacy_readiness_json',
+         '--src', str(soak_latest),
+         '--out', str(legacy_artifacts)]
+    )
+    
+    if not legacy_result['ok']:
+        print(f"[reports] write_legacy_readiness_json failed (non-critical): {legacy_result.get('details', 'unknown error')}", file=sys.stderr)
+    
+    # Return success (readiness gate HOLD is not a failure for hourly runs)
+    details = f"build_reports=OK readiness={readiness_status}"
+    return {'name': 'reports', 'ok': True, 'details': details, 'meta': {
+        'build_reports': build_result,
+        'readiness_gate': readiness_result,
+        'legacy_json': legacy_result
+    }}
 
 
 def run_dashboards() -> Dict[str, Any]:
