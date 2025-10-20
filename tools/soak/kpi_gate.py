@@ -257,6 +257,7 @@ def main():
     # Parse arguments
     mode = None  # "weekly", "iter", "test", or auto-detect
     target_path = None
+    iter_glob_pattern = None  # For --iter glob mode
     
     if len(sys.argv) == 1:
         # Auto-detect mode
@@ -268,7 +269,15 @@ def main():
         target_path = Path(sys.argv[2]) if len(sys.argv) > 2 else None
     elif sys.argv[1] == "--iter":
         mode = "iter"
-        target_path = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+        if len(sys.argv) > 2:
+            # Check if it's a glob pattern or a single file
+            arg = sys.argv[2]
+            if "*" in arg or "?" in arg:
+                # Glob pattern
+                iter_glob_pattern = arg
+            else:
+                # Single file
+                target_path = Path(arg)
     else:
         # Positional path
         mode = "auto"
@@ -288,6 +297,40 @@ def main():
         print(f"Result: {result}")
         
         return 0 if result["verdict"] != "FAIL" else 1
+    
+    # --- HARD FALLBACK: if no path/iter/weekly specified, try env/default glob
+    if mode == "auto" and target_path is None and iter_glob_pattern is None:
+        import os
+        import glob as glob_module
+        
+        soak_dir = os.environ.get("SOAK_ARTIFACTS_DIR", "artifacts/soak/latest")
+        default_glob = f"{soak_dir}/ITER_SUMMARY_*.json"
+        matched = glob_module.glob(default_glob)
+        
+        if matched:
+            # Use glob pattern for iter mode
+            iter_glob_pattern = default_glob
+            mode = "iter"
+            print(f"[kpi_gate] Auto-fallback to --iter '{default_glob}' ({len(matched)} files)", file=sys.stderr)
+        else:
+            print("[kpi_gate] No args and no default artifacts found; failing fast.", file=sys.stderr)
+            print("Usage: python -m tools.soak.kpi_gate [<path>|--weekly <path>|--iter <path>|--test]", file=sys.stderr)
+            print("No KPI file found for auto-detect mode", file=sys.stderr)
+            return 1
+    
+    # Handle iter glob mode
+    if mode == "iter" and iter_glob_pattern:
+        import glob as glob_module
+        matched_files = sorted(glob_module.glob(iter_glob_pattern))
+        
+        if not matched_files:
+            print(f"[kpi_gate] ERROR: No files matched glob pattern: {iter_glob_pattern}", file=sys.stderr)
+            return 1
+        
+        # Use the most recent file
+        matched_files.sort(key=lambda p: Path(p).stat().st_mtime, reverse=True)
+        target_path = Path(matched_files[0])
+        print(f"[kpi_gate] Using most recent from glob: {target_path} ({len(matched_files)} files matched)", file=sys.stderr)
     
     # Auto-detect file if not specified
     if mode == "auto" and target_path is None:
