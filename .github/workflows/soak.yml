@@ -66,6 +66,19 @@ jobs:
           
           echo "EXIT_CODE=$?" >> $GITHUB_OUTPUT
       
+      - name: List Soak Artifacts (Linux)
+        if: always()
+        run: |
+          echo "================================================"
+          echo "SOAK ARTIFACTS DIAGNOSTIC"
+          echo "================================================"
+          echo "Artifacts in artifacts/soak/latest:"
+          ls -lah artifacts/soak/latest || echo "Directory not found"
+          echo ""
+          echo "ITER_SUMMARY files:"
+          ls -lah artifacts/soak/latest/ITER_SUMMARY_*.json 2>/dev/null || echo "No ITER_SUMMARY files found"
+        shell: bash
+      
       - name: Build Soak KPI (if builder exists)
         if: always()
         continue-on-error: true
@@ -81,21 +94,36 @@ jobs:
         if: always()
         continue-on-error: true
         run: |
-          if [ -f artifacts/soak/latest/SOAK_KPI.json ]; then
+          echo "================================================"
+          echo "KPI GATE"
+          echo "================================================"
+          if [ -f artifacts/soak/latest/SOAK_KPI.json ] && [ -s artifacts/soak/latest/SOAK_KPI.json ]; then
+            echo "Using SOAK_KPI.json"
             python -m tools.soak.kpi_gate artifacts/soak/latest/SOAK_KPI.json
           else
+            echo "Using ITER_SUMMARY glob"
             python -m tools.soak.kpi_gate --iter "artifacts/soak/latest/ITER_SUMMARY_*.json"
           fi
         shell: bash
       
-      - name: Write readiness.json
+      - name: Write readiness.json (Linux)
         if: always()
         continue-on-error: true
         run: |
+          echo "================================================"
+          echo "WRITING READINESS.JSON"
+          echo "================================================"
           python -m tools.soak.write_readiness \
             --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
             --out "artifacts/reports/readiness.json" \
             --min_maker_taker 0.83 --min_edge 2.9 --max_latency 330 --max_risk 0.40
+          echo ""
+          if [ -f artifacts/reports/readiness.json ]; then
+            echo "✓ readiness.json created:"
+            cat artifacts/reports/readiness.json
+          else
+            echo "⚠ readiness.json not created"
+          fi
         shell: bash
       
       - name: Upload soak artifacts

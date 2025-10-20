@@ -674,6 +674,79 @@ jobs:
             Write-Warning "Audit returned exit code $LASTEXITCODE (informational)"
           }
 
+      - name: List Soak Artifacts (Windows)
+        id: list-artifacts-win
+        if: ${{ env.SOAK_ITERATIONS != '' }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "SOAK ARTIFACTS DIAGNOSTIC (Windows)"
+          Write-Host "================================================"
+          Write-Host "Artifacts in artifacts\soak\latest:"
+          if (Test-Path "artifacts\soak\latest") {
+            Get-ChildItem -Path "artifacts\soak\latest" -ErrorAction SilentlyContinue | Format-Table Name, Length, LastWriteTime -AutoSize
+          } else {
+            Write-Warning "Directory not found"
+          }
+          Write-Host ""
+          Write-Host "ITER_SUMMARY files:"
+          $iterFiles = Get-ChildItem -Path "artifacts\soak\latest\ITER_SUMMARY_*.json" -ErrorAction SilentlyContinue
+          if ($iterFiles) {
+            $iterFiles | Format-Table Name, Length -AutoSize
+          } else {
+            Write-Warning "No ITER_SUMMARY files found"
+          }
+
+      - name: KPI Gate (explicit path or iter mask)
+        id: kpi-gate-win
+        if: ${{ env.SOAK_ITERATIONS != '' }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "KPI GATE (Windows)"
+          Write-Host "================================================"
+          
+          $kpi = "artifacts\soak\latest\SOAK_KPI.json"
+          $iterGlob = "artifacts/soak/latest/ITER_SUMMARY_*.json"
+          
+          if ((Test-Path $kpi -PathType Leaf) -and ((Get-Item $kpi).Length -gt 0)) {
+            Write-Host "Using SOAK_KPI.json"
+            & $env:PYTHON_EXE -m tools.soak.kpi_gate $kpi
+          } else {
+            Write-Host "Using ITER_SUMMARY glob: $iterGlob"
+            # ВАЖНО: передаём маску как строку — pwsh не разворачивает её для внешних программ
+            & $env:PYTHON_EXE -m tools.soak.kpi_gate --iter $iterGlob
+          }
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "KPI gate returned exit code $LASTEXITCODE (informational)"
+          }
+
+      - name: Write readiness.json (Windows)
+        id: write-readiness-win
+        if: ${{ env.SOAK_ITERATIONS != '' }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "WRITING READINESS.JSON (Windows)"
+          Write-Host "================================================"
+          
+          & $env:PYTHON_EXE -m tools.soak.write_readiness `
+            --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" `
+            --out "artifacts/reports/readiness.json" `
+            --min_maker_taker 0.83 --min_edge 2.9 --max_latency 330 --max_risk 0.40
+          
+          Write-Host ""
+          if (Test-Path "artifacts\reports\readiness.json") {
+            Write-Host "✓ readiness.json created:"
+            Get-Content "artifacts\reports\readiness.json"
+          } else {
+            Write-Warning "readiness.json not created"
+          }
+
       - name: Build PR summary (short)
         id: pr-summary
         if: ${{ env.SOAK_ITERATIONS != '' && github.event_name == 'pull_request' && github.event.pull_request.number }}
