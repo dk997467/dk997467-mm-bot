@@ -630,7 +630,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
     
     md_lines.extend([
         f"",
-        f"**Verdict:** {f'{sym(\"ok\")} READINESS: OK' if all_pass else f'{sym(\"fail\")} READINESS: HOLD'}",
+        f"**Verdict:** {sym('ok') + ' READINESS: OK' if all_pass else sym('fail') + ' READINESS: HOLD'}",
         f"",
     ])
     
