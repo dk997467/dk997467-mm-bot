@@ -162,7 +162,7 @@ soak-audit-ci:
 soak-compare:
 	python -m tools.soak.compare_runs --a artifacts/soak/run_A --b artifacts/soak/latest
 
-.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-archive
+.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive
 
 shadow-run:
 	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --source mock
@@ -197,13 +197,16 @@ shadow-archive:
 	python -m tools.ops.rotate_shadow_artifacts --max-keep 300
 
 shadow-redis-export:
-	python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url redis://localhost:6379/0 --env dev --exchange bybit --ttl 3600
+	python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url redis://localhost:6379/0 --env dev --exchange bybit --hash-mode --batch-size 50 --ttl 3600 --show-metrics
 
 shadow-redis-export-prod:
-	python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url rediss://prod.redis.com:6380/0 --env prod --exchange bybit --ttl 7200
+	python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url rediss://prod.redis.com:6380/0 --env prod --exchange bybit --hash-mode --batch-size 100 --ttl 7200 --show-metrics
 
 shadow-redis-export-dry:
-	python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url redis://localhost:6379/0 --env dev --exchange bybit --dry-run
+	python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url redis://localhost:6379/0 --env dev --exchange bybit --hash-mode --dry-run --show-metrics
+
+shadow-redis-export-legacy:
+	python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url redis://localhost:6379/0 --env dev --exchange bybit --flat-keys --batch-size 50 --ttl 3600
 
 .PHONY: dryrun dryrun-validate
 

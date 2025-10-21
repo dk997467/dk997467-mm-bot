@@ -32,7 +32,44 @@ METRICS = {
     "redis_export_success_total": 0,
     "redis_export_fail_total": 0,
     "redis_export_duration_ms": 0.0,
+    "redis_export_batches_total": 0,
+    "redis_export_keys_written_total": 0,
+    "redis_export_batches_failed_total": 0,
+    "redis_export_batch_duration_ms": 0.0,
+    "redis_export_mode": "hash",  # "hash" or "flat"
 }
+
+
+def reset_metrics():
+    """Reset all metrics to initial state."""
+    METRICS["redis_export_success_total"] = 0
+    METRICS["redis_export_fail_total"] = 0
+    METRICS["redis_export_duration_ms"] = 0.0
+    METRICS["redis_export_batches_total"] = 0
+    METRICS["redis_export_keys_written_total"] = 0
+    METRICS["redis_export_batches_failed_total"] = 0
+    METRICS["redis_export_batch_duration_ms"] = 0.0
+
+
+def print_metrics(show_metrics: bool = True):
+    """
+    Print Prometheus-style metrics.
+    
+    Args:
+        show_metrics: If True, print metrics to stdout
+    """
+    if not show_metrics:
+        return
+    
+    print(f"[METRICS] Prometheus-style metrics:")
+    print(f"  redis_export_success_total: {METRICS['redis_export_success_total']}")
+    print(f"  redis_export_fail_total: {METRICS['redis_export_fail_total']}")
+    print(f"  redis_export_duration_ms: {METRICS['redis_export_duration_ms']:.2f}")
+    print(f"  redis_export_batches_total: {METRICS['redis_export_batches_total']}")
+    print(f"  redis_export_keys_written_total: {METRICS['redis_export_keys_written_total']}")
+    print(f"  redis_export_batches_failed_total: {METRICS['redis_export_batches_failed_total']}")
+    print(f"  redis_export_batch_duration_ms: {METRICS['redis_export_batch_duration_ms']:.2f}")
+    print(f"  redis_export_mode{{type=\"{METRICS['redis_export_mode']}\"}}")
 
 
 def normalize_symbol(symbol: str) -> str:
@@ -212,10 +249,21 @@ def export_to_redis(
     env: str = "dev",
     exchange: str = "bybit",
     ttl: int = 3600,
-    dry_run: bool = False
+    dry_run: bool = False,
+    hash_mode: bool = True,
+    batch_size: int = 50
 ) -> int:
     """
-    Export KPIs to Redis with TTL and namespacing.
+    Export KPIs to Redis with TTL, namespacing, and pipeline batching.
+    
+    Supports two storage modes:
+    - Hash mode (default): All KPIs for a symbol in one hash
+      HSET dev:bybit:shadow:latest:BTCUSDT edge_bps 3.2 maker_ratio 0.85
+      EXPIRE dev:bybit:shadow:latest:BTCUSDT 3600
+    
+    - Flat mode: Each KPI as separate key
+      SETEX dev:bybit:shadow:latest:BTCUSDT:edge_bps 3600 3.2
+      SETEX dev:bybit:shadow:latest:BTCUSDT:maker_ratio 3600 0.85
     
     Args:
         kpis: Dict mapping symbol to KPI values
@@ -224,35 +272,220 @@ def export_to_redis(
         exchange: Exchange namespace (bybit, binance, etc.)
         ttl: Time-to-live in seconds (default: 3600 = 1 hour)
         dry_run: If True, only print what would be exported
+        hash_mode: If True, use HSET+EXPIRE; if False, use SETEX per key
+        batch_size: Number of operations per pipeline batch
         
     Returns:
-        Number of keys exported
+        Number of keys/symbols exported
     """
     if not kpis:
         print("[WARN] No KPIs to export")
         return 0
     
+    # Update mode metric
+    METRICS["redis_export_mode"] = "hash" if hash_mode else "flat"
+    
+    start_time = time.time()
+    
+    if hash_mode:
+        return _export_hash_mode(
+            kpis, redis_client, env, exchange, ttl, dry_run, batch_size
+        )
+    else:
+        return _export_flat_mode(
+            kpis, redis_client, env, exchange, ttl, dry_run, batch_size
+        )
+
+
+def _export_hash_mode(
+    kpis: Dict[str, Dict[str, float]],
+    redis_client: Optional[Any],
+    env: str,
+    exchange: str,
+    ttl: int,
+    dry_run: bool,
+    batch_size: int
+) -> int:
+    """
+    Export KPIs using hash mode (HSET + EXPIRE).
+    
+    Each symbol gets one hash containing all KPIs.
+    Uses pipeline for batching.
+    """
+    start_time = time.time()
+    exported_symbols = 0
+    total_keys_written = 0
+    
+    # Prepare operations
+    symbols = list(kpis.keys())
+    
+    if dry_run or redis_client is None:
+        # Dry-run: just log what would be done
+        for symbol in symbols:
+            symbol_kpis = kpis[symbol]
+            # Build base key for the hash
+            base_key = f"{env}:{exchange}:shadow:latest:{normalize_symbol(symbol)}"
+            
+            # Show what would be written
+            kpi_str = " ".join(f"{k} {v}" for k, v in symbol_kpis.items())
+            print(f"[DRY-RUN] HSET {base_key} {kpi_str}")
+            print(f"[DRY-RUN] EXPIRE {base_key} {ttl}")
+            exported_symbols += 1
+            total_keys_written += len(symbol_kpis)
+        
+        METRICS["redis_export_keys_written_total"] = total_keys_written
+        duration_ms = (time.time() - start_time) * 1000
+        METRICS["redis_export_duration_ms"] = duration_ms
+        return exported_symbols
+    
+    # Real export with pipeline
+    batch_count = 0
+    
+    for batch_start in range(0, len(symbols), batch_size):
+        batch_symbols = symbols[batch_start:batch_start + batch_size]
+        batch_count += 1
+        
+        batch_start_time = time.time()
+        
+        try:
+            # Create pipeline (non-transactional for better performance)
+            pipeline = redis_client.pipeline(transaction=False)
+            
+            batch_keys = 0
+            for symbol in batch_symbols:
+                symbol_kpis = kpis[symbol]
+                base_key = f"{env}:{exchange}:shadow:latest:{normalize_symbol(symbol)}"
+                
+                # HSET command: set all KPIs in the hash
+                # Redis expects: HSET key field1 value1 field2 value2 ...
+                pipeline.hset(base_key, mapping=symbol_kpis)
+                
+                # EXPIRE command: set TTL for the hash
+                pipeline.expire(base_key, ttl)
+                
+                batch_keys += len(symbol_kpis)
+            
+            # Execute pipeline
+            results = pipeline.execute()
+            
+            # Count successes (HSET returns number of fields added, EXPIRE returns 1)
+            success_count = sum(1 for i, r in enumerate(results) if i % 2 == 0 and r >= 0)
+            fail_count = len(batch_symbols) - success_count
+            
+            batch_duration_ms = (time.time() - batch_start_time) * 1000
+            
+            # Log batch result
+            print(f"[PIPELINE] batch={batch_count} symbols={len(batch_symbols)} "
+                  f"keys={batch_keys} success={success_count} fail={fail_count} "
+                  f"duration_ms={batch_duration_ms:.2f}")
+            
+            # Update metrics
+            METRICS["redis_export_batches_total"] += 1
+            METRICS["redis_export_success_total"] += success_count
+            METRICS["redis_export_fail_total"] += fail_count
+            METRICS["redis_export_keys_written_total"] += batch_keys
+            METRICS["redis_export_batch_duration_ms"] += batch_duration_ms
+            
+            if fail_count > 0:
+                METRICS["redis_export_batches_failed_total"] += 1
+            
+            exported_symbols += success_count
+            total_keys_written += batch_keys
+            
+        except Exception as e:
+            print(f"[ERROR] Batch {batch_count} failed: {e}")
+            METRICS["redis_export_batches_failed_total"] += 1
+            METRICS["redis_export_fail_total"] += len(batch_symbols)
+    
+    duration_ms = (time.time() - start_time) * 1000
+    METRICS["redis_export_duration_ms"] = duration_ms
+    
+    return exported_symbols
+
+
+def _export_flat_mode(
+    kpis: Dict[str, Dict[str, float]],
+    redis_client: Optional[Any],
+    env: str,
+    exchange: str,
+    ttl: int,
+    dry_run: bool,
+    batch_size: int
+) -> int:
+    """
+    Export KPIs using flat mode (SETEX per key).
+    
+    Each KPI gets its own key with SETEX.
+    Uses pipeline for batching.
+    """
     start_time = time.time()
     exported_count = 0
-    failed_count = 0
     
+    # Flatten KPIs into individual key-value pairs
+    all_operations = []
     for symbol, symbol_kpis in kpis.items():
         for kpi_name, kpi_value in symbol_kpis.items():
             key = build_redis_key(env, exchange, symbol, kpi_name)
             value = str(kpi_value)
+            all_operations.append((key, value))
+    
+    if dry_run or redis_client is None:
+        # Dry-run: just log what would be done
+        for key, value in all_operations:
+            print(f"[DRY-RUN] SETEX {key} {ttl} {value}")
+            exported_count += 1
+        
+        METRICS["redis_export_keys_written_total"] = exported_count
+        duration_ms = (time.time() - start_time) * 1000
+        METRICS["redis_export_duration_ms"] = duration_ms
+        return exported_count
+    
+    # Real export with pipeline
+    batch_count = 0
+    
+    for batch_start in range(0, len(all_operations), batch_size):
+        batch_ops = all_operations[batch_start:batch_start + batch_size]
+        batch_count += 1
+        
+        batch_start_time = time.time()
+        
+        try:
+            # Create pipeline (non-transactional)
+            pipeline = redis_client.pipeline(transaction=False)
             
-            if dry_run or redis_client is None:
-                print(f"[DRY-RUN] Would export: {key} = {value} (TTL={ttl}s)")
-            else:
-                try:
-                    redis_client.setex(key, ttl, value)
-                    print(f"[EXPORT] {key} = {value} (TTL={ttl}s)")
-                    exported_count += 1
-                    METRICS["redis_export_success_total"] += 1
-                except Exception as e:
-                    print(f"[ERROR] Failed to export {key}: {e}")
-                    failed_count += 1
-                    METRICS["redis_export_fail_total"] += 1
+            for key, value in batch_ops:
+                pipeline.setex(key, ttl, value)
+            
+            # Execute pipeline
+            results = pipeline.execute()
+            
+            # Count successes (SETEX returns True on success)
+            success_count = sum(1 for r in results if r)
+            fail_count = len(batch_ops) - success_count
+            
+            batch_duration_ms = (time.time() - batch_start_time) * 1000
+            
+            # Log batch result
+            print(f"[PIPELINE] batch={batch_count} keys={len(batch_ops)} "
+                  f"success={success_count} fail={fail_count} "
+                  f"duration_ms={batch_duration_ms:.2f}")
+            
+            # Update metrics
+            METRICS["redis_export_batches_total"] += 1
+            METRICS["redis_export_success_total"] += success_count
+            METRICS["redis_export_fail_total"] += fail_count
+            METRICS["redis_export_keys_written_total"] += len(batch_ops)
+            METRICS["redis_export_batch_duration_ms"] += batch_duration_ms
+            
+            if fail_count > 0:
+                METRICS["redis_export_batches_failed_total"] += 1
+            
+            exported_count += success_count
+            
+        except Exception as e:
+            print(f"[ERROR] Batch {batch_count} failed: {e}")
+            METRICS["redis_export_batches_failed_total"] += 1
+            METRICS["redis_export_fail_total"] += len(batch_ops)
     
     duration_ms = (time.time() - start_time) * 1000
     METRICS["redis_export_duration_ms"] = duration_ms
@@ -302,7 +535,39 @@ def main():
         help="Dry-run mode: print what would be exported without actually exporting"
     )
     
+    # Storage mode selection
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--hash-mode",
+        dest="hash_mode",
+        action="store_true",
+        default=True,
+        help="Use hash mode: HSET + EXPIRE (default, more efficient)"
+    )
+    mode_group.add_argument(
+        "--flat-keys",
+        dest="hash_mode",
+        action="store_false",
+        help="Use flat mode: SETEX per key (legacy compatibility)"
+    )
+    
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=50,
+        help="Number of operations per pipeline batch (default: 50)"
+    )
+    
+    parser.add_argument(
+        "--show-metrics",
+        action="store_true",
+        help="Print Prometheus-style metrics after export"
+    )
+    
     args = parser.parse_args()
+    
+    # Reset metrics for this run
+    reset_metrics()
     
     # Validate source directory
     if not args.src.exists():
@@ -340,25 +605,36 @@ def main():
             args.dry_run = True
     
     # Export to Redis
-    print(f"[INFO] Exporting KPIs to Redis (env={args.env}, exchange={args.exchange}, TTL={args.ttl}s)...")
+    mode_str = "hash" if args.hash_mode else "flat"
+    print(f"[INFO] Exporting KPIs to Redis (env={args.env}, exchange={args.exchange}, "
+          f"mode={mode_str}, batch_size={args.batch_size}, TTL={args.ttl}s)...")
+    
     exported_count = export_to_redis(
         kpis,
         redis_client,
         env=args.env,
         exchange=args.exchange,
         ttl=args.ttl,
-        dry_run=args.dry_run
+        dry_run=args.dry_run,
+        hash_mode=args.hash_mode,
+        batch_size=args.batch_size
     )
     
     if args.dry_run:
-        total_keys = sum(len(v) for v in kpis.values())
-        print(f"[DRY-RUN] Would export {total_keys} keys")
+        if args.hash_mode:
+            print(f"[DRY-RUN] Would export {len(kpis)} symbols ({METRICS['redis_export_keys_written_total']} total KPIs)")
+        else:
+            print(f"[DRY-RUN] Would export {METRICS['redis_export_keys_written_total']} keys")
     else:
-        print(f"[SUCCESS] Exported {exported_count} keys to Redis")
-        print(f"[METRICS] Prometheus-style metrics:")
-        print(f"  redis_export_success_total: {METRICS['redis_export_success_total']}")
-        print(f"  redis_export_fail_total: {METRICS['redis_export_fail_total']}")
-        print(f"  redis_export_duration_ms: {METRICS['redis_export_duration_ms']:.2f}")
+        if args.hash_mode:
+            print(f"[SUCCESS] Exported {exported_count} symbols ({METRICS['redis_export_keys_written_total']} total KPIs) to Redis")
+        else:
+            print(f"[SUCCESS] Exported {exported_count} keys to Redis")
+    
+    # Print metrics if requested
+    if args.show_metrics:
+        print()
+        print_metrics(show_metrics=True)
     
     return 0
 

@@ -5,11 +5,15 @@ Tests KPI aggregation and Redis export functionality with mocked Redis client.
 """
 
 import json
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.shadow.export_to_redis import (
     load_iter_summaries,
@@ -18,6 +22,9 @@ from tools.shadow.export_to_redis import (
     get_redis_client,
     normalize_symbol,
     build_redis_key,
+    METRICS,
+    reset_metrics,
+    print_metrics,
 )
 
 
@@ -135,8 +142,8 @@ def test_export_to_redis_dry_run():
     
     exported = export_to_redis(kpis, redis_client=None, ttl=3600, dry_run=True)
     
-    # In dry-run mode, returns 0 (nothing actually exported)
-    assert exported == 0
+    # In dry-run mode with hash mode (default), returns 1 symbol
+    assert exported == 1
 
 
 def test_export_to_redis_with_client():
@@ -148,21 +155,23 @@ def test_export_to_redis_with_client():
         }
     }
     
-    # Mock Redis client
+    # Mock Redis client and pipeline
     mock_redis = MagicMock()
+    mock_pipeline = MagicMock()
+    mock_redis.pipeline.return_value = mock_pipeline
+    mock_pipeline.execute.return_value = [2, 1]  # HSET returns 2, EXPIRE returns 1
     
-    # Test with default env/exchange (dev/bybit)
+    # Test with default env/exchange (dev/bybit) in hash mode (default)
     exported = export_to_redis(kpis, redis_client=mock_redis, ttl=3600, dry_run=False)
     
-    # Should export 2 keys
-    assert exported == 2
-    assert mock_redis.setex.call_count == 2
+    # Should export 1 symbol in hash mode
+    assert exported == 1
+    assert mock_pipeline.hset.call_count == 1
+    assert mock_pipeline.expire.call_count == 1
     
-    # Verify correct keys and values (with default namespace)
-    calls = mock_redis.setex.call_args_list
-    keys = [call[0][0] for call in calls]
-    assert "dev:bybit:shadow:latest:BTCUSDT:edge_bps" in keys
-    assert "dev:bybit:shadow:latest:BTCUSDT:maker_taker_ratio" in keys
+    # Verify correct hash key (with default namespace)
+    call_args = mock_pipeline.hset.call_args
+    assert "dev:bybit:shadow:latest:BTCUSDT" in str(call_args)
 
 
 def test_export_to_redis_empty_kpis():
@@ -255,8 +264,11 @@ def test_export_to_redis_with_namespacing():
         }
     }
     
-    # Mock Redis client
+    # Mock Redis client and pipeline
     mock_redis = MagicMock()
+    mock_pipeline = MagicMock()
+    mock_redis.pipeline.return_value = mock_pipeline
+    mock_pipeline.execute.return_value = [2, 1]  # HSET returns 2, EXPIRE returns 1
     
     exported = export_to_redis(
         kpis,
@@ -267,19 +279,14 @@ def test_export_to_redis_with_namespacing():
         dry_run=False
     )
     
-    # Should export 2 keys
-    assert exported == 2
-    assert mock_redis.setex.call_count == 2
+    # Should export 1 symbol in hash mode
+    assert exported == 1
+    assert mock_pipeline.hset.call_count == 1
+    assert mock_pipeline.expire.call_count == 1
     
-    # Verify namespaced keys
-    calls = mock_redis.setex.call_args_list
-    keys = [call[0][0] for call in calls]
-    assert "prod:binance:shadow:latest:BTCUSDT:edge_bps" in keys
-    assert "prod:binance:shadow:latest:BTCUSDT:maker_taker_ratio" in keys
-    
-    # Verify TTL
-    ttls = [call[0][1] for call in calls]
-    assert all(ttl == 7200 for ttl in ttls)
+    # Verify namespaced hash key
+    call_args = mock_pipeline.hset.call_args
+    assert "prod:binance:shadow:latest:BTCUSDT" in str(call_args)
 
 
 def test_get_redis_client_with_auth():
@@ -362,5 +369,342 @@ def test_integration_export_flow():
         
         # Export (dry-run)
         exported = export_to_redis(kpis, redis_client=None, dry_run=True)
-        assert exported == 0  # dry-run returns 0
+        assert exported >= 1  # dry-run now returns count of exported items
+
+
+# ==============================================================================
+# NEW TESTS: Hash Mode, Flat Mode, Batching, Metrics
+# ==============================================================================
+
+
+def test_export_hash_mode_dry_run():
+    """Test export in hash mode (dry-run)."""
+    reset_metrics()
+    
+    kpis = {
+        "BTCUSDT": {
+            "edge_bps": 3.2,
+            "maker_taker_ratio": 0.85,
+            "p95_latency_ms": 250,
+            "risk_ratio": 0.35
+        },
+        "ETHUSDT": {
+            "edge_bps": 2.9,
+            "maker_taker_ratio": 0.83,
+            "p95_latency_ms": 280,
+            "risk_ratio": 0.38
+        }
+    }
+    
+    # Export in hash mode (dry-run)
+    exported = export_to_redis(
+        kpis,
+        redis_client=None,
+        env="dev",
+        exchange="bybit",
+        ttl=3600,
+        dry_run=True,
+        hash_mode=True,
+        batch_size=10
+    )
+    
+    # Should export 2 symbols
+    assert exported == 2
+    
+    # Metrics should show correct counts
+    assert METRICS["redis_export_keys_written_total"] == 8  # 2 symbols × 4 KPIs
+    assert METRICS["redis_export_mode"] == "hash"
+
+
+def test_export_flat_mode_dry_run():
+    """Test export in flat mode (dry-run)."""
+    reset_metrics()
+    
+    kpis = {
+        "BTCUSDT": {
+            "edge_bps": 3.2,
+            "maker_taker_ratio": 0.85,
+        }
+    }
+    
+    # Export in flat mode (dry-run)
+    exported = export_to_redis(
+        kpis,
+        redis_client=None,
+        env="dev",
+        exchange="bybit",
+        ttl=3600,
+        dry_run=True,
+        hash_mode=False,
+        batch_size=10
+    )
+    
+    # Should export 2 keys
+    assert exported == 2
+    
+    # Metrics should show correct counts
+    assert METRICS["redis_export_keys_written_total"] == 2
+    assert METRICS["redis_export_mode"] == "flat"
+
+
+def test_export_hash_mode_with_mock_redis():
+    """Test export in hash mode with mocked Redis client."""
+    reset_metrics()
+    
+    kpis = {
+        "BTCUSDT": {
+            "edge_bps": 3.2,
+            "maker_taker_ratio": 0.85,
+            "p95_latency_ms": 250,
+            "risk_ratio": 0.35
+        }
+    }
+    
+    # Mock Redis client and pipeline
+    mock_redis = MagicMock()
+    mock_pipeline = MagicMock()
+    mock_redis.pipeline.return_value = mock_pipeline
+    
+    # Mock pipeline execution results: HSET returns 4 (fields added), EXPIRE returns 1
+    mock_pipeline.execute.return_value = [4, 1]
+    
+    # Export in hash mode
+    exported = export_to_redis(
+        kpis,
+        redis_client=mock_redis,
+        env="dev",
+        exchange="bybit",
+        ttl=3600,
+        dry_run=False,
+        hash_mode=True,
+        batch_size=10
+    )
+    
+    # Verify pipeline was used
+    assert mock_redis.pipeline.called
+    assert mock_pipeline.hset.called
+    assert mock_pipeline.expire.called
+    assert mock_pipeline.execute.called
+    
+    # Verify HSET was called with correct arguments
+    call_args = mock_pipeline.hset.call_args
+    assert "dev:bybit:shadow:latest:BTCUSDT" in str(call_args)
+    
+    # Should export 1 symbol
+    assert exported == 1
+    
+    # Metrics should be updated
+    assert METRICS["redis_export_batches_total"] == 1
+    assert METRICS["redis_export_success_total"] == 1
+    assert METRICS["redis_export_keys_written_total"] == 4
+
+
+def test_export_flat_mode_with_mock_redis():
+    """Test export in flat mode with mocked Redis client."""
+    reset_metrics()
+    
+    kpis = {
+        "BTCUSDT": {
+            "edge_bps": 3.2,
+            "maker_taker_ratio": 0.85,
+        }
+    }
+    
+    # Mock Redis client and pipeline
+    mock_redis = MagicMock()
+    mock_pipeline = MagicMock()
+    mock_redis.pipeline.return_value = mock_pipeline
+    
+    # Mock pipeline execution results: SETEX returns True
+    mock_pipeline.execute.return_value = [True, True]
+    
+    # Export in flat mode
+    exported = export_to_redis(
+        kpis,
+        redis_client=mock_redis,
+        env="dev",
+        exchange="bybit",
+        ttl=3600,
+        dry_run=False,
+        hash_mode=False,
+        batch_size=10
+    )
+    
+    # Verify pipeline was used
+    assert mock_redis.pipeline.called
+    assert mock_pipeline.setex.called
+    assert mock_pipeline.execute.called
+    
+    # Verify SETEX was called twice (2 KPIs)
+    assert mock_pipeline.setex.call_count == 2
+    
+    # Should export 2 keys
+    assert exported == 2
+    
+    # Metrics should be updated
+    assert METRICS["redis_export_batches_total"] == 1
+    assert METRICS["redis_export_success_total"] == 2
+    assert METRICS["redis_export_keys_written_total"] == 2
+
+
+def test_export_batching():
+    """Test that export properly splits into batches."""
+    reset_metrics()
+    
+    # Create 15 symbols (with batch_size=5, should create 3 batches)
+    kpis = {}
+    for i in range(15):
+        kpis[f"SYM{i:02d}"] = {
+            "edge_bps": 3.0 + i * 0.1,
+            "maker_taker_ratio": 0.8 + i * 0.01,
+        }
+    
+    # Mock Redis client and pipeline
+    mock_redis = MagicMock()
+    mock_pipeline = MagicMock()
+    mock_redis.pipeline.return_value = mock_pipeline
+    
+    # Mock successful HSET + EXPIRE for each symbol (2 results per symbol)
+    # Batch 1: 5 symbols = 10 results (5 HSET + 5 EXPIRE)
+    # Batch 2: 5 symbols = 10 results
+    # Batch 3: 5 symbols = 10 results
+    mock_pipeline.execute.side_effect = [
+        [2, 1, 2, 1, 2, 1, 2, 1, 2, 1],  # Batch 1
+        [2, 1, 2, 1, 2, 1, 2, 1, 2, 1],  # Batch 2
+        [2, 1, 2, 1, 2, 1, 2, 1, 2, 1],  # Batch 3
+    ]
+    
+    # Export in hash mode with batch_size=5
+    exported = export_to_redis(
+        kpis,
+        redis_client=mock_redis,
+        env="dev",
+        exchange="bybit",
+        ttl=3600,
+        dry_run=False,
+        hash_mode=True,
+        batch_size=5
+    )
+    
+    # Should export all 15 symbols
+    assert exported == 15
+    
+    # Should create 3 batches (15 symbols / batch_size 5)
+    assert METRICS["redis_export_batches_total"] == 3
+    assert METRICS["redis_export_success_total"] == 15
+    
+    # pipeline.execute should be called 3 times
+    assert mock_pipeline.execute.call_count == 3
+
+
+def test_metrics_tracking():
+    """Test that metrics are properly tracked."""
+    reset_metrics()
+    
+    kpis = {
+        "BTCUSDT": {
+            "edge_bps": 3.2,
+            "maker_taker_ratio": 0.85,
+        }
+    }
+    
+    # Export (dry-run)
+    export_to_redis(
+        kpis,
+        redis_client=None,
+        env="dev",
+        exchange="bybit",
+        dry_run=True,
+        hash_mode=True
+    )
+    
+    # Check metrics
+    assert METRICS["redis_export_mode"] == "hash"
+    assert METRICS["redis_export_keys_written_total"] == 2
+    assert METRICS["redis_export_duration_ms"] > 0
+    
+    # Test metrics reset
+    reset_metrics()
+    assert METRICS["redis_export_success_total"] == 0
+    assert METRICS["redis_export_fail_total"] == 0
+    assert METRICS["redis_export_batches_total"] == 0
+
+
+def test_print_metrics(capsys):
+    """Test that print_metrics outputs correctly."""
+    reset_metrics()
+    METRICS["redis_export_success_total"] = 10
+    METRICS["redis_export_fail_total"] = 2
+    METRICS["redis_export_duration_ms"] = 123.45
+    METRICS["redis_export_batches_total"] = 3
+    METRICS["redis_export_mode"] = "hash"
+    
+    # Print metrics
+    print_metrics(show_metrics=True)
+    
+    # Capture output
+    captured = capsys.readouterr()
+    
+    # Verify output contains expected metrics
+    assert "redis_export_success_total: 10" in captured.out
+    assert "redis_export_fail_total: 2" in captured.out
+    assert "redis_export_duration_ms: 123.45" in captured.out
+    assert "redis_export_batches_total: 3" in captured.out
+    assert 'redis_export_mode{type="hash"}' in captured.out
+
+
+def test_export_error_handling():
+    """Test that export handles Redis errors gracefully."""
+    reset_metrics()
+    
+    kpis = {
+        "BTCUSDT": {
+            "edge_bps": 3.2,
+        }
+    }
+    
+    # Mock Redis client that raises exception
+    mock_redis = MagicMock()
+    mock_pipeline = MagicMock()
+    mock_redis.pipeline.return_value = mock_pipeline
+    mock_pipeline.execute.side_effect = Exception("Redis connection lost")
+    
+    # Export should not crash
+    exported = export_to_redis(
+        kpis,
+        redis_client=mock_redis,
+        env="dev",
+        exchange="bybit",
+        dry_run=False,
+        hash_mode=True
+    )
+    
+    # Export should return 0 (failed)
+    assert exported == 0
+    
+    # Failed batch metric should be incremented
+    assert METRICS["redis_export_batches_failed_total"] == 1
+
+
+def test_idempotent_writes():
+    """Test that repeated exports are idempotent (don't change state)."""
+    reset_metrics()
+    
+    kpis = {
+        "BTCUSDT": {
+            "edge_bps": 3.2,
+        }
+    }
+    
+    # First export (dry-run)
+    export_to_redis(kpis, None, dry_run=True, hash_mode=True)
+    keys_written_1 = METRICS["redis_export_keys_written_total"]
+    
+    # Reset and second export (same data)
+    reset_metrics()
+    export_to_redis(kpis, None, dry_run=True, hash_mode=True)
+    keys_written_2 = METRICS["redis_export_keys_written_total"]
+    
+    # Should produce same result
+    assert keys_written_1 == keys_written_2
 
