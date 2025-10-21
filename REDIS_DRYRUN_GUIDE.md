@@ -216,39 +216,67 @@ Output:
 [DRY-RUN] Would export 8 keys
 ```
 
-### Prometheus Metrics
+### Prometheus Metrics (Labeled)
 
-After export (with `--show-metrics`), Prometheus-style metrics are displayed:
+After export (with `--show-metrics`), Prometheus-style labeled metrics are displayed:
 
 ```
 [METRICS] Prometheus-style metrics:
-  redis_export_success_total: 50
-  redis_export_fail_total: 0
-  redis_export_duration_ms: 142.35
-  redis_export_batches_total: 3
-  redis_export_keys_written_total: 200
-  redis_export_batches_failed_total: 0
-  redis_export_batch_duration_ms: 45.78
-  redis_export_mode{type="hash"}
+  redis_export_batches_total{env="dev",exchange="bybit",mode="hash"} 3
+  redis_export_keys_written_total{env="dev",exchange="bybit",mode="hash"} 200
+  redis_export_batches_failed_total{env="dev",exchange="bybit",mode="hash"} 0
+  redis_export_batch_duration_ms_sum{env="dev",exchange="bybit",mode="hash"} 45.78
+  redis_export_batch_duration_ms_count{env="dev",exchange="bybit",mode="hash"} 3
+  redis_export_mode{env="dev",exchange="bybit",type="hash"}
 ```
 
-**Metrics:**
-| Metric | Description |
-|--------|-------------|
-| `redis_export_success_total` | Number of successfully exported items (symbols in hash mode, keys in flat mode) |
-| `redis_export_fail_total` | Number of failed exports |
-| `redis_export_duration_ms` | Total export duration in milliseconds |
-| `redis_export_batches_total` | Number of pipeline batches executed |
-| `redis_export_keys_written_total` | Total number of KPI fields written |
-| `redis_export_batches_failed_total` | Number of failed batches |
-| `redis_export_batch_duration_ms` | Cumulative batch execution time |
-| `redis_export_mode{type="..."}` | Storage mode used ("hash" or "flat") |
+**Labeled Metrics (env, exchange, mode):**
+| Metric | Type | Description |
+|--------|------|-------------|
+| `redis_export_batches_total{env,exchange,mode}` | Counter | Number of pipeline batches executed |
+| `redis_export_keys_written_total{env,exchange,mode}` | Counter | Total number of KPI fields written |
+| `redis_export_batches_failed_total{env,exchange,mode}` | Counter | Number of failed batches |
+| `redis_export_batch_duration_ms_sum{env,exchange,mode}` | Summary | Cumulative batch execution time (ms) |
+| `redis_export_batch_duration_ms_count{env,exchange,mode}` | Summary | Number of batch measurements |
+| `redis_export_mode{env,exchange}` | Gauge | Storage mode used ("hash" or "flat") |
+
+**Labels:**
+- `env`: Environment (dev, staging, prod)
+- `exchange`: Exchange name (bybit, binance, etc.)
+- `mode`: Storage mode (hash, flat)
 
 **Use cases:**
-- Monitor export performance over time
-- Alert on high failure rates
+- Monitor export performance per environment/exchange
+- Alert on high failure rates for specific environments
 - Optimize batch sizes based on duration metrics
-- Track throughput (keys_written_total / duration_ms)
+- Track throughput: `keys_written_total / (duration_sum / duration_count)`
+- Compare hash vs flat mode performance
+
+### PromQL Examples
+
+**Average batch duration (per environment):**
+```promql
+sum(rate(redis_export_batch_duration_ms_sum{env="prod"}[5m]))
+  /
+sum(rate(redis_export_batch_duration_ms_count{env="prod"}[5m]))
+```
+
+**Keys written per minute (per exchange):**
+```promql
+sum by (exchange) (increase(redis_export_keys_written_total[1m]))
+```
+
+**Failed batches rate:**
+```promql
+sum by (env, exchange) (
+  rate(redis_export_batches_failed_total[5m])
+)
+```
+
+**Export mode distribution:**
+```promql
+count by (mode) (redis_export_mode)
+```
 
 ### Makefile Commands
 
@@ -579,7 +607,8 @@ make redis-smoke
 This will:
 1. Export KPIs to Redis (hash mode, batch_size=100)
 2. Scan and verify hash keys (TTL, field presence)
-3. Generate `artifacts/reports/analysis/REDIS_SMOKE_REPORT.md`
+3. **TTL Refresh Check** - Verify keys are re-exported with refreshed TTL
+4. Generate `artifacts/reports/analysis/REDIS_SMOKE_REPORT.md`
 
 **Output:**
 ```
@@ -587,9 +616,18 @@ This will:
 [SMOKE] Found 2 keys
 [SMOKE] Verification: PASS
 [SMOKE] Passed: 10/10
+[TTL] Sampled: 5 keys
+[TTL] Refreshed: 5/5
+[TTL] Verdict: YES
 
 VERDICT: PASS
 ```
+
+**TTL Refresh Check:**
+- Samples N random keys before export (default: 5, configurable with `--ttl-sample`)
+- Re-exports to refresh TTL
+- Verifies TTL increased for >= 60% of sampled keys
+- Verdict: **YES** if refresh successful, **NO** otherwise
 
 **With flat mode cross-verification:**
 ```bash
@@ -635,6 +673,19 @@ The report includes:
 **Flat Cross-Verification:**
 - Matches should be 100% if both modes export same data
 - Mismatches indicate potential data inconsistency
+
+**TTL Refresh Check:**
+- **YES**: TTL successfully refreshed for >= 60% of sampled keys
+- **NO**: TTL not refreshed (may indicate export not updating existing keys)
+- **WARN**: No existing keys to refresh (first export)
+- **FAIL**: Could not scan keys or export failed
+
+**Example TTL Comparison Table:**
+| Key | TTL Before | TTL After | Refreshed |
+|-----|------------|-----------|-----------|
+| BTCUSDT | 1200s | 3595s | ✅ |
+| ETHUSDT | 2400s | 3598s | ✅ |
+| SOLUSDT | 3500s | 3597s | ✅ |
 
 ### Prometheus Alerts
 
@@ -780,6 +831,19 @@ Add to GitHub Actions:
 ```
 
 ## Changelog
+
+### v1.3.0 (2025-01-22) - Observability & Labeled Metrics Edition
+- **Labeled Metrics:** All Prometheus metrics now include `env`, `exchange`, `mode` labels
+- **Summary Duration:** Changed batch duration to Summary type with `_sum` and `_count` metrics
+- **TTL Refresh Check:** Added verification that TTL is refreshed on re-export
+  - New `--ttl-sample` CLI parameter (default: 5 keys)
+  - Automatic sampling and comparison of TTL before/after export
+  - Verdict: YES/NO in smoke report with 60% threshold
+- **Dashboard Variables:** Grafana dashboard now supports `$env` and `$exchange` variables
+- **Updated Alerts:** All alert rules use labeled metrics with env/exchange filtering
+- **PromQL Examples:** Added examples for querying labeled metrics
+- **Smoke Check:** Enhanced `redis_smoke_check.py` with TTL refresh verification (Step 3)
+- **Docs:** Updated guide with labeled metrics syntax, PromQL examples, and TTL refresh section
 
 ### v1.2.0 (2025-01-21) - Performance & Pipeline Edition
 - **Performance:** Added hash mode (HSET + EXPIRE) for 75% fewer Redis operations (DEFAULT)

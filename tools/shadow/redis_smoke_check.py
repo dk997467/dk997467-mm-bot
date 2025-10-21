@@ -307,11 +307,161 @@ def verify_flat_backfill(
     return results
 
 
+def verify_ttl_refresh(
+    redis_client: Any,
+    src_dir: Path,
+    env: str,
+    exchange: str,
+    batch_size: int,
+    sample_size: int = 5
+) -> Dict[str, Any]:
+    """
+    Verify that TTL is refreshed after export.
+    
+    Samples N random hash keys, checks TTL before/after export,
+    and verifies TTL was refreshed (increased) for most keys.
+    
+    Args:
+        redis_client: Redis client
+        src_dir: Source directory with ITER_SUMMARY files
+        env: Environment namespace
+        exchange: Exchange namespace
+        batch_size: Pipeline batch size for export
+        sample_size: Number of keys to sample
+        
+    Returns:
+        Verification results dict with status YES/NO
+    """
+    from tools.shadow.export_to_redis import (
+        load_iter_summaries,
+        aggregate_kpis,
+        export_to_redis,
+        reset_metrics
+    )
+    
+    # Find existing hash keys
+    pattern = f"{env}:{exchange}:shadow:latest:*"
+    try:
+        all_keys = list(redis_client.scan_iter(match=pattern, count=100))
+        # Filter to only hash keys (not flat keys with :kpi_name suffix)
+        hash_keys = [k for k in all_keys if k.count(":") == 4]
+    except Exception as e:
+        return {
+            "status": "FAIL",
+            "reason": f"Could not scan keys: {e}",
+            "sampled_keys": 0,
+            "refreshed": 0
+        }
+    
+    if not hash_keys:
+        return {
+            "status": "WARN",
+            "reason": "No existing hash keys found (nothing to refresh)",
+            "sampled_keys": 0,
+            "refreshed": 0
+        }
+    
+    # Sample random keys
+    sample_keys = random.sample(hash_keys, min(sample_size, len(hash_keys)))
+    
+    # Get TTL before export
+    ttl_before = {}
+    for key in sample_keys:
+        try:
+            ttl = redis_client.ttl(key)
+            ttl_before[key] = ttl
+        except Exception as e:
+            print(f"[WARN] Could not get TTL for {key}: {e}")
+            ttl_before[key] = -1
+    
+    # Run export to refresh keys
+    print(f"[TTL] Running export to refresh {len(sample_keys)} sampled keys...")
+    try:
+        reset_metrics()
+        summaries = load_iter_summaries(src_dir)
+        if not summaries:
+            return {
+                "status": "FAIL",
+                "reason": "No summaries to export",
+                "sampled_keys": len(sample_keys),
+                "refreshed": 0
+            }
+        
+        kpis = aggregate_kpis(summaries)
+        exported = export_to_redis(
+            kpis,
+            redis_client,
+            env=env,
+            exchange=exchange,
+            ttl=3600,
+            dry_run=False,
+            hash_mode=True,
+            batch_size=batch_size
+        )
+        
+        if exported == 0:
+            return {
+                "status": "FAIL",
+                "reason": "Export returned 0 keys",
+                "sampled_keys": len(sample_keys),
+                "refreshed": 0
+            }
+    except Exception as e:
+        return {
+            "status": "FAIL",
+            "reason": f"Export failed: {e}",
+            "sampled_keys": len(sample_keys),
+            "refreshed": 0
+        }
+    
+    # Get TTL after export
+    ttl_after = {}
+    for key in sample_keys:
+        try:
+            ttl = redis_client.ttl(key)
+            ttl_after[key] = ttl
+        except Exception as e:
+            print(f"[WARN] Could not get TTL for {key}: {e}")
+            ttl_after[key] = -1
+    
+    # Compare TTLs
+    refreshed_count = 0
+    details = []
+    
+    for key in sample_keys:
+        before = ttl_before.get(key, -1)
+        after = ttl_after.get(key, -1)
+        refreshed = after > before and after > 3500  # Should be close to 3600
+        
+        details.append({
+            "key": key,
+            "ttl_before": before,
+            "ttl_after": after,
+            "refreshed": refreshed
+        })
+        
+        if refreshed:
+            refreshed_count += 1
+    
+    # Verdict: need >= 60% refreshed
+    threshold = max(1, int(len(sample_keys) * 0.6))
+    status = "YES" if refreshed_count >= threshold else "NO"
+    
+    return {
+        "status": status,
+        "sampled_keys": len(sample_keys),
+        "refreshed": refreshed_count,
+        "threshold": threshold,
+        "details": details
+    }
+
+
 def generate_report(
     output_path: Path,
     export_results: Dict,
     hash_verification: Dict,
-    flat_verification: Optional[Dict] = None
+    flat_verification: Optional[Dict] = None,
+    ttl_refresh: Optional[Dict] = None
 ) -> str:
     """
     Generate markdown smoke test report.
@@ -344,6 +494,16 @@ def generate_report(
         if verdict == "PASS":
             verdict = "WARN"
         reasons.append(f"Flat backfill issues: {flat_verification.get('mismatches', 0)} mismatches")
+    
+    if ttl_refresh and ttl_refresh.get("status") == "NO":
+        if verdict == "PASS":
+            verdict = "WARN"
+        reason_text = ttl_refresh.get("reason", f"TTL not refreshed ({ttl_refresh.get('refreshed', 0)}/{ttl_refresh.get('sampled_keys', 0)} keys)")
+        reasons.append(reason_text)
+    elif ttl_refresh and ttl_refresh.get("status") in ["FAIL", "WARN"]:
+        if verdict == "PASS":
+            verdict = "WARN"
+        reasons.append(ttl_refresh.get("reason", "TTL refresh check inconclusive"))
     
     # Generate report
     lines = [
@@ -421,6 +581,36 @@ def generate_report(
                 lines.append(f"- Flat data: {detail['flat_data']}")
                 lines.append("")
     
+    if ttl_refresh:
+        lines.extend([
+            "## TTL Refresh Check",
+            "",
+            f"- **Sampled keys:** {ttl_refresh.get('sampled_keys', 0)}",
+            f"- **Keys refreshed:** {ttl_refresh.get('refreshed', 0)}/{ttl_refresh.get('sampled_keys', 0)}",
+            f"- **Threshold:** {ttl_refresh.get('threshold', 0)} keys (60%)",
+            f"- **Verdict:** {ttl_refresh.get('status', 'UNKNOWN')}",
+            ""
+        ])
+        
+        if ttl_refresh.get("reason"):
+            lines.append(f"*Note: {ttl_refresh['reason']}*")
+            lines.append("")
+        
+        if ttl_refresh.get("details"):
+            lines.append("### TTL Comparison (sampled keys)")
+            lines.append("")
+            lines.append("| Key | TTL Before | TTL After | Refreshed |")
+            lines.append("|-----|------------|-----------|-----------|")
+            
+            for detail in ttl_refresh["details"][:5]:
+                key_short = detail["key"].split(":")[-1]  # Just symbol
+                ttl_before = detail["ttl_before"]
+                ttl_after = detail["ttl_after"]
+                refreshed = "✅" if detail["refreshed"] else "❌"
+                lines.append(f"| {key_short} | {ttl_before}s | {ttl_after}s | {refreshed} |")
+            
+            lines.append("")
+    
     lines.extend([
         "## Summary",
         "",
@@ -478,6 +668,12 @@ def main():
         type=int,
         default=10,
         help="Number of keys to sample for verification"
+    )
+    parser.add_argument(
+        "--ttl-sample",
+        type=int,
+        default=5,
+        help="Number of keys to sample for TTL refresh check"
     )
     parser.add_argument(
         "--do-flat-backfill",
@@ -553,12 +749,33 @@ def main():
         hash_verification = {"status": "FAIL", "reason": "No keys found"}
         print("[ERROR] No keys found for verification")
     
-    # Step 3: Optional flat backfill verification
+    # Step 3: TTL Refresh Check
+    print("\n" + "=" * 80)
+    print("STEP 3: TTL Refresh Check")
+    print("=" * 80)
+    
+    ttl_refresh = verify_ttl_refresh(
+        redis_client,
+        args.src,
+        args.env,
+        args.exchange,
+        args.batch_size,
+        sample_size=args.ttl_sample
+    )
+    
+    print(f"[TTL] Sampled: {ttl_refresh['sampled_keys']} keys")
+    print(f"[TTL] Refreshed: {ttl_refresh['refreshed']}/{ttl_refresh['sampled_keys']}")
+    print(f"[TTL] Verdict: {ttl_refresh['status']}")
+    
+    if ttl_refresh.get("reason"):
+        print(f"[TTL] Note: {ttl_refresh['reason']}")
+    
+    # Step 4: Optional flat backfill verification
     flat_verification = None
     
     if args.do_flat_backfill:
         print("\n" + "=" * 80)
-        print("STEP 3: Flat Backfill Cross-Verification")
+        print("STEP 4: Flat Backfill Cross-Verification")
         print("=" * 80)
         
         # Run flat export
@@ -587,9 +804,9 @@ def main():
         print(f"[SMOKE] Cross-verification: {flat_verification['status']}")
         print(f"[SMOKE] Matches: {flat_verification['matches']}/{flat_verification['symbols_checked']}")
     
-    # Step 4: Generate report
+    # Step 5: Generate report
     print("\n" + "=" * 80)
-    print("STEP 4: Generate Report")
+    print("STEP 5: Generate Report")
     print("=" * 80)
     
     report_path = Path("artifacts/reports/analysis/REDIS_SMOKE_REPORT.md")
@@ -597,7 +814,8 @@ def main():
         report_path,
         export_results,
         hash_verification,
-        flat_verification
+        flat_verification,
+        ttl_refresh
     )
     
     print(f"\n{'=' * 80}")

@@ -411,9 +411,10 @@ def test_export_hash_mode_dry_run():
     # Should export 2 symbols
     assert exported == 2
     
-    # Metrics should show correct counts
-    assert METRICS["redis_export_keys_written_total"] == 8  # 2 symbols × 4 KPIs
-    assert METRICS["redis_export_mode"] == "hash"
+    # Metrics should show correct counts (with labels)
+    labels = ("dev", "bybit", "hash")
+    assert METRICS["redis_export_keys_written_total"][labels] == 8  # 2 symbols × 4 KPIs
+    assert METRICS["redis_export_mode"][("dev", "bybit")] == "hash"
 
 
 def test_export_flat_mode_dry_run():
@@ -442,9 +443,10 @@ def test_export_flat_mode_dry_run():
     # Should export 2 keys
     assert exported == 2
     
-    # Metrics should show correct counts
-    assert METRICS["redis_export_keys_written_total"] == 2
-    assert METRICS["redis_export_mode"] == "flat"
+    # Metrics should show correct counts (with labels)
+    labels = ("dev", "bybit", "flat")
+    assert METRICS["redis_export_keys_written_total"][labels] == 2
+    assert METRICS["redis_export_mode"][("dev", "bybit")] == "flat"
 
 
 def test_export_hash_mode_with_mock_redis():
@@ -493,10 +495,10 @@ def test_export_hash_mode_with_mock_redis():
     # Should export 1 symbol
     assert exported == 1
     
-    # Metrics should be updated
-    assert METRICS["redis_export_batches_total"] == 1
-    assert METRICS["redis_export_success_total"] == 1
-    assert METRICS["redis_export_keys_written_total"] == 4
+    # Metrics should be updated (with labels)
+    labels = ("dev", "bybit", "hash")
+    assert METRICS["redis_export_batches_total"][labels] == 1
+    assert METRICS["redis_export_keys_written_total"][labels] == 4
 
 
 def test_export_flat_mode_with_mock_redis():
@@ -541,10 +543,10 @@ def test_export_flat_mode_with_mock_redis():
     # Should export 2 keys
     assert exported == 2
     
-    # Metrics should be updated
-    assert METRICS["redis_export_batches_total"] == 1
-    assert METRICS["redis_export_success_total"] == 2
-    assert METRICS["redis_export_keys_written_total"] == 2
+    # Metrics should be updated (with labels)
+    labels = ("dev", "bybit", "flat")
+    assert METRICS["redis_export_batches_total"][labels] == 1
+    assert METRICS["redis_export_keys_written_total"][labels] == 2
 
 
 def test_export_batching():
@@ -589,16 +591,16 @@ def test_export_batching():
     # Should export all 15 symbols
     assert exported == 15
     
-    # Should create 3 batches (15 symbols / batch_size 5)
-    assert METRICS["redis_export_batches_total"] == 3
-    assert METRICS["redis_export_success_total"] == 15
+    # Should create 3 batches (15 symbols / batch_size 5) (with labels)
+    labels = ("dev", "bybit", "hash")
+    assert METRICS["redis_export_batches_total"][labels] == 3
     
     # pipeline.execute should be called 3 times
     assert mock_pipeline.execute.call_count == 3
 
 
 def test_metrics_tracking():
-    """Test that metrics are properly tracked."""
+    """Test that metrics are properly tracked with labels."""
     reset_metrics()
     
     kpis = {
@@ -618,26 +620,33 @@ def test_metrics_tracking():
         hash_mode=True
     )
     
-    # Check metrics
-    assert METRICS["redis_export_mode"] == "hash"
-    assert METRICS["redis_export_keys_written_total"] == 2
-    assert METRICS["redis_export_duration_ms"] > 0
+    # Check labeled metrics
+    labels = ("dev", "bybit", "hash")
+    assert METRICS["redis_export_mode"][("dev", "bybit")] == "hash"
+    assert METRICS["redis_export_keys_written_total"][labels] == 2
+    assert METRICS["redis_export_batches_total"][labels] == 1
+    assert METRICS["redis_export_batch_duration_ms_count"][labels] == 1
+    assert METRICS["redis_export_batch_duration_ms_sum"][labels] > 0
     
     # Test metrics reset
     reset_metrics()
-    assert METRICS["redis_export_success_total"] == 0
-    assert METRICS["redis_export_fail_total"] == 0
-    assert METRICS["redis_export_batches_total"] == 0
+    assert METRICS["redis_export_batches_total"] == {}
+    assert METRICS["redis_export_keys_written_total"] == {}
+    assert METRICS["redis_export_batches_failed_total"] == {}
 
 
 def test_print_metrics(capsys):
-    """Test that print_metrics outputs correctly."""
+    """Test that print_metrics outputs correctly with labeled metrics."""
     reset_metrics()
-    METRICS["redis_export_success_total"] = 10
-    METRICS["redis_export_fail_total"] = 2
-    METRICS["redis_export_duration_ms"] = 123.45
-    METRICS["redis_export_batches_total"] = 3
-    METRICS["redis_export_mode"] = "hash"
+    
+    # Set labeled metrics manually
+    labels = ("dev", "bybit", "hash")
+    METRICS["redis_export_batches_total"][labels] = 3
+    METRICS["redis_export_keys_written_total"][labels] = 10
+    METRICS["redis_export_batches_failed_total"][labels] = 0
+    METRICS["redis_export_batch_duration_ms_sum"][labels] = 123.45
+    METRICS["redis_export_batch_duration_ms_count"][labels] = 3
+    METRICS["redis_export_mode"][("dev", "bybit")] = "hash"
     
     # Print metrics
     print_metrics(show_metrics=True)
@@ -645,12 +654,12 @@ def test_print_metrics(capsys):
     # Capture output
     captured = capsys.readouterr()
     
-    # Verify output contains expected metrics
-    assert "redis_export_success_total: 10" in captured.out
-    assert "redis_export_fail_total: 2" in captured.out
-    assert "redis_export_duration_ms: 123.45" in captured.out
-    assert "redis_export_batches_total: 3" in captured.out
-    assert 'redis_export_mode{type="hash"}' in captured.out
+    # Verify output contains expected labeled metrics
+    assert 'redis_export_batches_total{env="dev",exchange="bybit",mode="hash"} 3' in captured.out
+    assert 'redis_export_keys_written_total{env="dev",exchange="bybit",mode="hash"} 10' in captured.out
+    assert 'redis_export_batch_duration_ms_sum{env="dev",exchange="bybit",mode="hash"} 123.45' in captured.out
+    assert 'redis_export_batch_duration_ms_count{env="dev",exchange="bybit",mode="hash"} 3' in captured.out
+    assert 'redis_export_mode{env="dev",exchange="bybit",type="hash"}' in captured.out
 
 
 def test_export_error_handling():
@@ -682,8 +691,9 @@ def test_export_error_handling():
     # Export should return 0 (failed)
     assert exported == 0
     
-    # Failed batch metric should be incremented
-    assert METRICS["redis_export_batches_failed_total"] == 1
+    # Failed batch metric should be incremented (with labels)
+    labels = ("dev", "bybit", "hash")
+    assert METRICS["redis_export_batches_failed_total"][labels] == 1
 
 
 def test_idempotent_writes():

@@ -27,33 +27,48 @@ from typing import Dict, Any, List, Optional, Tuple
 import warnings
 
 
-# Prometheus-style metrics counters
+# Prometheus-style metrics with labels (env, exchange, mode)
+# Structure: {metric_name: {(env, exchange, mode): value}}
 METRICS = {
-    "redis_export_success_total": 0,
-    "redis_export_fail_total": 0,
-    "redis_export_duration_ms": 0.0,
-    "redis_export_batches_total": 0,
-    "redis_export_keys_written_total": 0,
-    "redis_export_batches_failed_total": 0,
-    "redis_export_batch_duration_ms": 0.0,
-    "redis_export_mode": "hash",  # "hash" or "flat"
+    "redis_export_batches_total": {},
+    "redis_export_keys_written_total": {},
+    "redis_export_batches_failed_total": {},
+    "redis_export_batch_duration_ms_sum": {},
+    "redis_export_batch_duration_ms_count": {},
+    "redis_export_mode": {},  # {(env, exchange): mode}
 }
 
 
 def reset_metrics():
     """Reset all metrics to initial state."""
-    METRICS["redis_export_success_total"] = 0
-    METRICS["redis_export_fail_total"] = 0
-    METRICS["redis_export_duration_ms"] = 0.0
-    METRICS["redis_export_batches_total"] = 0
-    METRICS["redis_export_keys_written_total"] = 0
-    METRICS["redis_export_batches_failed_total"] = 0
-    METRICS["redis_export_batch_duration_ms"] = 0.0
+    METRICS["redis_export_batches_total"] = {}
+    METRICS["redis_export_keys_written_total"] = {}
+    METRICS["redis_export_batches_failed_total"] = {}
+    METRICS["redis_export_batch_duration_ms_sum"] = {}
+    METRICS["redis_export_batch_duration_ms_count"] = {}
+    METRICS["redis_export_mode"] = {}
+
+
+def _increment_metric(metric_name: str, env: str, exchange: str, mode: str, value: float = 1.0):
+    """
+    Increment a labeled metric.
+    
+    Args:
+        metric_name: Metric name
+        env: Environment label
+        exchange: Exchange label
+        mode: Mode label (hash or flat)
+        value: Value to add (default: 1.0)
+    """
+    labels = (env, exchange, mode)
+    if labels not in METRICS[metric_name]:
+        METRICS[metric_name][labels] = 0.0
+    METRICS[metric_name][labels] += value
 
 
 def print_metrics(show_metrics: bool = True):
     """
-    Print Prometheus-style metrics.
+    Print Prometheus-style metrics with labels.
     
     Args:
         show_metrics: If True, print metrics to stdout
@@ -62,14 +77,25 @@ def print_metrics(show_metrics: bool = True):
         return
     
     print(f"[METRICS] Prometheus-style metrics:")
-    print(f"  redis_export_success_total: {METRICS['redis_export_success_total']}")
-    print(f"  redis_export_fail_total: {METRICS['redis_export_fail_total']}")
-    print(f"  redis_export_duration_ms: {METRICS['redis_export_duration_ms']:.2f}")
-    print(f"  redis_export_batches_total: {METRICS['redis_export_batches_total']}")
-    print(f"  redis_export_keys_written_total: {METRICS['redis_export_keys_written_total']}")
-    print(f"  redis_export_batches_failed_total: {METRICS['redis_export_batches_failed_total']}")
-    print(f"  redis_export_batch_duration_ms: {METRICS['redis_export_batch_duration_ms']:.2f}")
-    print(f"  redis_export_mode{{type=\"{METRICS['redis_export_mode']}\"}}")
+    
+    # Print all labeled metrics
+    for metric_name in ["redis_export_batches_total", "redis_export_keys_written_total",
+                        "redis_export_batches_failed_total"]:
+        for labels, value in METRICS[metric_name].items():
+            env, exchange, mode = labels
+            print(f"  {metric_name}{{env=\"{env}\",exchange=\"{exchange}\",mode=\"{mode}\"}} {value}")
+    
+    # Print Summary metrics (sum and count)
+    for labels, sum_value in METRICS["redis_export_batch_duration_ms_sum"].items():
+        env, exchange, mode = labels
+        count_value = METRICS["redis_export_batch_duration_ms_count"].get(labels, 0)
+        print(f"  redis_export_batch_duration_ms_sum{{env=\"{env}\",exchange=\"{exchange}\",mode=\"{mode}\"}} {sum_value:.2f}")
+        print(f"  redis_export_batch_duration_ms_count{{env=\"{env}\",exchange=\"{exchange}\",mode=\"{mode}\"}} {count_value}")
+    
+    # Print mode (legacy, for compatibility)
+    for labels, mode_value in METRICS["redis_export_mode"].items():
+        env, exchange = labels
+        print(f"  redis_export_mode{{env=\"{env}\",exchange=\"{exchange}\",type=\"{mode_value}\"}}")
 
 
 def normalize_symbol(symbol: str) -> str:
@@ -131,9 +157,9 @@ def get_redis_client(redis_url: str) -> Optional[Any]:
     - redis:// - standard unencrypted connection
     - rediss:// - TLS/SSL encrypted connection
     - Authentication: redis://username:password@host:port/db
-    
-    Args:
-        redis_url: Redis connection URL
+        
+        Args:
+            redis_url: Redis connection URL
         
     Returns:
         Redis client or None if unavailable
@@ -204,11 +230,11 @@ def load_iter_summaries(src_dir: Path) -> List[Dict[str, Any]]:
 def aggregate_kpis(summaries: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
     """
     Aggregate KPIs by symbol from iteration summaries.
-    
-    Args:
+        
+        Args:
         summaries: List of ITER_SUMMARY dicts
         
-    Returns:
+        Returns:
         Dict mapping symbol to aggregated KPIs
         Example: {
             "BTCUSDT": {
@@ -282,11 +308,6 @@ def export_to_redis(
         print("[WARN] No KPIs to export")
         return 0
     
-    # Update mode metric
-    METRICS["redis_export_mode"] = "hash" if hash_mode else "flat"
-    
-    start_time = time.time()
-    
     if hash_mode:
         return _export_hash_mode(
             kpis, redis_client, env, exchange, ttl, dry_run, batch_size
@@ -312,9 +333,13 @@ def _export_hash_mode(
     Each symbol gets one hash containing all KPIs.
     Uses pipeline for batching.
     """
+    mode = "hash"
     start_time = time.time()
     exported_symbols = 0
     total_keys_written = 0
+    
+    # Update mode metric
+    METRICS["redis_export_mode"][(env, exchange)] = mode
     
     # Prepare operations
     symbols = list(kpis.keys())
@@ -333,9 +358,13 @@ def _export_hash_mode(
             exported_symbols += 1
             total_keys_written += len(symbol_kpis)
         
-        METRICS["redis_export_keys_written_total"] = total_keys_written
+        # Update metrics even in dry-run
+        _increment_metric("redis_export_keys_written_total", env, exchange, mode, total_keys_written)
+        _increment_metric("redis_export_batches_total", env, exchange, mode, 1)
         duration_ms = (time.time() - start_time) * 1000
-        METRICS["redis_export_duration_ms"] = duration_ms
+        _increment_metric("redis_export_batch_duration_ms_sum", env, exchange, mode, duration_ms)
+        _increment_metric("redis_export_batch_duration_ms_count", env, exchange, mode, 1)
+        
         return exported_symbols
     
     # Real export with pipeline
@@ -379,26 +408,21 @@ def _export_hash_mode(
                   f"keys={batch_keys} success={success_count} fail={fail_count} "
                   f"duration_ms={batch_duration_ms:.2f}")
             
-            # Update metrics
-            METRICS["redis_export_batches_total"] += 1
-            METRICS["redis_export_success_total"] += success_count
-            METRICS["redis_export_fail_total"] += fail_count
-            METRICS["redis_export_keys_written_total"] += batch_keys
-            METRICS["redis_export_batch_duration_ms"] += batch_duration_ms
+            # Update labeled metrics
+            _increment_metric("redis_export_batches_total", env, exchange, mode, 1)
+            _increment_metric("redis_export_keys_written_total", env, exchange, mode, batch_keys)
+            _increment_metric("redis_export_batch_duration_ms_sum", env, exchange, mode, batch_duration_ms)
+            _increment_metric("redis_export_batch_duration_ms_count", env, exchange, mode, 1)
             
             if fail_count > 0:
-                METRICS["redis_export_batches_failed_total"] += 1
+                _increment_metric("redis_export_batches_failed_total", env, exchange, mode, 1)
             
             exported_symbols += success_count
             total_keys_written += batch_keys
             
         except Exception as e:
             print(f"[ERROR] Batch {batch_count} failed: {e}")
-            METRICS["redis_export_batches_failed_total"] += 1
-            METRICS["redis_export_fail_total"] += len(batch_symbols)
-    
-    duration_ms = (time.time() - start_time) * 1000
-    METRICS["redis_export_duration_ms"] = duration_ms
+            _increment_metric("redis_export_batches_failed_total", env, exchange, mode, 1)
     
     return exported_symbols
 
@@ -418,8 +442,12 @@ def _export_flat_mode(
     Each KPI gets its own key with SETEX.
     Uses pipeline for batching.
     """
+    mode = "flat"
     start_time = time.time()
     exported_count = 0
+    
+    # Update mode metric
+    METRICS["redis_export_mode"][(env, exchange)] = mode
     
     # Flatten KPIs into individual key-value pairs
     all_operations = []
@@ -435,9 +463,13 @@ def _export_flat_mode(
             print(f"[DRY-RUN] SETEX {key} {ttl} {value}")
             exported_count += 1
         
-        METRICS["redis_export_keys_written_total"] = exported_count
+        # Update metrics even in dry-run
+        _increment_metric("redis_export_keys_written_total", env, exchange, mode, exported_count)
+        _increment_metric("redis_export_batches_total", env, exchange, mode, 1)
         duration_ms = (time.time() - start_time) * 1000
-        METRICS["redis_export_duration_ms"] = duration_ms
+        _increment_metric("redis_export_batch_duration_ms_sum", env, exchange, mode, duration_ms)
+        _increment_metric("redis_export_batch_duration_ms_count", env, exchange, mode, 1)
+        
         return exported_count
     
     # Real export with pipeline
@@ -470,25 +502,20 @@ def _export_flat_mode(
                   f"success={success_count} fail={fail_count} "
                   f"duration_ms={batch_duration_ms:.2f}")
             
-            # Update metrics
-            METRICS["redis_export_batches_total"] += 1
-            METRICS["redis_export_success_total"] += success_count
-            METRICS["redis_export_fail_total"] += fail_count
-            METRICS["redis_export_keys_written_total"] += len(batch_ops)
-            METRICS["redis_export_batch_duration_ms"] += batch_duration_ms
+            # Update labeled metrics
+            _increment_metric("redis_export_batches_total", env, exchange, mode, 1)
+            _increment_metric("redis_export_keys_written_total", env, exchange, mode, len(batch_ops))
+            _increment_metric("redis_export_batch_duration_ms_sum", env, exchange, mode, batch_duration_ms)
+            _increment_metric("redis_export_batch_duration_ms_count", env, exchange, mode, 1)
             
             if fail_count > 0:
-                METRICS["redis_export_batches_failed_total"] += 1
+                _increment_metric("redis_export_batches_failed_total", env, exchange, mode, 1)
             
             exported_count += success_count
-            
+        
         except Exception as e:
             print(f"[ERROR] Batch {batch_count} failed: {e}")
-            METRICS["redis_export_batches_failed_total"] += 1
-            METRICS["redis_export_fail_total"] += len(batch_ops)
-    
-    duration_ms = (time.time() - start_time) * 1000
-    METRICS["redis_export_duration_ms"] = duration_ms
+            _increment_metric("redis_export_batches_failed_total", env, exchange, mode, 1)
     
     return exported_count
 
