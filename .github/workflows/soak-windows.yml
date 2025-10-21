@@ -96,6 +96,10 @@ jobs:
       # RUNTIME CONFIGURATION
       # ========================================================================
       
+      # Force UTF-8 for Python I/O (prevents UnicodeEncodeError on Windows cp1251)
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+      
       # Python: Auto-detect from PATH or use custom path from input
       # Note: Removed hardcoded path for portability across runners
       PYTHON_EXE: ${{ github.event_name == 'workflow_dispatch' && inputs.python_path || 'python' }}
@@ -210,6 +214,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: "[1.5/13] Force UTF-8 console encoding (PowerShell)"
+        id: force-utf8
+        shell: pwsh
+        run: |
+          Write-Host "=== Configuring UTF-8 console encoding ==="
+          
+          # Set console output encoding to UTF-8
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [Console]::OutputEncoding = $utf8
+          [Console]::InputEncoding = $utf8
+          $OutputEncoding = $utf8
+          
+          # Change console code page to 65001 (UTF-8)
+          chcp 65001 | Out-Null
+          
+          Write-Host "[OK] Console encoding set to UTF-8"
+          Write-Host "[INFO] Code page: $(chcp)"
+          Write-Host "================================================"
 
       - name: Clear Cargo Cache (to ensure clean build)
         run: |
