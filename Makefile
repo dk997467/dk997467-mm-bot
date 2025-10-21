@@ -151,7 +151,7 @@ soak:
 	@python -c "import os; os.makedirs('artifacts/soak_reports', exist_ok=True)"
 	@python -c "import datetime; d=datetime.date.today().strftime('%%Y-%%m-%%d'); exec(open('temp_soak.py','w').write('print(\"artifacts/soak_reports/'+d+'.json\")'))" && python temp_soak.py > temp_path.txt && set /p OUT_PATH=<temp_path.txt && python -m tools.ops.soak_run --shadow-hours 6 --canary-hours 6 --live-hours 12 --tz Europe/Berlin --out %OUT_PATH% && del temp_path.txt temp_soak.py
 
-.PHONY: soak-audit soak-audit-ci soak-compare
+.PHONY: soak-audit soak-audit-ci soak-compare soak-analyze
 
 soak-audit:
 	python -m tools.soak.audit_artifacts --base artifacts/soak/latest
@@ -161,6 +161,9 @@ soak-audit-ci:
 
 soak-compare:
 	python -m tools.soak.compare_runs --a artifacts/soak/run_A --b artifacts/soak/latest
+
+soak-analyze:
+	python -m tools.soak.analyze_post_soak --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" --min-windows 24 --exit-on-crit
 
 .PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive
 

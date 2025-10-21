@@ -151,6 +151,46 @@ jobs:
           fi
         shell: bash
       
+      - name: Post-Soak Analyzer V2 (trends, sparklines, violations)
+        id: post-soak-analyzer
+        if: always()
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "================================================"
+          echo "POST-SOAK ANALYZER V2"
+          echo "================================================"
+          
+          mkdir -p artifacts/reports/analysis
+          
+          python -m tools.soak.analyze_post_soak \
+            --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+            --min-windows 8 \
+            --out-dir artifacts/reports/analysis \
+            --warn-edge 2.5 --crit-edge 2.0 \
+            --warn-maker 0.80 --crit-maker 0.75 \
+            --warn-lat 350 --crit-lat 400 \
+            --warn-risk 0.45 --crit-risk 0.50
+          
+          if [ $? -eq 0 ]; then
+            echo "✓ Post-soak analysis completed"
+            
+            if [ -f artifacts/reports/analysis/POST_SOAK_ANALYSIS.md ]; then
+              echo ""
+              echo "=== Analysis Preview (first 30 lines) ==="
+              head -30 artifacts/reports/analysis/POST_SOAK_ANALYSIS.md
+            fi
+            
+            if [ -f artifacts/reports/analysis/VIOLATIONS.json ]; then
+              echo ""
+              echo "=== Violations Summary ==="
+              cat artifacts/reports/analysis/VIOLATIONS.json
+            fi
+          else
+            echo "⚠ Post-soak analysis returned non-zero exit code (non-blocking)"
+          fi
+        shell: bash
+      
       - name: Upload soak artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -161,6 +201,9 @@ jobs:
             artifacts/reports/SOAK_RESULTS.md
             artifacts/reports/gates_summary.json
             artifacts/reports/readiness.json
+            artifacts/reports/analysis/POST_SOAK_ANALYSIS.md
+            artifacts/reports/analysis/RECOMMENDATIONS.md
+            artifacts/reports/analysis/VIOLATIONS.json
             artifacts/soak/latest/SOAK_KPI.json
             artifacts/soak/latest/ITER_SUMMARY_*.json
           if-no-files-found: warn

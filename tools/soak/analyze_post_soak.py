@@ -1,844 +1,896 @@
 #!/usr/bin/env python3
 """
-Post-Soak Deep Report Generator for mm-bot
+Post-Soak Analyzer V2
 
-Analyzes soak test results from artifacts/soak/latest/ directory and generates:
-- POST_SOAK_AUDIT.md: Full analysis with KPI trends, guards, anomalies
-- RECOMMENDATIONS.md: Proposed parameter deltas based on KPI violations
-- FAILURES.md: Detailed failure analysis (only if verdict is FAIL)
+Analyzes iteration summaries, builds trends, detects violations,
+and generates actionable recommendations with sparklines and status reports.
 
 Usage:
-    python -m tools.soak.analyze_post_soak [--path PATH]
-
-Exit codes:
-    0 = PASS or WARN
-    1 = FAIL or critical error
+    python -m tools.soak.analyze_post_soak --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json"
+    python -m tools.soak.analyze_post_soak --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" --exit-on-crit
 """
 
+import argparse
 import glob
 import json
+import math
 import sys
-import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from statistics import mean, median, stdev
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Tuple, Optional, Any
 
 
-# ==============================================================================
-# KPI THRESHOLDS (HARD)
-# ==============================================================================
-
-KPI_THRESHOLDS = {
-    "risk_ratio": 0.42,         # max
-    "maker_taker_ratio": 0.85,  # min
-    "net_bps": 2.7,             # min
-    "p95_latency_ms": 350,      # max
-}
-
-# Relaxed thresholds for mock mode (smoke tests, CI validation)
-KPI_THRESHOLDS_MOCK = {
-    "risk_ratio": 0.50,         # max (relaxed from 0.42)
-    "maker_taker_ratio": 0.50,  # min (relaxed from 0.85)
-    "net_bps": -10.0,           # min (relaxed from 2.7)
-    "p95_latency_ms": 500,      # max (relaxed from 350)
-}
-
-# PASS criteria: last 8 iterations, ≥6 pass all KPI + freeze_triggered at least once
-PASS_WINDOW = 8
-PASS_MIN_COUNT = 6
+# Sparkline characters (8 levels)
+SPARKLINE_CHARS = "▁▂▃▄▅▆▇█"
 
 
-# ==============================================================================
-# HELPER FUNCTIONS
-# ==============================================================================
-
-def load_json_safe(path: Path) -> Optional[Dict[str, Any]]:
-    """Load JSON file with error handling."""
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"[WARN] Failed to load {path}: {e}", file=sys.stderr)
-        return None
-
-
-def load_iter_summaries(base_path: Path) -> List[Dict[str, Any]]:
-    """Load all ITER_SUMMARY_*.json files, sorted by iteration number."""
-    pattern = str(base_path / "ITER_SUMMARY_*.json")
-    files = glob.glob(pattern)
-    
-    summaries = []
-    for fpath in files:
-        # Extract iteration number from filename
-        match = re.search(r'ITER_SUMMARY_(\d+)\.json', fpath)
-        if not match:
-            continue
-        
-        data = load_json_safe(Path(fpath))
-        if data:
-            summaries.append(data)
-    
-    # Sort by iteration number
-    summaries.sort(key=lambda x: x.get("iteration", 0))
-    return summaries
-
-
-def check_kpi(summary: Dict[str, Any], use_mock_thresholds: bool = False) -> Dict[str, bool]:
+def load_windows(iter_glob: str,
+                 symbols_filter: Optional[List[str]] = None) -> Dict[str,
+                                                                     List[Dict[str,
+                                                                               Any]]]:
     """
-    Check if iteration passes all KPI thresholds.
-    
+    Load iteration summary windows from JSON files.
+
     Args:
-        summary: Iteration summary dict
-        use_mock_thresholds: If True, use relaxed thresholds for mock mode
-    
+        iter_glob: Glob pattern for ITER_SUMMARY files
+        symbols_filter: Optional list of symbols to filter
+
     Returns:
-        Dict with per-metric checks and all_pass flag
+        Dict mapping symbol to list of window data
     """
-    s = summary.get("summary", summary)
-    
-    # Choose thresholds based on mode
-    thresholds = KPI_THRESHOLDS_MOCK if use_mock_thresholds else KPI_THRESHOLDS
-    
-    checks = {
-        "risk_ratio": s.get("risk_ratio", 1.0) <= thresholds["risk_ratio"],
-        "maker_taker_ratio": s.get("maker_taker_ratio", 0.0) >= thresholds["maker_taker_ratio"],
-        "net_bps": s.get("net_bps", 0.0) >= thresholds["net_bps"],
-        "p95_latency_ms": s.get("p95_latency_ms", 9999) <= thresholds["p95_latency_ms"],
-    }
-    
-    checks["all_pass"] = all(checks.values())
-    return checks
+    files = sorted(glob.glob(iter_glob))
 
+    if not files:
+        print(f"[ERROR] No files matched pattern: {iter_glob}")
+        return {}
 
-def compute_last8_stats(summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Compute aggregates for last 8 iterations."""
-    last8 = summaries[-PASS_WINDOW:] if len(summaries) >= PASS_WINDOW else summaries
-    
-    def extract_values(key: str) -> List[float]:
-        values = []
-        for item in last8:
-            s = item.get("summary", item)
-            val = s.get(key)
-            if val is not None:
-                values.append(float(val))
-        return values
-    
-    stats = {}
-    for key in ["risk_ratio", "maker_taker_ratio", "net_bps", "p95_latency_ms"]:
-        values = extract_values(key)
-        if values:
-            stats[key] = {
-                "mean": mean(values),
-                "median": median(values),
-                "min": min(values),
-                "max": max(values),
-                "stdev": stdev(values) if len(values) > 1 else 0.0,
+    print(f"[INFO] Found {len(files)} iteration files")
+
+    windows_by_symbol = defaultdict(list)
+
+    for file_path in files:
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # Support both flat and nested schemas
+            if "symbol" in data:
+                # Flat schema
+                symbol = data["symbol"]
+                window_data = data
+            elif "summary" in data and "symbol" in data["summary"]:
+                # Nested schema
+                symbol = data["summary"]["symbol"]
+                window_data = data["summary"]
+            else:
+                print(
+                    f"[WARN] No symbol found in {
+                        Path(file_path).name}, skipping")
+                continue
+
+            # Apply symbol filter
+            if symbols_filter and symbol not in symbols_filter:
+                continue
+
+            # Extract metrics
+            metrics = {
+                "edge_bps": window_data.get("net_bps") or window_data.get("edge_bps"),
+                "maker_taker_ratio": window_data.get("maker_taker_ratio"),
+                "p95_latency_ms": window_data.get("p95_latency_ms"),
+                "risk_ratio": window_data.get("risk_ratio"),
             }
-        else:
-            stats[key] = {"mean": 0, "median": 0, "min": 0, "max": 0, "stdev": 0}
-    
-    return stats
 
+            # Metadata
+            metadata = {
+                "commit": data.get("commit"),
+                "profile": data.get("profile"),
+                "source": data.get("source"),
+                "notes": data.get("notes"),
+            }
 
-def scan_guards(summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Count guard activations and freeze events."""
-    guards = {
-        "oscillation_detected": 0,
-        "velocity_violation": 0,
-        "cooldown_active": 0,
-        "freeze_triggered": 0,
-        "freeze_events": [],
-    }
-    
-    for item in summaries:
-        tuning = item.get("tuning", {})
-        
-        if tuning.get("oscillation_detected"):
-            guards["oscillation_detected"] += 1
-        if tuning.get("velocity_violation"):
-            guards["velocity_violation"] += 1
-        if tuning.get("cooldown_active"):
-            guards["cooldown_active"] += 1
-        if tuning.get("freeze_triggered"):
-            guards["freeze_triggered"] += 1
-            guards["freeze_events"].append({
-                "iteration": item.get("iteration"),
-                "reason": tuning.get("freeze_reason", "unknown"),
+            windows_by_symbol[symbol].append({
+                "metrics": metrics,
+                "metadata": metadata,
+                "file": Path(file_path).name
             })
-    
-    return guards
+
+        except Exception as e:
+            print(f"[WARN] Failed to load {Path(file_path).name}: {e}")
+            continue
+
+    return dict(windows_by_symbol)
 
 
-def detect_signatures(summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Analyze runtime signatures and detect A→B→A loops."""
-    signatures = []
-    for item in summaries:
-        tuning = item.get("tuning", {})
-        sig = tuning.get("signature") or tuning.get("state_hash") or "na"
-        signatures.append(sig)
-    
-    unique = list(set(signatures))
-    
-    # Detect A→B→A oscillations (3-window)
-    loops = []
-    for i in range(len(signatures) - 2):
-        if signatures[i] == signatures[i+2] and signatures[i] != signatures[i+1]:
-            loops.append({
-                "iterations": [i+1, i+2, i+3],  # 1-based
-                "pattern": f"{signatures[i][:8]}→{signatures[i+1][:8]}→{signatures[i+2][:8]}",
-            })
-    
-    return {
-        "unique_count": len(unique),
-        "unique_sigs": [s[:12] for s in unique],
-        "loops": loops,
-    }
+def generate_sparkline(values: List[float], width: int = 10) -> str:
+    """
+    Generate ASCII sparkline from values.
 
+    Args:
+        values: List of numeric values
+        width: Number of characters in sparkline
 
-def detect_anomalies(summaries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Detect anomalies: latency spikes, risk jumps, maker_taker drops."""
-    anomalies = []
-    
-    for i, item in enumerate(summaries):
-        s = item.get("summary", item)
-        iteration = item.get("iteration", i+1)
-        
-        # Latency spike
-        latency = s.get("p95_latency_ms", 0)
-        if latency > KPI_THRESHOLDS["p95_latency_ms"] + 50:
-            anomalies.append({
-                "iteration": iteration,
-                "type": "latency_spike",
-                "value": latency,
-                "threshold": KPI_THRESHOLDS["p95_latency_ms"] + 50,
-            })
-        
-        # Risk jump (vs previous)
-        if i > 0:
-            prev_s = summaries[i-1].get("summary", summaries[i-1])
-            prev_risk = prev_s.get("risk_ratio", 0)
-            curr_risk = s.get("risk_ratio", 0)
-            if curr_risk - prev_risk > 0.15:
-                anomalies.append({
-                    "iteration": iteration,
-                    "type": "risk_jump",
-                    "value": curr_risk,
-                    "delta": curr_risk - prev_risk,
-                })
-        
-        # Maker/Taker drop
-        maker_taker = s.get("maker_taker_ratio", 1.0)
-        if maker_taker < 0.75:
-            anomalies.append({
-                "iteration": iteration,
-                "type": "maker_taker_drop",
-                "value": maker_taker,
-                "threshold": 0.75,
-            })
-    
-    return anomalies
-
-
-def make_deltas(stats: Dict[str, Any], guards: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Generate deterministic parameter delta recommendations."""
-    deltas = {}
-    
-    # Risk too high → spread up, interval up
-    if stats["risk_ratio"]["mean"] > KPI_THRESHOLDS["risk_ratio"]:
-        deltas["base_spread_bps"] = {
-            "current": "unknown",
-            "delta": +0.03,
-            "rationale": f"risk_ratio={stats['risk_ratio']['mean']:.3f} > {KPI_THRESHOLDS['risk_ratio']}"
-        }
-        deltas["min_interval_ms"] = {
-            "current": "unknown",
-            "delta": +35,
-            "rationale": "Reduce order frequency to lower risk"
-        }
-    
-    # Maker/Taker too low → spread up, replace rate down
-    if stats["maker_taker_ratio"]["mean"] < KPI_THRESHOLDS["maker_taker_ratio"]:
-        deltas["base_spread_bps"] = {
-            "current": "unknown",
-            "delta": +0.015,
-            "rationale": f"maker_taker_ratio={stats['maker_taker_ratio']['mean']:.3f} < {KPI_THRESHOLDS['maker_taker_ratio']}"
-        }
-        deltas["replace_rate_per_min"] = {
-            "current": "unknown",
-            "delta": "*0.85",
-            "rationale": "Reduce replace rate to stay on book longer"
-        }
-    
-    # Latency too high → reduce concurrency, increase tail age
-    if stats["p95_latency_ms"]["mean"] > KPI_THRESHOLDS["p95_latency_ms"]:
-        deltas["concurrency_limit"] = {
-            "current": "unknown",
-            "delta": "*0.85",
-            "rationale": f"p95_latency={stats['p95_latency_ms']['mean']:.1f}ms > {KPI_THRESHOLDS['p95_latency_ms']}"
-        }
-        deltas["tail_age_ms"] = {
-            "current": "unknown",
-            "delta": +75,
-            "rationale": "Allow more age before replacement to reduce pressure"
-        }
-    
-    # Oscillation detected → cooldown up, velocity down
-    if guards["oscillation_detected"] > 1:
-        deltas["cooldown_iters"] = {
-            "current": "unknown",
-            "delta": +1,
-            "rationale": f"oscillation_detected={guards['oscillation_detected']} times"
-        }
-        deltas["max_delta_per_hour"] = {
-            "current": "unknown",
-            "delta": "*0.8",
-            "rationale": "Slow down parameter changes to prevent oscillation"
-        }
-    
-    # Velocity violation → velocity limit down
-    if guards["velocity_violation"] > 0:
-        deltas["max_delta_per_hour"] = {
-            "current": "unknown",
-            "delta": "*0.9",
-            "rationale": f"velocity_violation={guards['velocity_violation']} times"
-        }
-    
-    # Net BPS too low BUT risk is good → can tighten spreads
-    if (stats["net_bps"]["mean"] < KPI_THRESHOLDS["net_bps"] and 
-        stats["risk_ratio"]["mean"] <= 0.40):
-        deltas["base_spread_bps"] = {
-            "current": "unknown",
-            "delta": -0.01,
-            "rationale": f"net_bps={stats['net_bps']['mean']:.2f} low but risk={stats['risk_ratio']['mean']:.3f} OK"
-        }
-        deltas["min_interval_ms"] = {
-            "current": "unknown",
-            "delta": -20,
-            "rationale": "Increase order frequency to capture more edge"
-        }
-    
-    return deltas
-
-
-def render_ascii_sparkline(values: List[float], width: int = 40) -> str:
-    """Render ASCII sparkline using block characters."""
-    if not values or len(values) == 0:
-        return "N/A"
-    
-    min_val = min(values)
-    max_val = max(values)
-    
-    if max_val == min_val:
+    Returns:
+        Sparkline string
+    """
+    if not values:
         return "─" * width
-    
-    # Normalize to 0-7 (8 levels for block chars)
-    blocks = "▁▂▃▄▅▆▇█"
-    normalized = [(v - min_val) / (max_val - min_val) * 7 for v in values]
-    
-    # Sample to fit width
-    step = max(1, len(values) // width)
-    sampled = [normalized[i] for i in range(0, len(values), step)][:width]
-    
-    return "".join(blocks[int(v)] for v in sampled)
 
+    # Filter out NaN/inf
+    clean_values = [v for v in values if v is not None and math.isfinite(v)]
 
-def read_edge_kpi(base_path: Path) -> Optional[Dict[str, Any]]:
-    """Read EDGE_REPORT.json or KPI_GATE.json (priority order)."""
-    candidates = [
-        base_path.parent / "artifacts" / "EDGE_REPORT.json",
-        base_path.parent / "artifacts" / "KPI_GATE.json",
-        base_path.parent.parent / "reports" / "EDGE_REPORT.json",
-        base_path / "EDGE_REPORT.json",
-        base_path / "KPI_GATE.json",
-    ]
-    
-    for path in candidates:
-        if path.exists():
-            return load_json_safe(path)
-    
-    return None
+    if not clean_values:
+        return "─" * width
 
-
-# ==============================================================================
-# REPORT GENERATORS
-# ==============================================================================
-
-def generate_audit_report(
-    summaries: List[Dict[str, Any]],
-    stats: Dict[str, Any],
-    guards: Dict[str, Any],
-    signatures: Dict[str, Any],
-    anomalies: List[Dict[str, Any]],
-    edge_kpi: Optional[Dict[str, Any]],
-    verdict: str,
-    freeze_decision: str,
-    base_path: Path,
-) -> str:
-    """Generate POST_SOAK_AUDIT.md content."""
-    
-    lines = []
-    lines.append("# POST-SOAK AUDIT REPORT")
-    lines.append("")
-    lines.append(f"**Generated:** {datetime.now(timezone.utc).isoformat()}Z")
-    lines.append(f"**Source:** `{base_path}`")
-    lines.append("")
-    
-    # Overview
-    lines.append("## 1. Overview")
-    lines.append("")
-    lines.append(f"- **Total iterations:** {len(summaries)}")
-    lines.append(f"- **Analysis window:** Last {min(PASS_WINDOW, len(summaries))} iterations")
-    
-    if summaries:
-        first_ts = summaries[0].get("summary", {}).get("runtime_utc", "N/A")
-        last_ts = summaries[-1].get("summary", {}).get("runtime_utc", "N/A")
-        lines.append(f"- **Time range:** {first_ts} → {last_ts}")
-    
-    if edge_kpi:
-        lines.append(f"- **KPI_GATE verdict:** {edge_kpi.get('verdict', 'N/A')}")
-    
-    lines.append("")
-    
-    # Iteration Matrix
-    lines.append("## 2. Iteration Matrix")
-    lines.append("")
-    lines.append("```csv")
-    lines.append("iteration,timestamp,risk_ratio,maker_taker,net_bps,p95_ms,applied,deltas_count,cooldown,velocity,oscillation,freeze,signature")
-    
-    for item in summaries:
-        s = item.get("summary", item)
-        t = item.get("tuning", {})
-        
-        idx = item.get("iteration", 0)
-        ts = s.get("runtime_utc", "N/A")[:19]  # Truncate microseconds
-        risk = s.get("risk_ratio", 0)
-        maker = s.get("maker_taker_ratio", 0)
-        net = s.get("net_bps", 0)
-        p95 = s.get("p95_latency_ms", 0)
-        applied = t.get("applied", False)
-        deltas_count = len(t.get("proposed_deltas", {}))
-        cooldown = t.get("cooldown_active", False)
-        velocity = t.get("velocity_violation", False)
-        oscillation = t.get("oscillation_detected", False)
-        freeze = t.get("freeze_triggered", False)
-        sig = (t.get("signature") or t.get("state_hash") or "na")[:8]
-        
-        # Check KPI pass
-        kpi_check = check_kpi(item)
-        status = "PASS" if kpi_check["all_pass"] else "FAIL"
-        
-        lines.append(
-            f"{idx},{ts},{risk:.3f},{maker:.3f},{net:.2f},{p95:.0f},"
-            f"{applied},{deltas_count},{cooldown},{velocity},{oscillation},{freeze},{sig} # {status}"
-        )
-    
-    lines.append("```")
-    lines.append("")
-    
-    # KPI Trends
-    lines.append("## 3. KPI Trends (Last 8 Iterations)")
-    lines.append("")
-    lines.append("```")
-    lines.append(f"{'Metric':<20} {'Mean':<10} {'Median':<10} {'Min':<10} {'Max':<10} {'StDev':<10} {'Threshold':<12} {'Pass?'}")
-    lines.append("-" * 102)
-    
-    for key, label, threshold, comp in [
-        ("risk_ratio", "Risk Ratio", KPI_THRESHOLDS["risk_ratio"], "<="),
-        ("maker_taker_ratio", "Maker/Taker", KPI_THRESHOLDS["maker_taker_ratio"], ">="),
-        ("net_bps", "Net BPS", KPI_THRESHOLDS["net_bps"], ">="),
-        ("p95_latency_ms", "P95 Latency (ms)", KPI_THRESHOLDS["p95_latency_ms"], "<="),
-    ]:
-        st = stats[key]
-        if comp == "<=":
-            pass_check = st["mean"] <= threshold
-        else:
-            pass_check = st["mean"] >= threshold
-        
-        lines.append(
-            f"{label:<20} {st['mean']:<10.3f} {st['median']:<10.3f} "
-            f"{st['min']:<10.3f} {st['max']:<10.3f} {st['stdev']:<10.3f} "
-            f"{comp} {threshold:<8} {'PASS' if pass_check else 'FAIL'}"
-        )
-    
-    lines.append("```")
-    lines.append("")
-    
-    # ASCII Sparklines
-    lines.append("### Visual Trends")
-    lines.append("")
-    
-    risk_values = [s.get("summary", s).get("risk_ratio", 0) for s in summaries]
-    net_values = [s.get("summary", s).get("net_bps", 0) for s in summaries]
-    
-    lines.append(f"**Risk Ratio:**  `{render_ascii_sparkline(risk_values)}`")
-    lines.append(f"**Net BPS:**     `{render_ascii_sparkline(net_values)}`")
-    lines.append("")
-    
-    # Guards & Stability
-    lines.append("## 4. Guards & Stability")
-    lines.append("")
-    lines.append(f"- **Oscillation detected:** {guards['oscillation_detected']} times")
-    lines.append(f"- **Velocity violation:** {guards['velocity_violation']} times")
-    lines.append(f"- **Cooldown active:** {guards['cooldown_active']} times")
-    lines.append(f"- **Freeze triggered:** {guards['freeze_triggered']} times")
-    
-    if guards["freeze_events"]:
-        lines.append("")
-        lines.append("**Freeze Events:**")
-        for event in guards["freeze_events"]:
-            lines.append(f"  - Iteration {event['iteration']}: {event['reason']}")
-    
-    lines.append("")
-    
-    # Runtime Signatures
-    lines.append("## 5. Runtime Signatures")
-    lines.append("")
-    lines.append(f"- **Unique signatures:** {signatures['unique_count']}")
-    lines.append(f"- **Signatures:** {', '.join(signatures['unique_sigs'])}")
-    
-    if signatures["loops"]:
-        lines.append("")
-        lines.append("**A→B→A Oscillation Loops Detected:**")
-        for loop in signatures["loops"]:
-            lines.append(f"  - Iterations {loop['iterations']}: {loop['pattern']}")
+    # Sample values if more than width
+    if len(clean_values) > width:
+        step = len(clean_values) / width
+        sampled = [clean_values[int(i * step)] for i in range(width)]
     else:
-        lines.append("- **Oscillation loops:** None detected [OK]")
-    
-    lines.append("")
-    
-    # Edge Drivers
-    lines.append("## 6. Edge Decomposition")
-    lines.append("")
-    
-    if edge_kpi and "edge_drivers" in edge_kpi:
-        drivers = edge_kpi["edge_drivers"]
-        lines.append("```")
-        lines.append(f"{'Driver':<25} {'Value (bps)':<15} {'Impact'}")
-        lines.append("-" * 50)
-        for driver, value in sorted(drivers.items(), key=lambda x: abs(x[1]), reverse=True):
-            impact = "▼ negative" if value < 0 else "▲ positive"
-            lines.append(f"{driver:<25} {value:<15.2f} {impact}")
-        lines.append("```")
-        
-        # Top 2 drivers
-        sorted_drivers = sorted(drivers.items(), key=lambda x: abs(x[1]), reverse=True)[:2]
-        lines.append("")
-        lines.append("**Top Impact Drivers:**")
-        for driver, value in sorted_drivers:
-            lines.append(f"  - `{driver}`: {value:.2f} bps")
+        sampled = clean_values
+
+    # Normalize to [0, 1]
+    min_val = min(sampled)
+    max_val = max(sampled)
+
+    if max_val == min_val:
+        # All values the same
+        return SPARKLINE_CHARS[4] * len(sampled)
+
+    normalized = [(v - min_val) / (max_val - min_val) for v in sampled]
+
+    # Map to sparkline chars
+    sparkline = ""
+    for norm in normalized:
+        idx = min(int(norm * len(SPARKLINE_CHARS)), len(SPARKLINE_CHARS) - 1)
+        sparkline += SPARKLINE_CHARS[idx]
+
+    return sparkline
+
+
+def calculate_trend(values: List[float]) -> Tuple[str, float]:
+    """
+    Calculate linear trend (slope) and return symbol.
+
+    Args:
+        values: List of numeric values
+
+    Returns:
+        Tuple of (trend_symbol, slope)
+    """
+    clean_values = [v for v in values if v is not None and math.isfinite(v)]
+
+    if len(clean_values) < 2:
+        return "≈", 0.0
+
+    # Simple linear regression
+    n = len(clean_values)
+    x = list(range(n))
+    y = clean_values
+
+    sum_x = sum(x)
+    sum_y = sum(y)
+    sum_xy = sum(xi * yi for xi, yi in zip(x, y))
+    sum_x2 = sum(xi ** 2 for xi in x)
+
+    # Slope: (n*sum_xy - sum_x*sum_y) / (n*sum_x2 - sum_x^2)
+    denominator = n * sum_x2 - sum_x ** 2
+
+    if denominator == 0:
+        return "≈", 0.0
+
+    slope = (n * sum_xy - sum_x * sum_y) / denominator
+
+    # Classify trend
+    # Threshold: significant if slope > 5% of mean per window
+    mean_val = sum_y / n
+    threshold = abs(mean_val) * 0.05 if mean_val != 0 else 0.1
+
+    if slope > threshold:
+        return "↑", slope
+    elif slope < -threshold:
+        return "↓", slope
     else:
-        lines.append("*No edge decomposition data available*")
-    
-    lines.append("")
-    
-    # Anomalies
-    lines.append("## 7. Anomalies")
-    lines.append("")
-    
-    if anomalies:
-        for anom in anomalies:
-            lines.append(f"- **Iteration {anom['iteration']}** ({anom['type']}): {anom}")
-    else:
-        lines.append("*No anomalies detected* [OK]")
-    
-    lines.append("")
-    
-    # Verdict & Actions
-    lines.append("## 8. Verdict & Actions")
-    lines.append("")
-    lines.append(f"### Run Verdict: **{verdict}**")
-    lines.append("")
-    lines.append(f"### Freeze Decision: **{freeze_decision}**")
-    lines.append("")
-    
-    if verdict == "PASS":
-        lines.append("[OK] **Production Gate:** READY for 24h soak")
-    elif verdict == "WARN":
-        lines.append("[WARN] **Production Gate:** Review recommended before 24h soak")
-    else:
-        lines.append("[FAIL] **Production Gate:** HOLD — fixes required")
-        lines.append("")
-        lines.append("**Required Actions:**")
-        lines.append("  - Review FAILURES.md for specific violations")
-        lines.append("  - Apply recommended parameter deltas")
-        lines.append("  - Re-run mini-soak validation")
-    
-    lines.append("")
-    lines.append("---")
-    lines.append("*Generated by tools/soak/analyze_post_soak.py*")
-    
-    return "\n".join(lines)
+        return "≈", slope
+
+
+def detect_violations(
+    symbol: str,
+    metrics_series: Dict[str, List[float]],
+    thresholds: Dict[str, Dict[str, float]]
+) -> List[Dict[str, Any]]:
+    """
+    Detect metric violations (WARN/CRIT).
+
+    Args:
+        symbol: Symbol name
+        metrics_series: Dict of metric name to list of values
+        thresholds: Dict of thresholds (warn_edge, crit_edge, etc.)
+
+    Returns:
+        List of violation dicts
+    """
+    violations = []
+
+    for metric_name, values in metrics_series.items():
+        clean_values = [
+            v for v in values if v is not None and math.isfinite(v)]
+
+        if not clean_values:
+            violations.append({
+                "symbol": symbol,
+                "metric": metric_name,
+                "level": "WARN",
+                "window_index": None,
+                "value": None,
+                "threshold": None,
+                "note": "No valid data"
+            })
+            continue
+
+        # Check each window
+        for idx, value in enumerate(clean_values):
+            violation = None
+
+            if metric_name == "edge_bps":
+                crit_thresh = thresholds.get("crit_edge", 2.5)
+                warn_thresh = thresholds.get("warn_edge", 3.0)
+
+                if value < crit_thresh:
+                    violation = {
+                        "symbol": symbol,
+                        "metric": metric_name,
+                        "level": "CRIT",
+                        "window_index": idx,
+                        "value": value,
+                        "threshold": crit_thresh,
+                        "note": f"Edge below critical threshold ({
+                            value:.2f} < {crit_thresh})"}
+                elif value < warn_thresh:
+                    violation = {
+                        "symbol": symbol,
+                        "metric": metric_name,
+                        "level": "WARN",
+                        "window_index": idx,
+                        "value": value,
+                        "threshold": warn_thresh,
+                        "note": f"Edge below warning threshold ({
+                            value:.2f} < {warn_thresh})"}
+
+            elif metric_name == "maker_taker_ratio":
+                crit_thresh = thresholds.get("crit_maker", 0.70)
+                warn_thresh = thresholds.get("warn_maker", 0.75)
+
+                if value < crit_thresh:
+                    violation = {
+                        "symbol": symbol,
+                        "metric": metric_name,
+                        "level": "CRIT",
+                        "window_index": idx,
+                        "value": value,
+                        "threshold": crit_thresh,
+                        "note": f"Maker/taker below critical threshold ({value:.3f} < {crit_thresh})"
+                    }
+                elif value < warn_thresh:
+                    violation = {
+                        "symbol": symbol,
+                        "metric": metric_name,
+                        "level": "WARN",
+                        "window_index": idx,
+                        "value": value,
+                        "threshold": warn_thresh,
+                        "note": f"Maker/taker below warning threshold ({value:.3f} < {warn_thresh})"
+                    }
+
+            elif metric_name == "p95_latency_ms":
+                crit_thresh = thresholds.get("crit_lat", 350)
+                warn_thresh = thresholds.get("warn_lat", 330)
+
+                if value > crit_thresh:
+                    violation = {
+                        "symbol": symbol,
+                        "metric": metric_name,
+                        "level": "CRIT",
+                        "window_index": idx,
+                        "value": value,
+                        "threshold": crit_thresh,
+                        "note": f"Latency above critical threshold ({
+                            value:.0f} > {crit_thresh})"}
+                elif value > warn_thresh:
+                    violation = {
+                        "symbol": symbol,
+                        "metric": metric_name,
+                        "level": "WARN",
+                        "window_index": idx,
+                        "value": value,
+                        "threshold": warn_thresh,
+                        "note": f"Latency above warning threshold ({
+                            value:.0f} > {warn_thresh})"}
+
+            elif metric_name == "risk_ratio":
+                crit_thresh = thresholds.get("crit_risk", 0.40)
+                warn_thresh = thresholds.get("warn_risk", 0.40)
+
+                if value >= crit_thresh:
+                    violation = {
+                        "symbol": symbol,
+                        "metric": metric_name,
+                        "level": "CRIT",
+                        "window_index": idx,
+                        "value": value,
+                        "threshold": crit_thresh,
+                        "note": f"Risk at/above critical threshold ({value:.3f} >= {crit_thresh})"
+                    }
+                elif value > warn_thresh * 0.9:  # 90% of warn threshold
+                    violation = {
+                        "symbol": symbol,
+                        "metric": metric_name,
+                        "level": "WARN",
+                        "window_index": idx,
+                        "value": value,
+                        "threshold": warn_thresh,
+                        "note": f"Risk approaching warning threshold ({
+                            value:.3f} near {warn_thresh})"}
+
+            if violation:
+                violations.append(violation)
+
+    return violations
 
 
 def generate_recommendations(
-    stats: Dict[str, Any],
-    guards: Dict[str, Any],
-    deltas: Dict[str, Dict[str, Any]],
-    freeze_decision: str,
-) -> str:
-    """Generate RECOMMENDATIONS.md content."""
-    
-    lines = []
-    lines.append("# PARAMETER RECOMMENDATIONS")
-    lines.append("")
-    lines.append(f"**Generated:** {datetime.now(timezone.utc).isoformat()}Z")
-    lines.append("")
-    
-    # KPI Summary
-    lines.append("## KPI Summary (Last 8 Iterations)")
-    lines.append("")
-    lines.append("```")
-    for key, label in [
-        ("risk_ratio", "Risk Ratio"),
-        ("maker_taker_ratio", "Maker/Taker"),
-        ("net_bps", "Net BPS"),
-        ("p95_latency_ms", "P95 Latency"),
-    ]:
-        st = stats[key]
-        lines.append(f"{label:<20} mean={st['mean']:.3f}  median={st['median']:.3f}")
-    lines.append("```")
-    lines.append("")
-    
-    # Proposed Deltas
-    lines.append("## Proposed Parameter Deltas")
-    lines.append("")
-    
-    if deltas:
-        lines.append("```")
-        lines.append(f"{'Parameter':<25} {'Current':<12} {'Proposed Delta':<20} {'Rationale'}")
-        lines.append("-" * 100)
-        
-        for param, details in sorted(deltas.items()):
-            current = details.get("current", "unknown")
-            delta = details.get("delta", "N/A")
-            rationale = details.get("rationale", "")[:60]  # Truncate for table
-            
-            lines.append(f"{param:<25} {current:<12} {delta:<20} {rationale}")
-        
-        lines.append("```")
-    else:
-        lines.append("*No parameter changes recommended* [OK]")
-    
-    lines.append("")
-    
-    # Freeze Decision
-    lines.append("## Freeze Decision")
-    lines.append("")
-    lines.append(f"**{freeze_decision}**")
-    
-    if "READY" in freeze_decision:
-        lines.append("")
-        lines.append("[OK] Configuration is stable and ready for production freeze.")
-    else:
-        lines.append("")
-        lines.append("[HOLD] Configuration requires further tuning before freeze.")
-    
-    lines.append("")
-    lines.append("---")
-    lines.append("*Generated by tools/soak/analyze_post_soak.py*")
-    
-    return "\n".join(lines)
-
-
-def generate_failures(
-    summaries: List[Dict[str, Any]],
-    anomalies: List[Dict[str, Any]],
-) -> str:
-    """Generate FAILURES.md content (only for FAIL verdict)."""
-    
-    lines = []
-    lines.append("# SOAK TEST FAILURES")
-    lines.append("")
-    lines.append(f"**Generated:** {datetime.now(timezone.utc).isoformat()}Z")
-    lines.append("")
-    
-    # KPI Violations
-    lines.append("## KPI Violations")
-    lines.append("")
-    
-    violations = []
-    for item in summaries:
-        kpi_check = check_kpi(item)
-        if not kpi_check["all_pass"]:
-            violations.append({
-                "iteration": item.get("iteration", 0),
-                "checks": kpi_check,
-                "summary": item.get("summary", item),
-            })
-    
-    if violations:
-        for v in violations:
-            lines.append(f"### Iteration {v['iteration']}")
-            lines.append("")
-            
-            for key in ["risk_ratio", "maker_taker_ratio", "net_bps", "p95_latency_ms"]:
-                passed = v["checks"][key]
-                value = v["summary"].get(key, "N/A")
-                threshold = KPI_THRESHOLDS[key]
-                
-                if not passed:
-                    lines.append(f"- [FAIL] **{key}**: {value} (threshold: {threshold})")
-            
-            lines.append("")
-            lines.append(f"**Reference:** `ITER_SUMMARY_{v['iteration']}.json`")
-            lines.append("")
-    else:
-        lines.append("*No KPI violations detected*")
-    
-    lines.append("")
-    
-    # Anomalies
-    lines.append("## Anomalies")
-    lines.append("")
-    
-    if anomalies:
-        for anom in anomalies:
-            lines.append(f"- **Iteration {anom['iteration']}**: {anom['type']} — {anom}")
-    else:
-        lines.append("*No anomalies detected*")
-    
-    lines.append("")
-    lines.append("---")
-    lines.append("*Generated by tools/soak/analyze_post_soak.py*")
-    
-    return "\n".join(lines)
-
-
-# ==============================================================================
-# MAIN ANALYSIS FUNCTION
-# ==============================================================================
-
-def analyze_soak(base_path: Path) -> Tuple[str, int]:
+    symbol: str,
+    metrics_series: Dict[str, List[float]],
+    violations: List[Dict[str, Any]]
+) -> List[str]:
     """
-    Main analysis function.
-    
+    Generate actionable recommendations in Russian.
+
+    Args:
+        symbol: Symbol name
+        metrics_series: Dict of metric name to list of values
+        violations: List of detected violations
+
     Returns:
-        (verdict_string, exit_code)
+        List of recommendation strings
     """
-    
-    print(f"[analyze_post_soak] Analyzing soak results from: {base_path}")
-    
-    # Load iteration summaries
-    summaries = load_iter_summaries(base_path)
-    
-    if not summaries:
-        print("[ERROR] No ITER_SUMMARY_*.json files found!", file=sys.stderr)
-        return "FAIL (no_data)", 1
-    
-    print(f"[analyze_post_soak] Loaded {len(summaries)} iteration summaries")
-    
-    # Compute stats for last 8 iterations
-    stats = compute_last8_stats(summaries)
-    
-    # Scan guards and freeze events
-    guards = scan_guards(summaries)
-    
-    # Analyze runtime signatures
-    signatures = detect_signatures(summaries)
-    
-    # Detect anomalies
-    anomalies = detect_anomalies(summaries)
-    
-    # Read edge/KPI data
-    edge_kpi = read_edge_kpi(base_path)
-    
-    # Generate parameter delta recommendations
-    deltas = make_deltas(stats, guards)
-    
-    # Determine verdict (use relaxed thresholds in mock mode)
-    import os
-    use_mock = os.getenv("USE_MOCK") == "1"
-    
-    last8 = summaries[-PASS_WINDOW:] if len(summaries) >= PASS_WINDOW else summaries
-    pass_count = sum(1 for item in last8 if check_kpi(item, use_mock_thresholds=use_mock)["all_pass"])
-    freeze_occurred = guards["freeze_triggered"] > 0
-    
-    if pass_count >= PASS_MIN_COUNT and freeze_occurred:
-        verdict = "PASS"
-        exit_code = 0
-    elif pass_count >= PASS_MIN_COUNT - 1:  # One less than threshold
-        verdict = "WARN"
-        exit_code = 0
-    else:
-        verdict = "FAIL"
-        exit_code = 1
-    
-    # Freeze decision
-    if verdict == "PASS" and freeze_occurred:
-        freeze_decision = "READY_TO_FREEZE [OK]"
-    else:
-        freeze_decision = "HOLD [HOLD]"
-    
-    print(f"[analyze_post_soak] Verdict: {verdict} (pass_count={pass_count}/{len(last8)}, freeze={freeze_occurred})")
-    
-    # Generate reports
-    print("[analyze_post_soak] Generating reports...")
-    
-    audit_md = generate_audit_report(
-        summaries, stats, guards, signatures, anomalies, 
-        edge_kpi, verdict, freeze_decision, base_path
-    )
-    
-    recommendations_md = generate_recommendations(stats, guards, deltas, freeze_decision)
-    
-    failures_md = None
-    if verdict == "FAIL":
-        failures_md = generate_failures(summaries, anomalies)
-    
-    # Write reports
-    (base_path / "POST_SOAK_AUDIT.md").write_text(audit_md, encoding="utf-8")
-    print(f"[analyze_post_soak] [OK] Written: {base_path / 'POST_SOAK_AUDIT.md'}")
-    
-    (base_path / "RECOMMENDATIONS.md").write_text(recommendations_md, encoding="utf-8")
-    print(f"[analyze_post_soak] [OK] Written: {base_path / 'RECOMMENDATIONS.md'}")
-    
-    if failures_md:
-        (base_path / "FAILURES.md").write_text(failures_md, encoding="utf-8")
-        print(f"[analyze_post_soak] [OK] Written: {base_path / 'FAILURES.md'}")
-    
-    # Print verdict
-    reason = f"pass_count={pass_count}/{len(last8)}, freeze={freeze_occurred}"
-    verdict_str = f"POST_SOAK: {verdict} ({reason})"
-    
-    return verdict_str, exit_code
+    recommendations = []
+
+    # Group violations by metric
+    violations_by_metric = defaultdict(list)
+    for v in violations:
+        if v["symbol"] == symbol:
+            violations_by_metric[v["metric"]].append(v)
+
+    # Calculate current medians
+    current_vals = {}
+    for metric, values in metrics_series.items():
+        clean = [v for v in values if v is not None and math.isfinite(v)]
+        if clean:
+            current_vals[metric] = sorted(clean)[len(clean) // 2]
+
+    # Maker/taker recommendations
+    if "maker_taker_ratio" in violations_by_metric:
+        level = max(v["level"]
+                    for v in violations_by_metric["maker_taker_ratio"])
+        current = current_vals.get("maker_taker_ratio", 0)
+
+        if level == "CRIT":
+            recommendations.append(
+                f"**Maker/Taker КРИТИЧНО низкий ({current:.3f})**: "
+                f"Увеличить плотность post_only ордеров на 20-30%, "
+                f"уменьшить edge на 15-20% для повышения заполнений, "
+                f"повысить touch_dwell_ms на 50-100ms, "
+                f"добавить 2-3 дополнительных слоя на best bid/ask."
+            )
+        else:
+            recommendations.append(
+                f"**Maker/Taker низкий ({current:.3f})**: "
+                f"Увеличить post_only плотность на 10-15%, "
+                f"уменьшить edge на 5-10%, "
+                f"повысить touch_dwell_ms на 20-30ms."
+            )
+
+    # Latency recommendations
+    if "p95_latency_ms" in violations_by_metric:
+        level = max(v["level"] for v in violations_by_metric["p95_latency_ms"])
+        current = current_vals.get("p95_latency_ms", 0)
+
+        if level == "CRIT":
+            recommendations.append(
+                f"**Latency КРИТИЧНО высокий ({current:.0f}ms)**: "
+                f"Срочно уменьшить частоту перерасчёта на 30-50%, "
+                f"снизить частоту ребидов (увеличить min_rebid_delta), "
+                f"проверить сетевое подключение и clock drift, "
+                f"отключить неприоритетные вычисления в hot path."
+            )
+        else:
+            recommendations.append(
+                f"**Latency повышенный ({current:.0f}ms)**: "
+                f"Уменьшить частоту перерасчёта на 10-20%, "
+                f"снизить частоту ребидов, "
+                f"проверить профилировщик на hot spots."
+            )
+
+    # Risk recommendations
+    if "risk_ratio" in violations_by_metric:
+        level = max(v["level"] for v in violations_by_metric["risk_ratio"])
+        current = current_vals.get("risk_ratio", 0)
+
+        if level == "CRIT":
+            recommendations.append(
+                f"**Risk КРИТИЧНО высокий ({current:.3f})**: "
+                f"Немедленно ужесточить guards: уменьшить max_position на 30-40%, "
+                f"увеличить cooldown_after_adverse на 2-3x, "
+                f"повысить adverse_move_threshold на 20-30%, "
+                f"активировать emergency_stop если доступно."
+            )
+        else:
+            recommendations.append(
+                f"**Risk повышенный ({current:.3f})**: "
+                f"Ужесточить guards: уменьшить max_position на 15-20%, "
+                f"увеличить cooldown_after_adverse на 1.5x, "
+                f"повысить adverse_move_threshold на 10-15%."
+            )
+
+    # Edge recommendations
+    if "edge_bps" in violations_by_metric:
+        level = max(v["level"] for v in violations_by_metric["edge_bps"])
+        current_edge = current_vals.get("edge_bps", 0)
+        current_maker = current_vals.get("maker_taker_ratio", 0)
+
+        if level == "CRIT":
+            if current_maker > 0.75:
+                # Good maker, but low edge - tighten spread
+                recommendations.append(
+                    f"**Edge КРИТИЧНО низкий ({current_edge:.2f} bps) при нормальном maker**: "
+                    f"Чуть ужать spread на 5-10%, "
+                    f"активировать maker_boost режим, "
+                    f"проверить что taker spread не слишком широкий."
+                )
+            else:
+                # Low edge and low maker - more aggressive
+                recommendations.append(
+                    f"**Edge КРИТИЧНО низкий ({current_edge:.2f} bps)**: "
+                    f"Ужать spread на 15-20%, "
+                    f"увеличить агрессивность maker ордеров, "
+                    f"активировать maker_boost, "
+                    f"проверить конкурентную обстановку на бирже."
+                )
+        else:
+            recommendations.append(
+                f"**Edge низкий ({current_edge:.2f} bps)**: "
+                f"Чуть ужать spread на 5-7%, "
+                f"рассмотреть активацию maker_boost."
+            )
+
+    # If no violations, give positive feedback
+    if not recommendations:
+        recommendations.append(
+            "✅ Все метрики в норме, продолжайте текущую стратегию.")
+
+    return recommendations
 
 
-# ==============================================================================
-# CLI ENTRY POINT
-# ==============================================================================
+def generate_analysis_report(
+    windows_by_symbol: Dict[str, List[Dict[str, Any]]],
+    thresholds: Dict[str, float],
+    min_windows: int,
+    out_dir: Path
+) -> Tuple[int, List[Dict[str, Any]]]:
+    """
+    Generate POST_SOAK_ANALYSIS.md report.
+
+    Returns:
+        Tuple of (crit_count, all_violations)
+    """
+    lines = [
+        "# Post-Soak Analysis Report V2",
+        "",
+        f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC",
+        ""
+    ]
+
+    # Count total windows
+    total_windows = sum(len(windows) for windows in windows_by_symbol.values())
+    lines.append(f"**Total Windows:** {total_windows}")
+    lines.append(f"**Symbols:** {len(windows_by_symbol)}")
+    lines.append("")
+
+    # Check min windows
+    if total_windows < min_windows:
+        lines.append(
+            f"⚠️ **WARNING**: Windows < min_windows (actual={total_windows}, required={min_windows}) — proceeding with WARN")
+    lines.append("")
+
+    # Collect metadata
+    all_commits = set()
+    all_profiles = set()
+
+    for windows in windows_by_symbol.values():
+        for window in windows:
+            meta = window.get("metadata", {})
+            if meta.get("commit"):
+                all_commits.add(meta["commit"])
+            if meta.get("profile"):
+                all_profiles.add(meta["profile"])
+
+    if all_commits:
+        lines.append(f"**Commits:** {', '.join(sorted(all_commits))}")
+    if all_profiles:
+        lines.append(f"**Profiles:** {', '.join(sorted(all_profiles))}")
+
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    # Per-symbol analysis
+    all_violations = []
+    crit_count = 0
+
+    for symbol in sorted(windows_by_symbol.keys()):
+        windows = windows_by_symbol[symbol]
+
+        lines.append(f"## {symbol}")
+        lines.append("")
+        lines.append(f"**Windows:** {len(windows)}")
+        lines.append("")
+
+        # Extract metrics series
+        metrics_series = {
+            "edge_bps": [],
+            "maker_taker_ratio": [],
+            "p95_latency_ms": [],
+            "risk_ratio": []
+        }
+
+        for window in windows:
+            for metric_name in metrics_series.keys():
+                value = window["metrics"].get(metric_name)
+                metrics_series[metric_name].append(value)
+
+        # Build table
+        lines.append(
+            "| Metric | Current | Min | Max | Median | Sparkline | Trend | Status |")
+        lines.append(
+            "|--------|---------|-----|-----|--------|-----------|-------|--------|")
+
+        # Detect violations
+        violations = detect_violations(symbol, metrics_series, thresholds)
+        all_violations.extend(violations)
+
+        # Count CRIT violations for this symbol
+        symbol_crit = sum(1 for v in violations if v["level"] == "CRIT")
+        crit_count += symbol_crit
+
+        for metric_name, values in metrics_series.items():
+            clean_values = [
+                v for v in values if v is not None and math.isfinite(v)]
+
+            if not clean_values:
+                lines.append(
+                    f"| {metric_name} | N/A | N/A | N/A | N/A | ─────── | ≈ | WARN |")
+                continue
+
+            current = clean_values[-1]
+            min_val = min(clean_values)
+            max_val = max(clean_values)
+            median_val = sorted(clean_values)[len(clean_values) // 2]
+
+            sparkline = generate_sparkline(clean_values, width=10)
+            trend_symbol, _ = calculate_trend(clean_values)
+
+            # Determine status
+            metric_violations = [
+                v for v in violations if v["metric"] == metric_name]
+            if any(v["level"] == "CRIT" for v in metric_violations):
+                status = "🔴 CRIT"
+            elif any(v["level"] == "WARN" for v in metric_violations):
+                status = "🟡 WARN"
+            else:
+                status = "✅ OK"
+
+            # Format values
+            if metric_name == "p95_latency_ms":
+                current_str = f"{current:.0f}ms"
+                min_str = f"{min_val:.0f}"
+                max_str = f"{max_val:.0f}"
+                median_str = f"{median_val:.0f}"
+            elif metric_name in ["maker_taker_ratio", "risk_ratio"]:
+                current_str = f"{current:.3f}"
+                min_str = f"{min_val:.3f}"
+                max_str = f"{max_val:.3f}"
+                median_str = f"{median_val:.3f}"
+            else:  # edge_bps
+                current_str = f"{current:.2f}"
+                min_str = f"{min_val:.2f}"
+                max_str = f"{max_val:.2f}"
+                median_str = f"{median_val:.2f}"
+
+            lines.append(
+                f"| {metric_name} | {current_str} | {min_str} | {max_str} | {median_str} | {sparkline} | {trend_symbol} | {status} |")
+
+        lines.append("")
+
+        # List violations for this symbol
+        if metric_violations := [
+                v for v in violations if v["symbol"] == symbol]:
+            lines.append("**Violations:**")
+            for v in metric_violations:
+                lines.append(f"- {v['level']}: {v['note']}")
+    lines.append("")
+
+    # Summary
+    lines.append("---")
+    lines.append("")
+    lines.append("## Summary")
+    lines.append("")
+
+    warn_count = sum(1 for v in all_violations if v["level"] == "WARN")
+    ok_count = len(windows_by_symbol) - (crit_count + warn_count)
+
+    lines.append(f"- ✅ **OK**: {ok_count} symbols")
+    lines.append(f"- 🟡 **WARN**: {warn_count} symbols with warnings")
+    lines.append(f"- 🔴 **CRIT**: {crit_count} symbols with critical issues")
+    lines.append("")
+
+    if crit_count > 0:
+        lines.append(
+            "**⚠️ Action Required:** Critical violations detected. Review RECOMMENDATIONS.md for actionable steps.")
+    elif warn_count > 0:
+        lines.append(
+            "**ℹ️ Attention:** Some warnings detected. Consider reviewing RECOMMENDATIONS.md.")
+    else:
+        lines.append(
+            "**✅ All Clear:** No violations detected. System performing within thresholds.")
+
+    # Write report
+    report_path = out_dir / "POST_SOAK_ANALYSIS.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+
+    print(f"[INFO] Analysis report written to: {report_path}")
+
+    return crit_count, all_violations
+
+
+def generate_recommendations_report(
+    windows_by_symbol: Dict[str, List[Dict[str, Any]]],
+    all_violations: List[Dict[str, Any]],
+    thresholds: Dict[str, float],
+    out_dir: Path
+):
+    """Generate RECOMMENDATIONS.md report."""
+    lines = [
+        "# Post-Soak Recommendations",
+        "",
+        f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC",
+        "",
+        "Этот отчёт содержит конкретные рекомендации по улучшению метрик для каждого символа.",
+        "",
+        "---",
+        ""
+    ]
+
+    for symbol in sorted(windows_by_symbol.keys()):
+        windows = windows_by_symbol[symbol]
+
+        # Extract metrics series
+        metrics_series = {
+            "edge_bps": [],
+            "maker_taker_ratio": [],
+            "p95_latency_ms": [],
+            "risk_ratio": []
+        }
+
+        for window in windows:
+            for metric_name in metrics_series.keys():
+                value = window["metrics"].get(metric_name)
+                metrics_series[metric_name].append(value)
+
+        # Get violations for this symbol
+        symbol_violations = [
+            v for v in all_violations if v["symbol"] == symbol]
+
+        # Generate recommendations
+        recommendations = generate_recommendations(
+            symbol, metrics_series, symbol_violations)
+
+        lines.append(f"## {symbol}")
+        lines.append("")
+
+        for rec in recommendations:
+            lines.append(f"{rec}")
+            lines.append("")
+
+        lines.append("---")
+    lines.append("")
+
+    # Write recommendations
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rec_path = out_dir / "RECOMMENDATIONS.md"
+    rec_path.write_text("\n".join(lines), encoding="utf-8")
+
+    print(f"[INFO] Recommendations written to: {rec_path}")
+
+
+def generate_violations_json(
+    all_violations: List[Dict[str, Any]],
+    out_dir: Path
+):
+    """Generate VIOLATIONS.json machine-readable report."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    violations_path = out_dir / "VIOLATIONS.json"
+
+    with open(violations_path, 'w', encoding='utf-8') as f:
+        json.dump(all_violations, f, indent=2, ensure_ascii=False)
+
+    print(f"[INFO] Violations JSON written to: {violations_path}")
+
 
 def main():
     """CLI entry point."""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Post-Soak Deep Report Generator")
+    parser = argparse.ArgumentParser(
+        description="Post-Soak Analyzer V2 - Trends, violations, recommendations")
+
     parser.add_argument(
-        "--path",
+        "--iter-glob",
         type=str,
-        default="artifacts/soak/latest 1/soak/latest",
-        help="Path to soak/latest directory (default: artifacts/soak/latest 1/soak/latest)"
+        required=True,
+        help="Glob pattern for ITER_SUMMARY files (e.g., 'artifacts/soak/latest/ITER_SUMMARY_*.json')"
     )
-    
+    parser.add_argument(
+        "--min-windows",
+        type=int,
+        default=48,
+        help="Minimum expected windows (default: 48)"
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=Path("reports/analysis"),
+        help="Output directory for reports (default: reports/analysis)"
+    )
+    parser.add_argument(
+        "--symbols",
+        type=str,
+        default="*",
+        help="Symbol filter (comma-separated or '*' for all, default: '*')"
+    )
+    parser.add_argument(
+        "--time-buckets",
+        type=int,
+        default=10,
+        help="Number of points for sparklines (default: 10)"
+    )
+    parser.add_argument(
+        "--warn-edge",
+        type=float,
+        default=3.0,
+        help="Warning threshold for edge_bps (default: 3.0)"
+    )
+    parser.add_argument(
+        "--crit-edge",
+        type=float,
+        default=2.5,
+        help="Critical threshold for edge_bps (default: 2.5)"
+    )
+    parser.add_argument(
+        "--warn-maker",
+        type=float,
+        default=0.75,
+        help="Warning threshold for maker_taker_ratio (default: 0.75)"
+    )
+    parser.add_argument(
+        "--crit-maker",
+        type=float,
+        default=0.70,
+        help="Critical threshold for maker_taker_ratio (default: 0.70)"
+    )
+    parser.add_argument(
+        "--warn-lat",
+        type=float,
+        default=330,
+        help="Warning threshold for p95_latency_ms (default: 330)"
+    )
+    parser.add_argument(
+        "--crit-lat",
+        type=float,
+        default=350,
+        help="Critical threshold for p95_latency_ms (default: 350)"
+    )
+    parser.add_argument(
+        "--warn-risk",
+        type=float,
+        default=0.40,
+        help="Warning threshold for risk_ratio (default: 0.40)"
+    )
+    parser.add_argument(
+        "--crit-risk",
+        type=float,
+        default=0.40,
+        help="Critical threshold for risk_ratio (default: 0.40)"
+    )
+    parser.add_argument(
+        "--exit-on-crit",
+        action="store_true",
+        help="Exit with code 1 if critical violations found"
+    )
+
     args = parser.parse_args()
-    
-    base_path = Path(args.path).resolve()
-    
-    if not base_path.exists():
-        print(f"[ERROR] Path does not exist: {base_path}", file=sys.stderr)
-        sys.exit(1)
-    
-    verdict_str, exit_code = analyze_soak(base_path)
-    
+
+    # Parse symbols filter
+    symbols_filter = None
+    if args.symbols != "*":
+        symbols_filter = [s.strip() for s in args.symbols.split(",")]
+
+    # Load windows
+    print(f"[INFO] Loading windows from: {args.iter_glob}")
+    windows_by_symbol = load_windows(args.iter_glob, symbols_filter)
+
+    if not windows_by_symbol:
+        print("[ERROR] No data loaded")
+        return 1
+
+    print(f"[INFO] Loaded {len(windows_by_symbol)} symbols")
+
+    # Build thresholds dict
+    thresholds = {
+        "warn_edge": args.warn_edge,
+        "crit_edge": args.crit_edge,
+        "warn_maker": args.warn_maker,
+        "crit_maker": args.crit_maker,
+        "warn_lat": args.warn_lat,
+        "crit_lat": args.crit_lat,
+        "warn_risk": args.warn_risk,
+        "crit_risk": args.crit_risk,
+    }
+
+    # Generate reports
+    print(f"[INFO] Generating analysis reports in: {args.out_dir}")
+
+    crit_count, all_violations = generate_analysis_report(
+        windows_by_symbol,
+        thresholds,
+        args.min_windows,
+        args.out_dir
+    )
+
+    generate_recommendations_report(
+        windows_by_symbol,
+        all_violations,
+        thresholds,
+        args.out_dir
+    )
+
+    generate_violations_json(
+        all_violations,
+        args.out_dir
+    )
+
+    # Summary
     print("")
-    print("=" * 80)
-    print(verdict_str)
-    print("=" * 80)
-    
-    sys.exit(exit_code)
+    print("=" * 60)
+    print("ANALYSIS COMPLETE")
+    print("=" * 60)
+    print(f"Total symbols: {len(windows_by_symbol)}")
+    print(f"Total violations: {len(all_violations)}")
+    print(f"Critical violations: {crit_count}")
+    print("")
+    print(f"Reports generated:")
+    print(f"  - {args.out_dir / 'POST_SOAK_ANALYSIS.md'}")
+    print(f"  - {args.out_dir / 'RECOMMENDATIONS.md'}")
+    print(f"  - {args.out_dir / 'VIOLATIONS.json'}")
+    print("=" * 60)
+
+    # Exit based on --exit-on-crit
+    if args.exit_on_crit and crit_count > 0:
+        print(
+            f"\n[EXIT] Critical violations detected ({crit_count}), exiting with code 1")
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
-
+    sys.exit(main())

@@ -818,6 +818,48 @@ jobs:
             Write-Warning "readiness.json not created"
           }
 
+      - name: Post-Soak Analyzer V2 (trends, sparklines, violations)
+        id: post-soak-analyzer
+        if: ${{ env.SOAK_ITERATIONS != '' }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "POST-SOAK ANALYZER V2"
+          Write-Host "================================================"
+          
+          $outDir = "artifacts\reports\analysis"
+          if (-not (Test-Path $outDir)) {
+            New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+          }
+          
+          & $env:PYTHON_EXE -m tools.soak.analyze_post_soak `
+            --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" `
+            --min-windows 8 `
+            --out-dir $outDir `
+            --warn-edge 2.5 --crit-edge 2.0 `
+            --warn-maker 0.80 --crit-maker 0.75 `
+            --warn-lat 350 --crit-lat 400 `
+            --warn-risk 0.45 --crit-risk 0.50
+          
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✓ Post-soak analysis completed"
+            
+            if (Test-Path "$outDir\POST_SOAK_ANALYSIS.md") {
+              Write-Host ""
+              Write-Host "=== Analysis Preview (first 30 lines) ==="
+              Get-Content "$outDir\POST_SOAK_ANALYSIS.md" | Select-Object -First 30
+            }
+            
+            if (Test-Path "$outDir\VIOLATIONS.json") {
+              Write-Host ""
+              Write-Host "=== Violations Summary ==="
+              Get-Content "$outDir\VIOLATIONS.json"
+            }
+          } else {
+            Write-Warning "Post-soak analysis returned exit code $LASTEXITCODE (non-blocking)"
+          }
+
       - name: Build PR summary (short)
         id: pr-summary
         if: ${{ env.SOAK_ITERATIONS != '' && github.event_name == 'pull_request' && github.event.pull_request.number }}
