@@ -49,7 +49,11 @@ def get_redis_client(redis_url: str) -> Optional[Any]:
         print("[WARN] redis library not installed (pip install redis)")
         return None
     except Exception as e:
-        print(f"[WARN] Could not connect to Redis: {e}")
+        # Safe error message printing (avoid Unicode issues on Windows)
+        try:
+            print(f"[WARN] Could not connect to Redis: {e}")
+        except UnicodeEncodeError:
+            print(f"[WARN] Could not connect to Redis: {type(e).__name__}")
         return None
 
 
