@@ -100,13 +100,11 @@ jobs:
       # Note: Removed hardcoded path for portability across runners
       PYTHON_EXE: ${{ github.event_name == 'workflow_dispatch' && inputs.python_path || 'python' }}
       
-      # Path configuration for module imports and artifact handling
-      PYTHONPATH: ${{ github.workspace }}
-      SOAK_ARTIFACTS_DIR: artifacts/soak/latest
-      SOAK_OUT_DIR: artifacts/soak/latest
-      
       # Smoke fallback for diagnostics (default: false)
       SMOKE_FALLBACK: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke_fallback || 'false' }}
+      
+      # Step control flags (will be set by guard steps)
+      skip_reports: 'false'
       
       # Pytest: Disable plugin autoload for predictability
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
