@@ -245,6 +245,7 @@ def main():
         python -m tools.soak.kpi_gate --weekly <path>     # Weekly rollup
         python -m tools.soak.kpi_gate --iter <path>       # Iteration summary
         python -m tools.soak.kpi_gate --test              # Self-test
+        python -m tools.soak.kpi_gate --debug             # Debug mode (show search paths)
     
     Exit codes:
         0 = PASS
@@ -258,6 +259,12 @@ def main():
     mode = None  # "weekly", "iter", "test", or auto-detect
     target_path = None
     iter_glob_pattern = None  # For --iter glob mode
+    debug = False  # Debug flag
+    
+    # Check for --debug flag (can be anywhere)
+    if "--debug" in sys.argv:
+        debug = True
+        sys.argv = [arg for arg in sys.argv if arg != "--debug"]
     
     if len(sys.argv) == 1:
         # Auto-detect mode
@@ -307,6 +314,9 @@ def main():
         import os
         import glob as glob_module
         
+        if debug:
+            print(f"[kpi_gate] DEBUG: CWD={os.getcwd()}", file=sys.stderr)
+        
         # 1) Weekly auto-detect (matches unit test expectation)
         weekly_candidates = [
             os.environ.get("SOAK_WEEKLY_FILE", ""),              # explicit override if set
@@ -314,6 +324,10 @@ def main():
             os.path.join("artifacts", "weekly", "WEEKLY_ROLLUP.json"),
         ]
         weekly_candidates = [p for p in weekly_candidates if p]
+        
+        if debug:
+            print(f"[kpi_gate] DEBUG: Weekly candidates: {weekly_candidates}", file=sys.stderr)
+        
         weekly_found = next((p for p in weekly_candidates if os.path.isfile(p)), None)
         
         if weekly_found:
@@ -329,10 +343,16 @@ def main():
                 os.path.join("artifacts", "soak", "latest", "ITER_SUMMARY_*.json"),
                 os.path.join("artifacts", "ITER_SUMMARY_*.json"),
             ]
+            
+            if debug:
+                print(f"[kpi_gate] DEBUG: Iter glob candidates: {iter_globs}", file=sys.stderr)
+            
             matched = []
             chosen_glob = None
             for g in iter_globs:
                 m = glob_module.glob(g)
+                if debug:
+                    print(f"[kpi_gate] DEBUG: Glob '{g}' matched {len(m)} files", file=sys.stderr)
                 if m:
                     matched = m
                     chosen_glob = g
@@ -344,6 +364,8 @@ def main():
                 print(f"[kpi_gate] Auto-fallback to --iter '{chosen_glob}' ({len(matched)} files)", file=sys.stderr)
             else:
                 print("[kpi_gate] No args and no default artifacts found; failing fast.", file=sys.stderr)
+                if debug:
+                    print(f"[kpi_gate] DEBUG: Searched globs: {iter_globs}", file=sys.stderr)
                 print("Usage: python -m tools.soak.kpi_gate [<path>|--weekly <path>|--iter <path>|--test]", file=sys.stderr)
                 print("No KPI file found for auto-detect mode", file=sys.stderr)
                 return 1
