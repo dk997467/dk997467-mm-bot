@@ -16,18 +16,28 @@ This guide describes the Redis export integration for soak/shadow phase KPIs, en
 
 ## Key Schema
 
-KPIs are exported to Redis with the following key structure:
+KPIs are exported to Redis with namespaced keys for multi-environment support:
 
 ```
-shadow:latest:{symbol}:{kpi}
+{env}:{exchange}:shadow:latest:{symbol}:{kpi}
 ```
 
 **Examples:**
-- `shadow:latest:BTCUSDT:edge_bps` → "3.2"
-- `shadow:latest:BTCUSDT:maker_taker_ratio` → "0.85"
-- `shadow:latest:BTCUSDT:p95_latency_ms` → "250"
-- `shadow:latest:BTCUSDT:risk_ratio` → "0.35"
-- `shadow:latest:ETHUSDT:edge_bps` → "2.9"
+- `dev:bybit:shadow:latest:BTCUSDT:edge_bps` → "3.2"
+- `prod:bybit:shadow:latest:BTCUSDT:maker_taker_ratio` → "0.85"
+- `staging:binance:shadow:latest:ETHUSDT:p95_latency_ms` → "250"
+- `dev:bybit:shadow:latest:BTCUSDT:risk_ratio` → "0.35"
+
+**Namespace Components:**
+- `env`: Environment (dev, staging, prod)
+- `exchange`: Exchange name (bybit, binance, etc.)
+- `symbol`: Trading symbol (auto-normalized to A-Z0-9 uppercase)
+
+**Symbol Normalization:**
+All symbols are automatically normalized to uppercase A-Z0-9 format:
+- `BTC-USDT` → `BTCUSDT`
+- `btc/usdt` → `BTCUSDT`
+- `BTC_USDT` → `BTCUSDT`
 
 **TTL:** 3600 seconds (1 hour) - keys automatically expire after 1 hour
 
@@ -44,16 +54,33 @@ For each symbol, the following KPIs are exported:
 
 ## Usage
 
-### Basic Export
+### Basic Export (Development)
 
-Export KPIs from soak artifacts to Redis:
+Export KPIs from soak artifacts to Redis with dev namespace:
 
 ```bash
 python -m tools.shadow.export_to_redis \
   --src artifacts/soak/latest \
   --redis-url redis://localhost:6379/0 \
+  --env dev \
+  --exchange bybit \
   --ttl 3600
 ```
+
+### Production Export with TLS
+
+Export to production Redis with TLS (rediss://) and authentication:
+
+```bash
+python -m tools.shadow.export_to_redis \
+  --src artifacts/soak/latest \
+  --redis-url rediss://username:password@prod.redis.com:6380/0 \
+  --env prod \
+  --exchange bybit \
+  --ttl 7200
+```
+
+**Note:** The `rediss://` protocol enables TLS/SSL encryption. Authentication via `username:password@` is also supported.
 
 ### Dry-Run Mode
 
@@ -63,6 +90,8 @@ Preview what would be exported without actually writing to Redis:
 python -m tools.shadow.export_to_redis \
   --src artifacts/soak/latest \
   --redis-url redis://localhost:6379/0 \
+  --env dev \
+  --exchange bybit \
   --dry-run
 ```
 
@@ -74,19 +103,40 @@ Output:
 [INFO] Aggregated KPIs for 2 symbols
   BTCUSDT: 4 KPIs
   ETHUSDT: 4 KPIs
-[DRY-RUN] Would export: shadow:latest:BTCUSDT:edge_bps = 3.2 (TTL=3600s)
-[DRY-RUN] Would export: shadow:latest:BTCUSDT:maker_taker_ratio = 0.85 (TTL=3600s)
+[INFO] Exporting KPIs to Redis (env=dev, exchange=bybit, TTL=3600s)...
+[DRY-RUN] Would export: dev:bybit:shadow:latest:BTCUSDT:edge_bps = 3.2 (TTL=3600s)
+[DRY-RUN] Would export: dev:bybit:shadow:latest:BTCUSDT:maker_taker_ratio = 0.85 (TTL=3600s)
 ...
 [DRY-RUN] Would export 8 keys
 ```
+
+### Prometheus Metrics
+
+After export, Prometheus-style metrics are displayed:
+
+```
+[SUCCESS] Exported 8 keys to Redis
+[METRICS] Prometheus-style metrics:
+  redis_export_success_total: 8
+  redis_export_fail_total: 0
+  redis_export_duration_ms: 42.15
+```
+
+**Metrics:**
+- `redis_export_success_total`: Number of successfully exported keys
+- `redis_export_fail_total`: Number of failed exports
+- `redis_export_duration_ms`: Total export duration in milliseconds
 
 ### Makefile Commands
 
 Use convenient Makefile targets:
 
 ```bash
-# Export to Redis (production)
+# Export to Redis (dev)
 make shadow-redis-export
+
+# Export to Redis (prod with TLS)
+make shadow-redis-export-prod
 
 # Dry-run preview
 make shadow-redis-export-dry
@@ -144,18 +194,25 @@ python -m tools.dryrun.run_dryrun \
 ### Inspect Exported Keys
 
 ```bash
-# List all shadow keys
-redis-cli --scan --pattern "shadow:latest:*"
+# List all shadow keys for dev environment
+redis-cli --scan --pattern "dev:bybit:shadow:latest:*"
+
+# List all shadow keys for prod environment
+redis-cli --scan --pattern "prod:*:shadow:latest:*"
 
 # Get specific KPI value
-redis-cli GET shadow:latest:BTCUSDT:edge_bps
+redis-cli GET dev:bybit:shadow:latest:BTCUSDT:edge_bps
 
 # Check TTL (time remaining before expiry)
-redis-cli TTL shadow:latest:BTCUSDT:edge_bps
+redis-cli TTL dev:bybit:shadow:latest:BTCUSDT:edge_bps
 # Returns seconds remaining, or -1 if no TTL, or -2 if key doesn't exist
 
-# Get all KPIs for a symbol
-redis-cli --scan --pattern "shadow:latest:BTCUSDT:*" | xargs redis-cli MGET
+# Get all KPIs for a symbol in dev
+redis-cli --scan --pattern "dev:bybit:shadow:latest:BTCUSDT:*" | xargs redis-cli MGET
+
+# Count keys by environment
+redis-cli --scan --pattern "dev:*:shadow:latest:*" | wc -l
+redis-cli --scan --pattern "prod:*:shadow:latest:*" | wc -l
 ```
 
 ### Manual Cleanup
@@ -163,8 +220,14 @@ redis-cli --scan --pattern "shadow:latest:BTCUSDT:*" | xargs redis-cli MGET
 Keys auto-expire after TTL (3600s = 1 hour), but you can manually clean up:
 
 ```bash
-# Delete all shadow keys
-redis-cli --scan --pattern "shadow:latest:*" | xargs redis-cli DEL
+# Delete all shadow keys for dev environment
+redis-cli --scan --pattern "dev:*:shadow:latest:*" | xargs redis-cli DEL
+
+# Delete all shadow keys for specific exchange in prod
+redis-cli --scan --pattern "prod:bybit:shadow:latest:*" | xargs redis-cli DEL
+
+# Delete all shadow keys (all environments)
+redis-cli --scan --pattern "*:*:shadow:latest:*" | xargs redis-cli DEL
 
 # Or flush entire database (⚠️ DANGEROUS - deletes everything)
 redis-cli FLUSHDB
@@ -291,7 +354,17 @@ Options:
                        (default: artifacts/soak/latest)
   
   --redis-url URL      Redis connection URL
+                       Supports: redis://, rediss:// (TLS), authentication
                        (default: redis://localhost:6379/0)
+                       Examples:
+                         redis://localhost:6379/0
+                         rediss://user:pass@host:6380/0
+  
+  --env ENV            Environment namespace (dev, staging, prod)
+                       (default: dev)
+  
+  --exchange EXCHANGE  Exchange namespace (bybit, binance, etc.)
+                       (default: bybit)
   
   --ttl SECONDS        TTL for Redis keys in seconds
                        (default: 3600 = 1 hour)
@@ -307,7 +380,10 @@ from tools.shadow.export_to_redis import (
     load_iter_summaries,
     aggregate_kpis,
     export_to_redis,
-    get_redis_client
+    get_redis_client,
+    normalize_symbol,
+    build_redis_key,
+    METRICS
 )
 
 # Load summaries
@@ -317,14 +393,43 @@ summaries = load_iter_summaries(Path("artifacts/soak/latest"))
 kpis = aggregate_kpis(summaries)
 # Returns: {"BTCUSDT": {"edge_bps": 3.2, ...}, ...}
 
-# Get Redis client
-client = get_redis_client("redis://localhost:6379/0")
+# Normalize symbol
+normalized = normalize_symbol("BTC-USDT")  # Returns: "BTCUSDT"
 
-# Export
-exported_count = export_to_redis(kpis, client, ttl=3600)
+# Build namespaced key
+key = build_redis_key("prod", "bybit", "BTCUSDT", "edge_bps")
+# Returns: "prod:bybit:shadow:latest:BTCUSDT:edge_bps"
+
+# Get Redis client (supports TLS and auth)
+client = get_redis_client("rediss://user:pass@prod.redis.com:6380/0")
+
+# Export with namespacing
+exported_count = export_to_redis(
+    kpis,
+    client,
+    env="prod",
+    exchange="bybit",
+    ttl=3600
+)
+
+# Access Prometheus metrics
+print(f"Exported: {METRICS['redis_export_success_total']}")
+print(f"Failed: {METRICS['redis_export_fail_total']}")
+print(f"Duration: {METRICS['redis_export_duration_ms']:.2f}ms")
 ```
 
 ## Changelog
+
+### v1.1.0 (2025-01-21)
+- **Breaking:** Changed key schema to namespaced format `{env}:{exchange}:shadow:latest:{symbol}:{kpi}`
+- Added `--env` parameter for environment namespacing (dev, staging, prod)
+- Added `--exchange` parameter for exchange namespacing
+- Added automatic symbol normalization to A-Z0-9 uppercase format
+- Added TLS/SSL support via `rediss://` protocol
+- Added authentication support in Redis URL (`username:password@host`)
+- Added Prometheus-style metrics (success_total, fail_total, duration_ms)
+- Added socket timeout (5s) for Redis connections
+- Enhanced test coverage: namespacing, auth, TLS, normalization
 
 ### v1.0.0 (2025-01-21)
 - Initial release

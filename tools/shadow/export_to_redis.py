@@ -6,37 +6,116 @@ This module exports KPI metrics from soak/shadow phase to Redis,
 enabling real-time comparison and validation workflows.
 
 Key Schema:
-    shadow:latest:{symbol}:{kpi}
-    Example: shadow:latest:BTCUSDT:edge_bps
+    {env}:{exchange}:shadow:latest:{symbol}:{kpi}
+    Example: dev:bybit:shadow:latest:BTCUSDT:edge_bps
 
 TTL: 3600 seconds (1 hour)
 
 Usage:
     python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url redis://localhost:6379/0
-    python -m tools.shadow.export_to_redis --src artifacts/soak/latest  # Uses default Redis URL
+    python -m tools.shadow.export_to_redis --src artifacts/soak/latest --env prod --exchange bybit
+    python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url rediss://user:pass@host:6380/0
 """
 
 import argparse
 import json
 import sys
+import time
+import re
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import warnings
+
+
+# Prometheus-style metrics counters
+METRICS = {
+    "redis_export_success_total": 0,
+    "redis_export_fail_total": 0,
+    "redis_export_duration_ms": 0.0,
+}
+
+
+def normalize_symbol(symbol: str) -> str:
+    """
+    Normalize symbol to A-Z0-9 only (uppercase, no separators).
+    
+    Args:
+        symbol: Raw symbol string (e.g., "BTC-USDT", "btc/usdt", "BTCUSDT")
+        
+    Returns:
+        Normalized symbol (e.g., "BTCUSDT")
+        
+    Examples:
+        >>> normalize_symbol("BTC-USDT")
+        'BTCUSDT'
+        >>> normalize_symbol("btc/usdt")
+        'BTCUSDT'
+        >>> normalize_symbol("BTC_USDT")
+        'BTCUSDT'
+    """
+    # Remove non-alphanumeric characters and convert to uppercase
+    normalized = re.sub(r'[^A-Z0-9]', '', symbol.upper())
+    return normalized
+
+
+def build_redis_key(
+    env: str,
+    exchange: str,
+    symbol: str,
+    kpi: str
+) -> str:
+    """
+    Build namespaced Redis key.
+    
+    Args:
+        env: Environment (dev, staging, prod)
+        exchange: Exchange name (bybit, binance, etc.)
+        symbol: Trading symbol (will be normalized)
+        kpi: KPI name
+        
+    Returns:
+        Namespaced key: {env}:{exchange}:shadow:latest:{symbol}:{kpi}
+        
+    Examples:
+        >>> build_redis_key("dev", "bybit", "BTCUSDT", "edge_bps")
+        'dev:bybit:shadow:latest:BTCUSDT:edge_bps'
+        >>> build_redis_key("prod", "binance", "BTC-USDT", "maker_ratio")
+        'prod:binance:shadow:latest:BTCUSDT:maker_ratio'
+    """
+    normalized_symbol = normalize_symbol(symbol)
+    return f"{env}:{exchange}:shadow:latest:{normalized_symbol}:{kpi}"
 
 
 def get_redis_client(redis_url: str) -> Optional[Any]:
     """
     Get Redis client with graceful fallback.
     
+    Supports:
+    - redis:// - standard unencrypted connection
+    - rediss:// - TLS/SSL encrypted connection
+    - Authentication: redis://username:password@host:port/db
+    
     Args:
         redis_url: Redis connection URL
         
     Returns:
         Redis client or None if unavailable
+        
+    Examples:
+        >>> get_redis_client("redis://localhost:6379/0")
+        <Redis client>
+        >>> get_redis_client("rediss://user:pass@prod.redis.com:6380/0")
+        <Redis client with TLS>
     """
     try:
         import redis
-        client = redis.from_url(redis_url, decode_responses=True)
+        # from_url automatically handles redis:// vs rediss:// and auth
+        client = redis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_timeout=5,
+            socket_connect_timeout=5
+        )
         # Test connection
         client.ping()
         return client
@@ -130,15 +209,19 @@ def aggregate_kpis(summaries: List[Dict[str, Any]]) -> Dict[str, Dict[str, float
 def export_to_redis(
     kpis: Dict[str, Dict[str, float]],
     redis_client: Optional[Any],
+    env: str = "dev",
+    exchange: str = "bybit",
     ttl: int = 3600,
     dry_run: bool = False
 ) -> int:
     """
-    Export KPIs to Redis with TTL.
+    Export KPIs to Redis with TTL and namespacing.
     
     Args:
         kpis: Dict mapping symbol to KPI values
         redis_client: Redis client (or None for dry-run)
+        env: Environment namespace (dev, staging, prod)
+        exchange: Exchange namespace (bybit, binance, etc.)
         ttl: Time-to-live in seconds (default: 3600 = 1 hour)
         dry_run: If True, only print what would be exported
         
@@ -149,11 +232,13 @@ def export_to_redis(
         print("[WARN] No KPIs to export")
         return 0
     
+    start_time = time.time()
     exported_count = 0
+    failed_count = 0
     
     for symbol, symbol_kpis in kpis.items():
         for kpi_name, kpi_value in symbol_kpis.items():
-            key = f"shadow:latest:{symbol}:{kpi_name}"
+            key = build_redis_key(env, exchange, symbol, kpi_name)
             value = str(kpi_value)
             
             if dry_run or redis_client is None:
@@ -163,8 +248,14 @@ def export_to_redis(
                     redis_client.setex(key, ttl, value)
                     print(f"[EXPORT] {key} = {value} (TTL={ttl}s)")
                     exported_count += 1
+                    METRICS["redis_export_success_total"] += 1
                 except Exception as e:
                     print(f"[ERROR] Failed to export {key}: {e}")
+                    failed_count += 1
+                    METRICS["redis_export_fail_total"] += 1
+    
+    duration_ms = (time.time() - start_time) * 1000
+    METRICS["redis_export_duration_ms"] = duration_ms
     
     return exported_count
 
@@ -191,6 +282,19 @@ def main():
         type=int,
         default=3600,
         help="TTL for Redis keys in seconds (default: 3600 = 1 hour)"
+    )
+    parser.add_argument(
+        "--env",
+        type=str,
+        default="dev",
+        choices=["dev", "staging", "prod"],
+        help="Environment namespace (default: dev)"
+    )
+    parser.add_argument(
+        "--exchange",
+        type=str,
+        default="bybit",
+        help="Exchange namespace (default: bybit)"
     )
     parser.add_argument(
         "--dry-run",
@@ -236,14 +340,25 @@ def main():
             args.dry_run = True
     
     # Export to Redis
-    print(f"[INFO] Exporting KPIs to Redis (TTL={args.ttl}s)...")
-    exported_count = export_to_redis(kpis, redis_client, args.ttl, args.dry_run)
+    print(f"[INFO] Exporting KPIs to Redis (env={args.env}, exchange={args.exchange}, TTL={args.ttl}s)...")
+    exported_count = export_to_redis(
+        kpis,
+        redis_client,
+        env=args.env,
+        exchange=args.exchange,
+        ttl=args.ttl,
+        dry_run=args.dry_run
+    )
     
     if args.dry_run:
         total_keys = sum(len(v) for v in kpis.values())
         print(f"[DRY-RUN] Would export {total_keys} keys")
     else:
         print(f"[SUCCESS] Exported {exported_count} keys to Redis")
+        print(f"[METRICS] Prometheus-style metrics:")
+        print(f"  redis_export_success_total: {METRICS['redis_export_success_total']}")
+        print(f"  redis_export_fail_total: {METRICS['redis_export_fail_total']}")
+        print(f"  redis_export_duration_ms: {METRICS['redis_export_duration_ms']:.2f}")
     
     return 0
 
