@@ -208,6 +208,17 @@ shadow-redis-export-dry:
 shadow-redis-export-legacy:
 	python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url redis://localhost:6379/0 --env dev --exchange bybit --flat-keys --batch-size 50 --ttl 3600
 
+.PHONY: redis-smoke redis-smoke-prod redis-smoke-flat
+
+redis-smoke:
+	python -m tools.shadow.redis_smoke_check --src artifacts/soak/latest --env dev --exchange bybit --batch-size 100 --sample-keys 10 --redis-url redis://localhost:6379/0
+
+redis-smoke-prod:
+	python -m tools.shadow.redis_smoke_check --src artifacts/soak/latest --env prod --exchange bybit --batch-size 100 --sample-keys 10 --redis-url rediss://user:pass@redis.prod:6379/0
+
+redis-smoke-flat:
+	python -m tools.shadow.redis_smoke_check --src artifacts/soak/latest --env dev --exchange bybit --batch-size 100 --sample-keys 10 --do-flat-backfill --redis-url redis://localhost:6379/0
+
 .PHONY: dryrun dryrun-validate
 
 dryrun:

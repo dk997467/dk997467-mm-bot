@@ -1,0 +1,339 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "redis-export-monitoring",
+    "title": "Redis Export Monitoring",
+    "description": "Performance and health monitoring for Redis KPI export operations",
+    "tags": ["redis", "export", "performance"],
+    "timezone": "browser",
+    "schemaVersion": 30,
+    "version": 1,
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timepicker": {},
+    "templating": {
+      "list": [
+        {
+          "name": "env",
+          "type": "custom",
+          "label": "Environment",
+          "query": "dev,staging,prod",
+          "current": {
+            "text": "dev",
+            "value": "dev"
+          },
+          "options": [
+            {"text": "dev", "value": "dev"},
+            {"text": "staging", "value": "staging"},
+            {"text": "prod", "value": "prod"}
+          ],
+          "multi": false,
+          "includeAll": false
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "type": "graph",
+        "title": "Export Batches per Second",
+        "gridPos": {
+          "x": 0,
+          "y": 0,
+          "w": 12,
+          "h": 8
+        },
+        "targets": [
+          {
+            "expr": "rate(redis_export_batches_total[5m])",
+            "legendFormat": "Batches/sec",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "label": "Batches/sec",
+            "format": "short"
+          },
+          {
+            "show": false
+          }
+        ],
+        "xaxis": {
+          "show": true,
+          "mode": "time"
+        },
+        "lines": true,
+        "fill": 1,
+        "linewidth": 2,
+        "pointradius": 2,
+        "points": false,
+        "legend": {
+          "show": true,
+          "alignAsTable": true,
+          "avg": true,
+          "current": true,
+          "max": true,
+          "min": true
+        },
+        "tooltip": {
+          "shared": true,
+          "value_type": "individual"
+        },
+        "nullPointMode": "null"
+      },
+      {
+        "id": 2,
+        "type": "graph",
+        "title": "Average Batch Duration (ms)",
+        "gridPos": {
+          "x": 12,
+          "y": 0,
+          "w": 12,
+          "h": 8
+        },
+        "targets": [
+          {
+            "expr": "rate(redis_export_batch_duration_ms[5m]) / rate(redis_export_batches_total[5m])",
+            "legendFormat": "Avg duration",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "label": "Milliseconds",
+            "format": "ms"
+          },
+          {
+            "show": false
+          }
+        ],
+        "xaxis": {
+          "show": true,
+          "mode": "time"
+        },
+        "lines": true,
+        "fill": 1,
+        "linewidth": 2,
+        "pointradius": 2,
+        "points": false,
+        "legend": {
+          "show": true,
+          "alignAsTable": true,
+          "avg": true,
+          "current": true,
+          "max": true,
+          "min": true
+        },
+        "tooltip": {
+          "shared": true,
+          "value_type": "individual"
+        },
+        "nullPointMode": "null",
+        "thresholds": [
+          {
+            "value": 100,
+            "colorMode": "critical",
+            "op": "gt",
+            "fill": true,
+            "line": true
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "type": "graph",
+        "title": "Keys Written per Minute",
+        "gridPos": {
+          "x": 0,
+          "y": 8,
+          "w": 12,
+          "h": 8
+        },
+        "targets": [
+          {
+            "expr": "increase(redis_export_keys_written_total[1m])",
+            "legendFormat": "Keys/min",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "label": "Keys/min",
+            "format": "short"
+          },
+          {
+            "show": false
+          }
+        ],
+        "xaxis": {
+          "show": true,
+          "mode": "time"
+        },
+        "lines": true,
+        "fill": 1,
+        "linewidth": 2,
+        "pointradius": 2,
+        "points": false,
+        "bars": false,
+        "legend": {
+          "show": true,
+          "alignAsTable": true,
+          "avg": true,
+          "current": true,
+          "max": true,
+          "min": true
+        },
+        "tooltip": {
+          "shared": true,
+          "value_type": "individual"
+        },
+        "nullPointMode": "null"
+      },
+      {
+        "id": 4,
+        "type": "stat",
+        "title": "Export Success Rate",
+        "gridPos": {
+          "x": 12,
+          "y": 8,
+          "w": 6,
+          "h": 8
+        },
+        "targets": [
+          {
+            "expr": "rate(redis_export_success_total[5m]) / (rate(redis_export_success_total[5m]) + rate(redis_export_fail_total[5m])) * 100",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "background",
+          "justifyMode": "center",
+          "orientation": "auto",
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"]
+          },
+          "textMode": "value_and_name"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "decimals": 2,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": null, "color": "red"},
+                {"value": 90, "color": "yellow"},
+                {"value": 99, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "type": "stat",
+        "title": "Failed Batches (last 5m)",
+        "gridPos": {
+          "x": 18,
+          "y": 8,
+          "w": 6,
+          "h": 8
+        },
+        "targets": [
+          {
+            "expr": "increase(redis_export_batches_failed_total[5m])",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "background",
+          "justifyMode": "center",
+          "orientation": "auto",
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"]
+          },
+          "textMode": "value_and_name"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "decimals": 0,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": null, "color": "green"},
+                {"value": 1, "color": "yellow"},
+                {"value": 5, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 6,
+        "type": "table",
+        "title": "Export Metrics Summary",
+        "gridPos": {
+          "x": 0,
+          "y": 16,
+          "w": 24,
+          "h": 6
+        },
+        "targets": [
+          {
+            "expr": "redis_export_success_total",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "Success Total",
+            "refId": "A"
+          },
+          {
+            "expr": "redis_export_fail_total",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "Fail Total",
+            "refId": "B"
+          },
+          {
+            "expr": "redis_export_batches_total",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "Batches Total",
+            "refId": "C"
+          },
+          {
+            "expr": "redis_export_keys_written_total",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "Keys Written",
+            "refId": "D"
+          }
+        ],
+        "options": {
+          "showHeader": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "left",
+              "displayMode": "auto"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "overwrite": true,
+  "message": "Redis Export Monitoring Dashboard v1.0",
+  "folderId": 0,
+  "folderUid": ""
+}
+

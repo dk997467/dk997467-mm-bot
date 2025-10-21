@@ -1,0 +1,121 @@
+# Prometheus Alert Rules for Redis Export
+#
+# These rules monitor the health and performance of Redis export operations.
+# Load into Prometheus via alerting.rules configuration.
+#
+# Metrics:
+#   - redis_export_batches_total
+#   - redis_export_batches_failed_total
+#   - redis_export_keys_written_total
+#   - redis_export_batch_duration_ms
+#
+# Usage:
+#   1. Add to prometheus.yml:
+#      rule_files:
+#        - "ops/alerts/redis_export_rules.yml"
+#   2. Reload Prometheus: curl -X POST http://localhost:9090/-/reload
+
+groups:
+  - name: redis-export
+    interval: 30s
+    rules:
+      # Critical: Batches are failing
+      - alert: RedisExportBatchesFailed
+        expr: increase(redis_export_batches_failed_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+          component: redis-export
+        annotations:
+          summary: "Redis export batches failing"
+          description: >
+            Some Redis export batches have failed in the last 5 minutes.
+            This indicates connectivity issues or data problems.
+            Current failed batches: {{ $value }}
+          runbook_url: "https://internal-wiki/runbooks/redis-export-failures"
+
+      # Warning: No export activity
+      - alert: RedisExportNoBatches
+        expr: increase(redis_export_batches_total[10m]) == 0
+        for: 10m
+        labels:
+          severity: warning
+          component: redis-export
+        annotations:
+          summary: "No Redis export activity"
+          description: >
+            No Redis export batches have been executed in the last 10 minutes.
+            This may indicate that the export job is not running or stuck.
+          runbook_url: "https://internal-wiki/runbooks/redis-export-no-activity"
+
+      # Warning: Slow batch performance
+      - alert: RedisExportSlowBatches
+        expr: |
+          (
+            rate(redis_export_batch_duration_ms[5m])
+            /
+            rate(redis_export_batches_total[5m])
+          ) > 100
+        for: 5m
+        labels:
+          severity: warning
+          component: redis-export
+        annotations:
+          summary: "Redis export batches are slow"
+          description: >
+            Average batch duration is greater than 100ms over the last 5 minutes.
+            Current average: {{ $value | humanizeDuration }}
+            This may indicate Redis performance degradation or network latency.
+          runbook_url: "https://internal-wiki/runbooks/redis-export-slow-batches"
+
+      # Warning: No keys being written
+      - alert: RedisExportKeysWrittenDrop
+        expr: increase(redis_export_keys_written_total[15m]) == 0
+        for: 15m
+        labels:
+          severity: warning
+          component: redis-export
+        annotations:
+          summary: "No keys written to Redis"
+          description: >
+            No keys have been written to Redis in the last 15 minutes.
+            This may indicate:
+            - No data to export (check source directory)
+            - Export job not running
+            - Redis connection issues
+          runbook_url: "https://internal-wiki/runbooks/redis-export-no-keys"
+
+      # Info: High throughput (informational)
+      - alert: RedisExportHighThroughput
+        expr: rate(redis_export_keys_written_total[5m]) > 1000
+        for: 5m
+        labels:
+          severity: info
+          component: redis-export
+        annotations:
+          summary: "Redis export high throughput"
+          description: >
+            Redis export is processing more than 1000 keys per 5 minutes.
+            Current rate: {{ $value | humanize }} keys/min
+            This is informational and may be expected during bulk exports.
+
+      # Critical: Export failure rate too high
+      - alert: RedisExportHighFailureRate
+        expr: |
+          (
+            rate(redis_export_fail_total[5m])
+            /
+            (rate(redis_export_success_total[5m]) + rate(redis_export_fail_total[5m]))
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          component: redis-export
+        annotations:
+          summary: "Redis export failure rate too high"
+          description: >
+            More than 10% of Redis export operations are failing.
+            Failure rate: {{ $value | humanizePercentage }}
+            Check Redis connectivity and data integrity.
+          runbook_url: "https://internal-wiki/runbooks/redis-export-high-failure-rate"
+

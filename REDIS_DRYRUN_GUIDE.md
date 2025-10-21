@@ -565,6 +565,220 @@ print(f"Duration: {METRICS['redis_export_duration_ms']:.2f}ms")
 print(f"Mode: {METRICS['redis_export_mode']}")
 ```
 
+## Load Test & Observability
+
+### Smoke Check
+
+The `redis_smoke_check.py` script performs comprehensive load testing and validation:
+
+**Basic smoke test:**
+```bash
+make redis-smoke
+```
+
+This will:
+1. Export KPIs to Redis (hash mode, batch_size=100)
+2. Scan and verify hash keys (TTL, field presence)
+3. Generate `artifacts/reports/analysis/REDIS_SMOKE_REPORT.md`
+
+**Output:**
+```
+[SMOKE] Export completed in 142.35ms
+[SMOKE] Found 2 keys
+[SMOKE] Verification: PASS
+[SMOKE] Passed: 10/10
+
+VERDICT: PASS
+```
+
+**With flat mode cross-verification:**
+```bash
+make redis-smoke-flat
+```
+
+This additionally:
+- Runs flat mode backfill to separate namespace
+- Cross-verifies values between hash and flat modes
+- Reports matches/mismatches
+
+**Production smoke test:**
+```bash
+make redis-smoke-prod
+# Or manually:
+python -m tools.shadow.redis_smoke_check \
+  --src artifacts/soak/latest \
+  --env prod \
+  --exchange bybit \
+  --batch-size 100 \
+  --sample-keys 10 \
+  --redis-url rediss://user:pass@redis.prod:6379/0
+```
+
+### Interpreting REDIS_SMOKE_REPORT.md
+
+The report includes:
+
+**Verdict Section:**
+- **PASS**: All checks passed
+- **WARN**: Minor issues (e.g., flat mode mismatches)
+- **FAIL**: Critical issues (no keys exported, TTL problems)
+
+**Export Performance:**
+- Wall time < 200ms for 100 keys: Excellent
+- Wall time 200-500ms: Good
+- Wall time > 500ms: Investigate Redis latency
+
+**Hash Verification:**
+- All sampled keys should have TTL > 0
+- All keys should have 4 fields (edge_bps, maker_taker_ratio, p95_latency_ms, risk_ratio)
+
+**Flat Cross-Verification:**
+- Matches should be 100% if both modes export same data
+- Mismatches indicate potential data inconsistency
+
+### Prometheus Alerts
+
+Alert rules are defined in `ops/alerts/redis_export_rules.yml`.
+
+**Loading alerts into Prometheus:**
+
+1. Add to `prometheus.yml`:
+   ```yaml
+   rule_files:
+     - "ops/alerts/redis_export_rules.yml"
+   ```
+
+2. Reload Prometheus:
+   ```bash
+   curl -X POST http://localhost:9090/-/reload
+   ```
+
+3. Verify alerts loaded:
+   ```bash
+   curl http://localhost:9090/api/v1/rules | jq '.data.groups[] | select(.name=="redis-export")'
+   ```
+
+**Alert Definitions:**
+
+| Alert | Severity | Condition | Duration |
+|-------|----------|-----------|----------|
+| `RedisExportBatchesFailed` | Critical | Batches failing | 2m |
+| `RedisExportNoBatches` | Warning | No activity | 10m |
+| `RedisExportSlowBatches` | Warning | Avg duration > 100ms | 5m |
+| `RedisExportKeysWrittenDrop` | Warning | No keys written | 15m |
+| `RedisExportHighFailureRate` | Critical | Failure rate > 10% | 5m |
+
+**Testing alerts (dev):**
+
+```bash
+# Trigger slow batch alert
+python -m tools.shadow.export_to_redis --batch-size 1  # Force small batches
+
+# Trigger no activity alert
+# Stop export jobs for 10+ minutes
+
+# Trigger failure alert
+python -m tools.shadow.export_to_redis --redis-url redis://invalid:6379/0  # Bad URL
+```
+
+### Grafana Dashboard
+
+Visual monitoring dashboard at `ops/grafana/redis_export_dashboard.json`.
+
+**Import via UI:**
+
+1. Open Grafana: http://localhost:3000
+2. **Dashboards → Import**
+3. Upload `ops/grafana/redis_export_dashboard.json`
+4. Click **Import**
+
+**Import via API:**
+
+```bash
+GRAFANA_API_KEY="your-api-key"
+
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $GRAFANA_API_KEY" \
+  -d @ops/grafana/redis_export_dashboard.json \
+  http://localhost:3000/api/dashboards/db
+```
+
+**Dashboard Panels:**
+
+1. **Export Batches/sec** - Throughput indicator
+2. **Avg Batch Duration** - Performance (threshold: 100ms)
+3. **Keys Written/min** - Data flow rate
+4. **Success Rate** - Health (target: > 99%)
+5. **Failed Batches** - Alert indicator
+6. **Metrics Summary** - Current totals
+
+**Expected Values (Healthy System):**
+
+- Batches/sec: 0.1 - 10 (depends on export frequency)
+- Avg batch duration: 10-50ms (< 100ms threshold)
+- Keys written/min: 10-1000+ (depends on symbol count)
+- Success rate: 100%
+- Failed batches: 0
+
+**Troubleshooting:**
+
+| Issue | Possible Cause | Action |
+|-------|---------------|--------|
+| No data in dashboard | Metrics not exported | Check Prometheus scrape config |
+| High batch duration | Redis latency | Check Redis `INFO latency` |
+| Low success rate | Network/auth issues | Check Redis logs |
+| No keys written | Empty source data | Check `artifacts/soak/latest/` |
+
+**Provisioning (Production):**
+
+Add to Grafana provisioning:
+
+```yaml
+# /etc/grafana/provisioning/dashboards/redis-export.yaml
+apiVersion: 1
+providers:
+  - name: 'Redis Export'
+    folder: 'Monitoring'
+    type: file
+    options:
+      path: /path/to/mm-bot/ops/grafana
+```
+
+Restart Grafana to load dashboard automatically.
+
+### Continuous Monitoring
+
+**Recommended setup:**
+
+1. **Prometheus**: Scrape metrics every 15s
+2. **Alerts**: Configure Alertmanager with Slack/email
+3. **Grafana**: Dashboard on monitoring wall screen
+4. **Smoke checks**: Run via cron every 4 hours
+
+**Example cron:**
+
+```cron
+# Redis export smoke check
+0 */4 * * * cd /opt/mm-bot && make redis-smoke >> /var/log/redis-smoke.log 2>&1
+```
+
+**CI Integration:**
+
+Add to GitHub Actions:
+
+```yaml
+- name: Redis smoke check
+  run: |
+    make redis-smoke
+    
+- name: Upload smoke report
+  uses: actions/upload-artifact@v4
+  with:
+    name: redis-smoke-report
+    path: artifacts/reports/analysis/REDIS_SMOKE_REPORT.md
+```
+
 ## Changelog
 
 ### v1.2.0 (2025-01-21) - Performance & Pipeline Edition
