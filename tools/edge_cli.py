@@ -40,8 +40,8 @@ def main(argv=None):
     import os
     
     # Deterministic time for tests
-    if os.environ.get('MM_FREEZE_UTC') == '1':
-        utc_iso = "1970-01-01T00:00:00Z"
+    if os.environ.get('MM_FREEZE_UTC') == '1' or os.environ.get('MM_FREEZE_UTC_ISO'):
+        utc_iso = os.environ.get('MM_FREEZE_UTC_ISO', "1970-01-01T00:00:00Z")
     else:
         utc_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     
@@ -54,11 +54,30 @@ def main(argv=None):
         "total": _calc_totals(symbols_data)
     }
     
-    # Write output
+    # Write JSON output
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    with open(args.out, 'w', encoding='utf-8') as f:
+    with open(args.out, 'w', encoding='utf-8', newline='') as f:
         json.dump(report, f, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         f.write('\n')
+    
+    # Write MD output (for E2E test)
+    md_out = Path(args.out).with_suffix('.md')
+    with open(md_out, 'w', encoding='utf-8', newline='') as f:
+        f.write("# Edge Audit Report\n\n")
+        f.write(f"**Runtime:** {report['runtime']['utc']}\n\n")
+        
+        f.write("## Symbols\n\n")
+        f.write("| Symbol | Net BPS | Fills | Turnover USD |\n")
+        f.write("|--------|---------|-------|-------------|\n")
+        for sym, data in sorted(report['symbols'].items()):
+            f.write(f"| {sym} | {data.get('net_bps', 0):.2f} | {data.get('fills', 0):.0f} | {data.get('turnover_usd', 0):.2f} |\n")
+        
+        f.write("\n## Total\n\n")
+        tot = report['total']
+        f.write(f"- **Net BPS:** {tot.get('net_bps', 0):.2f}\n")
+        f.write(f"- **Fills:** {tot.get('fills', 0):.0f}\n")
+        f.write(f"- **Turnover USD:** {tot.get('turnover_usd', 0):.2f}\n")
+        f.write("\n")
     
     return 0
 
