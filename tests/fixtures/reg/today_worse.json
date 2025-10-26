@@ -1,1 +1,1 @@
-{"edge_net_bps": 2.0, "order_age_p95_ms": 400.0, "taker_share_pct": 15.0}
+{"edge_net_bps": 2.0, "order_age_p95_ms": 400.0, "taker_share_pct": 15.0, "fill_rate": 0.55, "pos_skew_abs_p95": 0.25}
