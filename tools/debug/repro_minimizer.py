@@ -21,7 +21,11 @@ def _write_jsonl_atomic(path: str, lines: list[str]) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="ascii")
+    # Use newline='' to prevent \r\n on Windows
+    with open(tmp, 'w', encoding='ascii', newline='') as f:
+        f.write("\n".join(lines))
+        if lines:
+            f.write("\n")
     tmp.replace(p)
 
 
