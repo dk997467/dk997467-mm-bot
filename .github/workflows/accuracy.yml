@@ -19,6 +19,11 @@ on:
         required: false
         default: '0.15'
         type: string
+      sanity_mode:
+        description: 'Run sanity check only (edge cases + formatting)'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: accuracy-${{ github.ref }}
@@ -126,6 +131,7 @@ jobs:
           ls -lah artifacts/dryrun/latest/ITER_SUMMARY_*.json | head -5
       
       - name: Run Accuracy Comparison
+        if: ${{ github.event.inputs.sanity_mode != 'true' }}
         id: accuracy_compare
         continue-on-error: true
         shell: bash
@@ -155,6 +161,36 @@ jobs:
           echo "Accuracy comparison exit code: $EXIT_CODE"
           echo "  0 = PASS, 1 = FAIL, 2 = WARN"
       
+      - name: Run Sanity Check
+        if: ${{ github.event.inputs.sanity_mode == 'true' }}
+        id: sanity_check
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "ACCURACY GATE: Sanity Check Mode"
+          echo "================================================"
+          
+          MIN_WINDOWS="${{ github.event.inputs.min_windows || '24' }}"
+          MAPE_THRESHOLD="${{ github.event.inputs.mape_threshold || '0.15' }}"
+          
+          python -m tools.accuracy.sanity_check \
+            --shadow-glob "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+            --dryrun-glob "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+            --min-windows "$MIN_WINDOWS" \
+            --max-age-min 120 \
+            --mape-threshold "$MAPE_THRESHOLD" \
+            --median-delta-bps 1.5 \
+            --report-dir reports/analysis \
+            --verbose
+          
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          
+          echo ""
+          echo "Sanity check exit code: $EXIT_CODE"
+          echo "  0 = PASS (all scenarios OK), 1 = ATTENTION (some failed)"
+      
       - name: Display Accuracy Report
         if: always()
         shell: bash
@@ -179,6 +215,20 @@ jobs:
           else
             echo "❌ ACCURACY_SUMMARY.json not found"
           fi
+          
+          # Display sanity report if in sanity mode
+          if [ "${{ github.event.inputs.sanity_mode }}" = "true" ]; then
+            echo ""
+            echo "================================================"
+            echo "SANITY CHECK REPORT"
+            echo "================================================"
+            
+            if [ -f reports/analysis/ACCURACY_SANITY.md ]; then
+              cat reports/analysis/ACCURACY_SANITY.md
+            else
+              echo "❌ ACCURACY_SANITY.md not found"
+            fi
+          fi
       
       - name: Upload Accuracy Artifacts
         if: always()
@@ -188,6 +238,7 @@ jobs:
           path: |
             reports/analysis/ACCURACY_*.md
             reports/analysis/ACCURACY_*.json
+            reports/analysis/sanity_*/**
             artifacts/shadow/latest/ITER_SUMMARY_*.json
             artifacts/dryrun/latest/ITER_SUMMARY_*.json
           if-no-files-found: warn
@@ -200,54 +251,94 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const summaryPath = 'reports/analysis/ACCURACY_SUMMARY.json';
-            
-            if (!fs.existsSync(summaryPath)) {
-              console.log('ACCURACY_SUMMARY.json not found, skipping comment');
-              return;
-            }
-            
-            const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
-            const verdict = summary.verdict || 'UNKNOWN';
-            const badge = verdict === 'PASS' ? '✅' : (verdict === 'WARN' ? '🟡' : '🔴');
-            const thresholds = summary.thresholds || {};
-            
-            // Build symbol table
-            let table = `| Symbol | KPI | MAPE (%) | Median Δ | Status |\n|--------|-----|----------|----------|--------|\n`;
-            
-            for (const [sym, kpis] of Object.entries(summary.symbols || {})) {
-              for (const [kpi, metrics] of Object.entries(kpis)) {
-                const mape = metrics.mape_pct ?? 'n/a';
-                const delta = metrics.median_delta ?? 'n/a';
-                const status = metrics.status || 'OK';
-                const statusBadge = status === 'OK' ? '✅' : (status === 'WARN' ? '🟡' : '🔴');
-                
-                table += `| ${sym} | ${kpi} | ${mape} | ${delta} | ${statusBadge} ${status} |\n`;
-              }
-            }
+            const sanityMode = '${{ github.event.inputs.sanity_mode }}' === 'true';
             
             // Build artifact links
             const runId = context.runId;
             const artifactsPage = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${runId}#artifacts`;
             
-            const comment = `### ${badge} Accuracy Gate: ${verdict}
+            let comment = '';
             
-            **Shadow ↔ Dry-Run Comparison**
-            
-            ${table}
-            
-            **Thresholds:**
-            - MAPE: **${thresholds.mape_pct ?? 'n/a'}%**
-            - Median Δ (BPS): **${thresholds.median_delta_bps ?? 'n/a'}**
-            
-            **Summary:**
-            - Symbols: **${summary.meta?.symbols_count ?? 0}**
-            - Fail count: **${summary.meta?.fail_count ?? 0}**
-            - Warn count: **${summary.meta?.warn_count ?? 0}**
-            
-            **Artifacts:** [📦 Download](${artifactsPage})
-            
-            _Generated: ${summary.generated_at_utc || 'n/a'}_`;
+            if (sanityMode) {
+              // Sanity mode comment
+              const sanityPath = 'reports/analysis/ACCURACY_SANITY.md';
+              
+              if (!fs.existsSync(sanityPath)) {
+                console.log('ACCURACY_SANITY.md not found, skipping comment');
+                return;
+              }
+              
+              const sanityReport = fs.readFileSync(sanityPath, 'utf8');
+              
+              // Extract verdict from report
+              const verdictMatch = sanityReport.match(/\*\*Overall Verdict:\*\*\s*(.*)/);
+              const verdict = verdictMatch ? verdictMatch[1].trim() : 'UNKNOWN';
+              const badge = verdict.includes('PASS') ? '✅' : '⚠️';
+              
+              comment = `### ${badge} Accuracy Gate: Sanity Check
+              
+              **Mode:** Edge Cases + Formatting Validation
+              
+              **Verdict:** ${verdict}
+              
+              **Scenarios Tested:**
+              1. Empty/Non-overlapping symbols → Expected: WARN (no data to compare)
+              2. Max-Age filtering → Expected: Exit 1 or WARN (insufficient windows)
+              3. Formatting (many symbols) → Expected: PASS (table renders OK)
+              
+              **Full Report:** See artifacts for \`ACCURACY_SANITY.md\`
+              
+              **Artifacts:** [📦 Download](${artifactsPage})
+              
+              _Sanity check validates edge cases and formatting, not actual accuracy._`;
+              
+            } else {
+              // Normal accuracy comparison comment
+              const summaryPath = 'reports/analysis/ACCURACY_SUMMARY.json';
+              
+              if (!fs.existsSync(summaryPath)) {
+                console.log('ACCURACY_SUMMARY.json not found, skipping comment');
+                return;
+              }
+              
+              const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+              const verdict = summary.verdict || 'UNKNOWN';
+              const badge = verdict === 'PASS' ? '✅' : (verdict === 'WARN' ? '🟡' : '🔴');
+              const thresholds = summary.thresholds || {};
+              
+              // Build symbol table
+              let table = `| Symbol | KPI | MAPE (%) | Median Δ | Status |\n|--------|-----|----------|----------|--------|\n`;
+              
+              for (const [sym, kpis] of Object.entries(summary.symbols || {})) {
+                for (const [kpi, metrics] of Object.entries(kpis)) {
+                  const mape = metrics.mape_pct ?? 'n/a';
+                  const delta = metrics.median_delta ?? 'n/a';
+                  const status = metrics.status || 'OK';
+                  const statusBadge = status === 'OK' ? '✅' : (status === 'WARN' ? '🟡' : '🔴');
+                  
+                  table += `| ${sym} | ${kpi} | ${mape} | ${delta} | ${statusBadge} ${status} |\n`;
+                }
+              }
+              
+              comment = `### ${badge} Accuracy Gate: ${verdict}
+              
+              **Shadow ↔ Dry-Run Comparison**
+              
+              ${table}
+              
+              **Thresholds:**
+              - MAPE: **${thresholds.mape_pct ?? 'n/a'}%**
+              - Median Δ (BPS): **${thresholds.median_delta_bps ?? 'n/a'}**
+              
+              **Summary:**
+              - Symbols: **${summary.meta?.symbols_count ?? 0}**
+              - Fail count: **${summary.meta?.fail_count ?? 0}**
+              - Warn count: **${summary.meta?.warn_count ?? 0}**
+              
+              **Artifacts:** [📦 Download](${artifactsPage})
+              
+              _Generated: ${summary.generated_at_utc || 'n/a'}_`;
+            }
             
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -260,25 +351,45 @@ jobs:
         if: always()
         shell: bash
         run: |
-          EXIT_CODE="${{ steps.accuracy_compare.outputs.exit_code }}"
+          SANITY_MODE="${{ github.event.inputs.sanity_mode }}"
           
           echo "================================================"
           echo "ACCURACY GATE RESULT"
           echo "================================================"
           
-          if [ "$EXIT_CODE" = "0" ]; then
-            echo "✅ Accuracy Gate PASSED"
-            echo "Shadow and Dry-Run KPIs are within acceptable thresholds"
-            exit 0
-          elif [ "$EXIT_CODE" = "2" ]; then
-            echo "🟡 Accuracy Gate WARN"
-            echo "Some soft thresholds violated - informational only"
+          if [ "$SANITY_MODE" = "true" ]; then
+            # Sanity mode - informational only, never fails
+            EXIT_CODE="${{ steps.sanity_check.outputs.exit_code }}"
+            
+            if [ "$EXIT_CODE" = "0" ]; then
+              echo "✅ Sanity Check PASSED"
+              echo "All edge case scenarios behaved as expected"
+            else
+              echo "⚠️ Sanity Check: ATTENTION"
+              echo "Some scenarios need review (informational only)"
+            fi
+            
+            echo ""
+            echo "Sanity mode is informational - not blocking"
             exit 0
           else
-            echo "🔴 Accuracy Gate FAILED"
-            echo "Critical thresholds violated - blocking PR"
-            echo ""
-            echo "Review ACCURACY_REPORT.md for details"
-            exit 1
+            # Normal accuracy mode - can block PR
+            EXIT_CODE="${{ steps.accuracy_compare.outputs.exit_code }}"
+            
+            if [ "$EXIT_CODE" = "0" ]; then
+              echo "✅ Accuracy Gate PASSED"
+              echo "Shadow and Dry-Run KPIs are within acceptable thresholds"
+              exit 0
+            elif [ "$EXIT_CODE" = "2" ]; then
+              echo "🟡 Accuracy Gate WARN"
+              echo "Some soft thresholds violated - informational only"
+              exit 0
+            else
+              echo "🔴 Accuracy Gate FAILED"
+              echo "Critical thresholds violated - blocking PR"
+              echo ""
+              echo "Review ACCURACY_REPORT.md for details"
+              exit 1
+            fi
           fi
 

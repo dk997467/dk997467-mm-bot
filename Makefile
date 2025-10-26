@@ -273,7 +273,7 @@ soak-qol-smoke-new-viol:
 	  --heartbeat-key "$${ENV:-dev}:$${EXCHANGE:-bybit}:soak:runner:heartbeat" \
 	  --verbose
 
-.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry soak-alert-selftest soak-qol-smoke soak-qol-smoke-new-viol accuracy-compare accuracy-ci
+.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry soak-alert-selftest soak-qol-smoke soak-qol-smoke-new-viol accuracy-compare accuracy-ci accuracy-sanity accuracy-sanity-strict
 
 shadow-run:
 	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --source mock
@@ -338,7 +338,7 @@ dryrun:
 dryrun-validate:
 	python -m tools.dryrun.run_dryrun --symbols BTCUSDT ETHUSDT --iterations 12 --duration 60
 
-.PHONY: accuracy-compare accuracy-ci
+.PHONY: accuracy-compare accuracy-ci accuracy-sanity accuracy-sanity-strict
 
 accuracy-compare:
 	@echo "=== Accuracy Gate: Shadow ↔ Dry-Run Comparison ==="
@@ -383,6 +383,39 @@ accuracy-ci:
 		echo "❌ ACCURACY_SUMMARY.json not found"; \
 		exit 1; \
 	fi
+
+accuracy-sanity:
+	@echo "=== Accuracy Gate: Sanity Check (edge cases + formatting) ==="
+	python -m tools.accuracy.sanity_check \
+	  --shadow-glob "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+	  --dryrun-glob "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+	  --min-windows $${MIN_WINDOWS:-24} \
+	  --max-age-min $${MAX_AGE_MIN:-90} \
+	  --mape-threshold $${MAPE_THRESHOLD:-0.15} \
+	  --median-delta-bps $${MEDIAN_DELTA_BPS:-1.5} \
+	  --report-dir reports/analysis \
+	  --verbose
+	@echo ""
+	@if [ -f reports/analysis/ACCURACY_SANITY.md ]; then \
+		echo "✅ Sanity report generated"; \
+		echo "Review: cat reports/analysis/ACCURACY_SANITY.md"; \
+	else \
+		echo "❌ Sanity report not found"; \
+	fi
+
+accuracy-sanity-strict:
+	@echo "=== Accuracy Gate: Sanity Check (STRICT) ==="
+	MIN_WINDOWS=48 MAX_AGE_MIN=60 MAPE_THRESHOLD=0.12 MEDIAN_DELTA_BPS=1.0 \
+	python -m tools.accuracy.sanity_check \
+	  --shadow-glob "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+	  --dryrun-glob "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+	  --min-windows 48 \
+	  --max-age-min 60 \
+	  --mape-threshold 0.12 \
+	  --median-delta-bps 1.0 \
+	  --report-dir reports/analysis \
+	  --strict \
+	  --verbose
 
 .PHONY: pre-freeze pre-freeze-alt pre-freeze-fast
 

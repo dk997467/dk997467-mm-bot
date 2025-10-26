@@ -486,6 +486,166 @@ cat reports/analysis/ACCURACY_REPORT.md
 
 ---
 
+## Sanity Check (One-Shot)
+
+**Purpose:** Fast, reproducible sanity check for Accuracy Gate edge cases and formatting.
+
+**What it checks:**
+1. **Empty/Non-overlapping symbols** → Expected: WARN (no data to compare), not FAIL
+2. **Max-Age filtering** → Expected: Exit 1 (insufficient windows) or WARN
+3. **Formatting (many symbols)** → Expected: Table renders correctly without breaking markdown
+
+### Running Sanity Check
+
+**Basic Run:**
+```bash
+make accuracy-sanity
+```
+
+**Review Report:**
+```bash
+cat reports/analysis/ACCURACY_SANITY.md
+```
+
+**Strict Mode** (fails if any scenario doesn't pass):
+```bash
+make accuracy-sanity-strict
+```
+
+**Custom Parameters:**
+```bash
+MIN_WINDOWS=48 \
+MAX_AGE_MIN=60 \
+MAPE_THRESHOLD=0.12 \
+MEDIAN_DELTA_BPS=1.0 \
+make accuracy-sanity
+```
+
+### CI Integration
+
+**Manual Trigger (Sanity Mode):**
+```bash
+gh workflow run accuracy.yml -f sanity_mode=true
+```
+
+This will:
+- Run Shadow Mode (24 iterations)
+- Run Dry-Run Mode (24 iterations)
+- Execute 3 sanity scenarios
+- Post PR comment with sanity verdict
+- Upload artifacts with scenario-specific reports
+
+**Artifacts Structure:**
+```
+reports/analysis/
+├── ACCURACY_SANITY.md          # Main sanity report
+├── sanity_empty/               # Scenario 1 reports
+│   ├── ACCURACY_REPORT.md
+│   └── ACCURACY_SUMMARY.json
+├── sanity_maxage/              # Scenario 2 reports
+│   ├── ACCURACY_REPORT.md
+│   └── ACCURACY_SUMMARY.json
+└── sanity_format/              # Scenario 3 reports
+    ├── ACCURACY_REPORT.md
+    └── ACCURACY_SUMMARY.json
+```
+
+### Interpreting Results
+
+**Scenario 1: Empty/Non-overlap**
+- **Expected:** WARN or PASS (no overlapping data means no comparison possible)
+- **❌ FAIL if:** Comparison crashes or returns FAIL verdict
+- **✅ PASS if:** Comparison returns WARN or PASS
+
+**Scenario 2: Max-Age Filter**
+- **Expected:** Exit 1 ("Insufficient windows") or WARN
+- **❌ FAIL if:** Comparison doesn't filter old data
+- **✅ PASS if:** Old data is filtered and comparison exits gracefully
+
+**Scenario 3: Formatting Check**
+- **Expected:** PASS (perfect match), table renders without breaking
+- **❌ FAIL if:** Markdown table lines exceed 300 chars or break formatting
+- **✅ PASS if:** Table renders correctly with many symbols
+
+**Overall Verdict:**
+- **✅ SANITY: PASS** — All scenarios behaved as expected
+- **⚠️ SANITY: ATTENTION** — Some scenarios need review (use `--strict` to fail)
+
+### Use Cases
+
+**Before Merging Accuracy Gate Changes:**
+```bash
+# 1. Run sanity check locally
+make accuracy-sanity
+
+# 2. Review report
+cat reports/analysis/ACCURACY_SANITY.md
+
+# 3. If all scenarios pass, proceed with PR
+```
+
+**After Updating Comparison Logic:**
+```bash
+# Run strict sanity check
+make accuracy-sanity-strict
+
+# This will exit 1 if any scenario fails
+```
+
+**CI Self-Check (daily):**
+```bash
+# Add to cron or scheduled workflow
+gh workflow run accuracy.yml -f sanity_mode=true
+```
+
+### Troubleshooting
+
+**Scenario 1 Fails (Non-overlap)**
+
+**Symptom:** Scenario 1 returns FAIL instead of WARN
+
+**Causes:**
+- Comparison logic doesn't handle missing data gracefully
+- FAIL verdict returned when no data to compare
+
+**Action:**
+1. Check `compare_shadow_dryrun.py` logic for empty symbol arrays
+2. Verify that `mape_pct: null` and `median_delta: null` result in OK status, not FAIL
+
+**Scenario 2 Fails (Max-Age)**
+
+**Symptom:** Scenario 2 doesn't filter old data
+
+**Causes:**
+- `max-age-min` parameter not respected
+- Timestamp parsing broken
+
+**Action:**
+1. Check `parse_iter_files()` logic in `compare_shadow_dryrun.py`
+2. Verify timestamp format in ITER_SUMMARY files
+
+**Scenario 3 Fails (Formatting)**
+
+**Symptom:** Scenario 3 reports "Table Formatting: ❌ BROKEN"
+
+**Causes:**
+- Markdown table lines exceed 300 chars
+- Column alignment broken with many symbols
+
+**Action:**
+1. Check `generate_markdown_report()` in `compare_shadow_dryrun.py`
+2. Consider truncating long values or adjusting column widths
+
+### Quick Reference
+
+| Command | Purpose | Exit Code |
+|---------|---------|-----------|
+| `make accuracy-sanity` | Run sanity check (informational) | Always 0 |
+| `make accuracy-sanity-strict` | Run sanity check (strict) | 1 if any scenario fails |
+| `gh workflow run accuracy.yml -f sanity_mode=true` | CI sanity check | Always 0 (informational) |
+
+---
+
 ## Changelog
 
 ### v1.0.0 (2025-10-26)
