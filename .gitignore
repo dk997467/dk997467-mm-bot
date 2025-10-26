@@ -59,3 +59,7 @@ artifacts/**
 !artifacts/reports/**
 !artifacts/soak/
 !artifacts/soak/**
+
+mm_bot.egg-info/
+*.egg-info/
+
