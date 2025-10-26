@@ -273,7 +273,7 @@ soak-qol-smoke-new-viol:
 	  --heartbeat-key "$${ENV:-dev}:$${EXCHANGE:-bybit}:soak:runner:heartbeat" \
 	  --verbose
 
-.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry soak-alert-selftest soak-qol-smoke soak-qol-smoke-new-viol accuracy-compare accuracy-ci accuracy-sanity accuracy-sanity-strict accuracy-sanity-mini accuracy-report-compact
+.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry soak-alert-selftest soak-qol-smoke soak-qol-smoke-new-viol accuracy-compare accuracy-ci accuracy-sanity accuracy-sanity-strict accuracy-sanity-mini accuracy-report-compact live-run live-gate live-report live-export
 
 shadow-run:
 	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --source mock
@@ -442,6 +442,49 @@ accuracy-report-compact:
 	  --median-delta-threshold-bps $${MEDIAN_DELTA_THRESHOLD_BPS:-1.5} \
 	  --out-dir reports/analysis \
 	  --verbose
+
+live-run:
+	@echo "=== Live Mode: Runner (dry-run by default) ==="
+	python -m tools.live.run_live \
+	  --symbols $${SYMBOLS:-BTCUSDT,ETHUSDT} \
+	  --ramp-profile $${RAMP_PROFILE:-A} \
+	  --env $${ENV:-dev} \
+	  --exchange $${EXCHANGE:-bybit} \
+	  --interval-sec $${INTERVAL_SEC:-60} \
+	  --iterations $${ITERATIONS:-1} \
+	  --dry-run \
+	  --verbose
+
+live-gate:
+	@echo "=== Live Mode: CI Gate ==="
+	python -m tools.live.ci_gates.live_gate \
+	  --path artifacts/live/latest \
+	  --min_edge $${MIN_EDGE:-2.5} \
+	  --min_maker_taker $${MIN_MAKER_TAKER:-0.83} \
+	  --max_risk $${MAX_RISK:-0.40} \
+	  --max_latency $${MAX_LATENCY:-350}
+
+live-export:
+	@echo "=== Live Mode: Export to Redis ==="
+	python -m tools.live.export_live_summary \
+	  --src artifacts/live/latest \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --env $${ENV:-dev} \
+	  --exchange $${EXCHANGE:-bybit} \
+	  --ttl $${TTL:-3600} \
+	  --verbose
+
+live-report:
+	@echo "=== Live Mode: Generate reports + export ==="
+	@$(MAKE) live-run
+	@$(MAKE) live-export
+	@echo ""
+	@if [ -f artifacts/live/latest/LIVE_REPORT.md ]; then \
+		echo "✅ Live report generated"; \
+		echo "Review: cat artifacts/live/latest/LIVE_REPORT.md"; \
+	else \
+		echo "❌ Live report not found"; \
+	fi
 
 .PHONY: pre-freeze pre-freeze-alt pre-freeze-fast
 
