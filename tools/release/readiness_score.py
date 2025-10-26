@@ -162,7 +162,19 @@ if __name__ == "__main__":
     
     sections, total = _section_scores(test_reports)
     
+    # Add runtime (deterministic for tests)
+    import os
+    from datetime import datetime, timezone
+    if os.environ.get('MM_FREEZE_UTC') == '1':
+        utc_iso = "1970-01-01T00:00:00Z"
+    else:
+        utc_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    
     result = {
+        "runtime": {
+            "utc": utc_iso,
+            "version": "0.1.0"
+        },
         "sections": sections,
         "total": total,
         "status": "OK"

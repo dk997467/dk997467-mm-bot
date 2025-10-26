@@ -83,8 +83,11 @@ if __name__ == "__main__":
     import sys
     
     parser = argparse.ArgumentParser(description="Repro Minimizer: Simplify input for debugging")
-    parser.add_argument("--in", dest="input_file", help="Input JSONL file")
-    parser.add_argument("--out", help="Output JSONL file")
+    parser.add_argument("--events", help="Input events JSONL file")
+    parser.add_argument("--out-jsonl", help="Output JSONL file")
+    parser.add_argument("--out-md", help="Output markdown file")
+    parser.add_argument("--in", dest="input_file", help="Input JSONL file (alias)")
+    parser.add_argument("--out", help="Output JSONL file (alias)")
     parser.add_argument("--smoke", action="store_true", help="Run smoke test")
     args = parser.parse_args()
     
@@ -100,14 +103,38 @@ if __name__ == "__main__":
         sys.exit(0)
     
     # CLI mode
-    if not args.input_file or not args.out:
-        print("Usage: python -m tools.debug.repro_minimizer --in <input.jsonl> --out <output.jsonl>")
+    input_file = args.events or args.input_file
+    output_jsonl = args.out_jsonl or args.out
+    output_md = args.out_md
+    
+    if not input_file:
+        print("Usage: python -m tools.debug.repro_minimizer --events <input.jsonl> --out-jsonl <output.jsonl>", file=sys.stderr)
         sys.exit(1)
     
-    # Minimize input
-    lines, steps = minimize(args.input_file)
+    # Read input file
+    from pathlib import Path
+    input_text = Path(input_file).read_text(encoding='utf-8')
     
-    # Write output
-    _write_jsonl_atomic(args.out, lines)
+    # Minimize
+    lines, steps = minimize(input_text)
     
+    # Write JSONL output
+    if output_jsonl:
+        _write_jsonl_atomic(output_jsonl, lines)
+    
+    # Write MD output if requested
+    if output_md:
+        md_path = Path(output_md)
+        md_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(md_path, 'w', encoding='utf-8', newline='') as f:
+            f.write("# Repro Minimizer Report\n\n")
+            f.write(f"- Original lines: {len(input_text.splitlines())}\n")
+            f.write(f"- Minimized lines: {len(lines)}\n")
+            f.write(f"- Steps removed: {steps}\n\n")
+            f.write("## Minimized Output\n\n")
+            f.write("```jsonl\n")
+            f.write("".join(lines))
+            f.write("```\n")
+    
+    # No stdout in CLI mode
     sys.exit(0)

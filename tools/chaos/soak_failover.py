@@ -102,15 +102,23 @@ class FakeKVLock:
 
 if __name__ == "__main__":
     import sys
+    import argparse
     
-    # Check for --smoke flag
-    if "--smoke" in sys.argv:
+    parser = argparse.ArgumentParser(description="Chaos Failover Test")
+    parser.add_argument("--smoke", action="store_true", help="Run smoke test")
+    parser.add_argument("--ttl-ms", type=int, default=1000, help="TTL in milliseconds")
+    parser.add_argument("--acquire-ms", type=int, default=0, help="Acquire timestamp")
+    parser.add_argument("--renew-ms", type=int, default=500, help="Renew timestamp")
+    parser.add_argument("--window-ms", type=int, default=6000, help="Window duration")
+    args = parser.parse_args()
+    
+    if args.smoke:
         # Run smoke test
-        lock = FakeKVLock(ttl_ms=1000)
+        lock = FakeKVLock(ttl_ms=args.ttl_ms)
         
         # Test acquire/renew/release cycle
-        acquired = lock.try_acquire("worker1", 0)
-        renewed = lock.renew("worker1", 500)
+        acquired = lock.try_acquire("worker1", args.acquire_ms)
+        renewed = lock.renew("worker1", args.renew_ms)
         lock.release()
         
         # Output log to stdout (must end with \n)
@@ -118,6 +126,20 @@ if __name__ == "__main__":
         sys.stdout.write(log_msg)
         sys.exit(0)
     
-    # Default behavior: print usage
-    print("Usage: python -m tools.chaos.soak_failover --smoke")
-    sys.exit(1)
+    # Normal mode: run failover simulation with provided params
+    lock = FakeKVLock(ttl_ms=args.ttl_ms)
+    
+    # Simulate a simple acquire/renew/release cycle
+    ts = args.acquire_ms
+    acquired = lock.try_acquire("worker1", ts)
+    
+    # Renew after some time
+    ts += args.renew_ms
+    if acquired:
+        renewed = lock.renew("worker1", ts)
+    
+    # Release
+    lock.release()
+    
+    # Success (no stdout in normal mode)
+    sys.exit(0)

@@ -35,12 +35,19 @@ def main(argv=None):
     winner, reason = _select_winner(by_region)
     
     # Build output
+    # Deterministic time for tests
+    import os
+    if os.environ.get('MM_FREEZE_UTC') == '1':
+        utc_iso = "1970-01-01T00:00:00Z"
+    else:
+        utc_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    
     report = {
         "by_region": by_region,
         "winner": winner,
         "reason": reason,
         "runtime": {
-            "utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "utc": utc_iso,
             "version": "0.1.0"
         }
     }

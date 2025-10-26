@@ -47,8 +47,8 @@ def main(argv=None):
         "advice": result.get("advice", [{"action": "HOLD"}])
     }
     
-    # Write output
-    out_path = Path("artifacts") / "EDGE_SENTINEL_REPORT.json"
+    # Write output (note: filename is EDGE_SENTINEL.json, not EDGE_SENTINEL_REPORT.json)
+    out_path = Path("artifacts") / "EDGE_SENTINEL.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(report, f, ensure_ascii=True, sort_keys=True, separators=(",", ":"))

@@ -121,7 +121,10 @@ if __name__ == "__main__":
     from pathlib import Path
     
     parser = argparse.ArgumentParser(description="Anomaly Radar: MAD-based anomaly detection")
-    parser.add_argument("--out", default="artifacts/ANOMALY_RADAR.json", help="Output JSON path")
+    parser.add_argument("--edge-report", help="Path to EDGE_REPORT_DAY.json")
+    parser.add_argument("--bucket-min", type=int, default=15, help="Bucket size in minutes")
+    parser.add_argument("--out-json", default="artifacts/ANOMALY_RADAR.json", help="Output JSON path")
+    parser.add_argument("--out", default="artifacts/ANOMALY_RADAR.json", help="Output JSON path (alias)")
     parser.add_argument("--smoke", action="store_true", help="Run smoke test")
     args = parser.parse_args()
     
@@ -154,12 +157,18 @@ if __name__ == "__main__":
         print("\n[OK] All smoke tests passed")
         sys.exit(0)
     
-    # CLI mode: Generate report
-    # Use minimal synthetic data
-    buckets = [
-        {'bucket': '00:00', 'net_bps': 3.0, 'order_age_p95_ms': 300.0, 'taker_share_pct': 12.0},
-        {'bucket': '00:15', 'net_bps': 2.9, 'order_age_p95_ms': 305.0, 'taker_share_pct': 12.1},
-    ]
+    # CLI mode: Generate report from edge-report or use minimal data
+    if args.edge_report:
+        # Load edge report
+        edge_data = json.loads(Path(args.edge_report).read_text(encoding='utf-8'))
+        # Extract buckets from edge data (simplified)
+        buckets = edge_data.get("buckets", [])
+    else:
+        # Use minimal synthetic data
+        buckets = [
+            {'bucket': '00:00', 'net_bps': 3.0, 'order_age_p95_ms': 300.0, 'taker_share_pct': 12.0},
+            {'bucket': '00:15', 'net_bps': 2.9, 'order_age_p95_ms': 305.0, 'taker_share_pct': 12.1},
+        ]
     
     anomalies = detect_anomalies(buckets, k=3.0)
     
@@ -168,11 +177,23 @@ if __name__ == "__main__":
         "status": "OK"
     }
     
-    # Write output
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, 'w', encoding='utf-8') as f:
+    # Write JSON output
+    out_json_path = Path(args.out_json if args.out_json != "artifacts/ANOMALY_RADAR.json" else args.out)
+    out_json_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_json_path, 'w', encoding='utf-8', newline='') as f:
         json.dump(report, f, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         f.write('\n')
+    
+    # Also create MD report (in same directory)
+    out_md_path = out_json_path.with_suffix('.md')
+    with open(out_md_path, 'w', encoding='utf-8', newline='') as f:
+        f.write("# Anomaly Radar Report\n\n")
+        f.write(f"Status: {report['status']}\n\n")
+        f.write(f"Anomalies detected: {len(anomalies)}\n\n")
+        if anomalies:
+            f.write("| Kind | Bucket | Value |\n")
+            f.write("|------|--------|-------|\n")
+            for a in anomalies[:10]:  # Limit to 10 for brevity
+                f.write(f"| {a['kind']} | {a['bucket']} | {a.get('mad_score', 0):.2f} |\n")
     
     sys.exit(0)

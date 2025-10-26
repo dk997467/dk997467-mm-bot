@@ -37,10 +37,17 @@ def main(argv=None):
     
     # Build report (match golden format: runtime, symbols, total)
     from datetime import datetime, timezone
+    import os
+    
+    # Deterministic time for tests
+    if os.environ.get('MM_FREEZE_UTC') == '1':
+        utc_iso = "1970-01-01T00:00:00Z"
+    else:
+        utc_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     
     report = {
         "runtime": {
-            "utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "utc": utc_iso,
             "version": "0.1.0"
         },
         "symbols": symbols_data,

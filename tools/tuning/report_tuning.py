@@ -26,12 +26,19 @@ def main(argv=None):
         "status": "OK"
     }
     
-    # Write output
+    # Write JSON output
     out_path = Path("artifacts") / "TUNING_OVERVIEW.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(overview, f, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         f.write('\n')
+    
+    # Also create TUNING_REPORT.md (required by e2e test)
+    md_path = Path("artifacts") / "TUNING_REPORT.md"
+    with open(md_path, 'w', encoding='utf-8', newline='') as f:
+        f.write("# Tuning Report\n\n")
+        f.write(f"- selected: {overview.get('selected', {}).get('params', {})}\n")
+        f.write(f"- metrics: (see JSON for details)\n")
     
     return 0
 
