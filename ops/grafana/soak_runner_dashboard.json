@@ -1,0 +1,147 @@
+{
+  "dashboard": {
+    "title": "Soak Runner Monitor",
+    "uid": "soak-runner-v1",
+    "version": 1,
+    "timezone": "browser",
+    "schemaVersion": 27,
+    "refresh": "30s",
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "env",
+          "type": "query",
+          "datasource": "Prometheus",
+          "query": "label_values(redis_export_batches_total, env)",
+          "multi": false,
+          "includeAll": false,
+          "current": {
+            "text": "dev",
+            "value": "dev"
+          }
+        },
+        {
+          "name": "exchange",
+          "type": "query",
+          "datasource": "Prometheus",
+          "query": "label_values(redis_export_batches_total{env=\"$env\"}, exchange)",
+          "multi": false,
+          "includeAll": false,
+          "current": {
+            "text": "bybit",
+            "value": "bybit"
+          }
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Runner Heartbeat Age (minutes)",
+        "type": "stat",
+        "gridPos": {"x": 0, "y": 0, "w": 8, "h": 4},
+        "targets": [
+          {
+            "expr": "(time() - redis_key_timestamp{key=~\".*:soak:runner:heartbeat\"}) / 60",
+            "legendFormat": "Heartbeat Age",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "none",
+          "colorMode": "value",
+          "orientation": "auto"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "m",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 5, "color": "yellow"},
+                {"value": 10, "color": "red"}
+              ]
+            }
+          }
+        },
+        "description": "Time since last heartbeat from runner.\n\n**Note**: Requires Redis exporter with key timestamp metrics.\n\nAlternative: Check logs for CONTINUOUS_METRICS or heartbeat entries."
+      },
+      {
+        "id": 2,
+        "title": "Alert Debounce Status (Logs)",
+        "type": "logs",
+        "gridPos": {"x": 8, "y": 0, "w": 16, "h": 8},
+        "targets": [
+          {
+            "expr": "{job=\"soak-runner\"} |= \"ALERT_DEBOUNCED\" or \"ALERT_BYPASS_DEBOUNCE\"",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showTime": true,
+          "sortOrder": "Descending",
+          "wrapLogMessage": true
+        },
+        "description": "Recent alert debounce events.\n\nFilters:\n- ALERT_DEBOUNCED: alert was skipped (debounce active)\n- ALERT_BYPASS_DEBOUNCE: severity increase, sent immediately\n\nLook for 'remaining_min' to see ETA until next alert."
+      },
+      {
+        "id": 3,
+        "title": "Export Status (Logs)",
+        "type": "logs",
+        "gridPos": {"x": 0, "y": 8, "w": 12, "h": 6},
+        "targets": [
+          {
+            "expr": "{job=\"soak-runner\"} |= \"EXPORT_STATUS\"",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showTime": true,
+          "sortOrder": "Descending"
+        },
+        "description": "Redis export status logs.\n\nStatus values:\n- OK: export succeeded\n- SKIP: export skipped (redis unavailable)\n\nCheck 'reason' field for diagnostics."
+      },
+      {
+        "id": 4,
+        "title": "Continuous Metrics (Logs)",
+        "type": "logs",
+        "gridPos": {"x": 12, "y": 8, "w": 12, "h": 6},
+        "targets": [
+          {
+            "expr": "{job=\"soak-runner\"} |= \"CONTINUOUS_METRICS\"",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showTime": true,
+          "sortOrder": "Descending"
+        },
+        "description": "Runner cycle metrics.\n\nKey fields:\n- verdict: OK/WARN/CRIT/UNCHANGED/FAIL\n- windows: number of analysis windows\n- crit/warn/ok: violation counts\n- duration_ms: cycle duration"
+      },
+      {
+        "id": 5,
+        "title": "Alert Policy (Logs)",
+        "type": "logs",
+        "gridPos": {"x": 0, "y": 14, "w": 24, "h": 4},
+        "targets": [
+          {
+            "expr": "{job=\"soak-runner\"} |= \"ALERT_POLICY\"",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showTime": true,
+          "sortOrder": "Descending"
+        },
+        "description": "Active alert policy per environment.\n\nShows:\n- env: current environment\n- min_severity: effective minimum severity for alerts\n- source: alert-policy (env-specific) or alert-min-severity (global)"
+      }
+    ]
+  },
+  "overwrite": false
+}
+

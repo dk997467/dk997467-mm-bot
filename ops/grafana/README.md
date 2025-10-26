@@ -1,81 +1,255 @@
-# Grafana Dashboards
+# Grafana Dashboards для Soak Runner
 
-## Redis Export Monitoring Dashboard
+## 📊 Доступные Dashboard
 
-Visual monitoring for Redis KPI export operations.
+### `soak_runner_dashboard.json`
 
-### Panels
+Мониторинг Continuous Soak Runner:
+- **Heartbeat Age**: Время с последнего heartbeat (минуты)
+- **Alert Debounce Status**: Логи debounce событий (ALERT_DEBOUNCED, ALERT_BYPASS_DEBOUNCE)
+- **Export Status**: Redis export статусы (OK/SKIP)
+- **Continuous Metrics**: Cycle metrics (verdict, windows, duration)
+- **Alert Policy**: Активная политика алёртов по env
 
-1. **Export Batches per Second** - Rate of pipeline batch execution
-2. **Average Batch Duration (ms)** - Performance metric with 100ms warning threshold
-3. **Keys Written per Minute** - Throughput indicator
-4. **Export Success Rate** - Health indicator (green > 99%, yellow > 90%, red < 90%)
-5. **Failed Batches (last 5m)** - Alert indicator
-6. **Export Metrics Summary** - Current totals table
+---
 
-### Import Instructions
+## 🔧 Установка
 
-**Option 1: Via Grafana UI**
+### Вариант A: Через Grafana UI
 
-1. Open Grafana: http://localhost:3000
-2. Navigate to **Dashboards → Import**
-3. Click **Upload JSON file**
-4. Select `ops/grafana/redis_export_dashboard.json`
-5. Choose folder and click **Import**
+1. **Import Dashboard**:
+   ```
+   Settings → Data Sources → Import
+   ```
 
-**Option 2: Via API**
+2. **Upload JSON**:
+   - Выбрать `soak_runner_dashboard.json`
+   - Указать datasource (Prometheus + Loki)
+
+3. **Variables**:
+   - `$env`: окружение (dev/staging/prod)
+   - `$exchange`: биржа (bybit/kucoin)
+
+### Вариант B: Через API/Terraform
 
 ```bash
-curl -X POST \
+curl -X POST http://grafana:3000/api/dashboards/db \
+  -H "Authorization: Bearer $GRAFANA_API_KEY" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -d @ops/grafana/redis_export_dashboard.json \
-  http://localhost:3000/api/dashboards/db
+  -d @soak_runner_dashboard.json
 ```
 
-**Option 3: Provisioning (Recommended for Production)**
+---
 
-Add to Grafana provisioning config:
+## 📡 Datasource Requirements
+
+### 1. **Prometheus** (для метрик)
+
+**Heartbeat Age Panel требует Redis exporter:**
+
+Если у вас уже есть [redis_exporter](https://github.com/oliver006/redis_exporter):
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+```
+
+**Метрика для heartbeat:**
+```promql
+redis_key_timestamp{key=~".*:soak:runner:heartbeat"}
+```
+
+**Если Redis exporter недоступен:**
+- Используйте **log-based мониторинг** (см. ниже)
+- Heartbeat panel можно убрать или заменить на Text panel с инструкцией
+
+### 2. **Loki** (для логов)
+
+Все остальные panels используют Loki для анализа логов runner:
 
 ```yaml
-# /etc/grafana/provisioning/dashboards/redis-export.yaml
-apiVersion: 1
-
-providers:
-  - name: 'Redis Export'
-    folder: 'Monitoring'
-    type: file
-    options:
-      path: /path/to/mm-bot/ops/grafana
+# promtail.yml
+scrape_configs:
+  - job_name: soak-runner
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: soak-runner
+          __path__: /var/log/soak-runner/*.log
 ```
 
-Restart Grafana to apply.
+**Важные лог-паттерны:**
+```
+ALERT_DEBOUNCED level=CRIT ... remaining_min=73
+ALERT_BYPASS_DEBOUNCE prev=WARN new=CRIT
+EXPORT_STATUS summary=OK violations=SKIP
+CONTINUOUS_METRICS verdict=CRIT windows=48
+ALERT_POLICY env=prod min_severity=CRIT
+```
 
-### Variables
+---
 
-- **$env**: Environment filter (dev, staging, prod)
+## 🎯 Стратегии мониторинга
 
-To use: Modify dashboard JSON to add `{env="$env"}` label matchers to queries if your Prometheus metrics include environment labels.
+### Strategy A: Prometheus + Redis Exporter (Production)
 
-### Alerts Integration
+**Pros:**
+- Real-time heartbeat age metrics
+- Grafana alerting на heartbeat TTL
 
-This dashboard works with Prometheus alerts defined in `ops/alerts/redis_export_rules.yml`.
+**Setup:**
+1. Deploy [redis_exporter](https://github.com/oliver006/redis_exporter)
+2. Configure Prometheus scraping
+3. Use `redis_key_timestamp` metric
 
-Configure alert annotations in Grafana to see alert firing times on graphs.
+**Alert Example (Prometheus rules):**
+```yaml
+groups:
+  - name: soak-runner
+    rules:
+      - alert: SoakRunnerHeartbeatStale
+        expr: (time() - redis_key_timestamp{key=~".*:soak:runner:heartbeat"}) > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Soak runner heartbeat stale (>10 min)"
+```
 
-### Thresholds
+### Strategy B: Log-Based Monitoring (Minimal)
 
-- Batch duration > 100ms: Warning (yellow)
-- Success rate < 99%: Warning (yellow)
-- Success rate < 90%: Critical (red)
-- Failed batches > 0: Warning (yellow)
-- Failed batches > 5: Critical (red)
+**Pros:**
+- No additional exporters needed
+- Works with existing Loki setup
 
-### Refresh Rate
+**Setup:**
+1. Ensure runner logs go to Loki (via Promtail or stdout→Loki)
+2. Use log panels for all monitoring
 
-Default: 30 seconds (configurable in dashboard settings)
+**Heartbeat check (Loki query):**
+```logql
+{job="soak-runner"} |= "Heartbeat written"
+```
 
-### Time Range
+**Alert via Loki ruler:**
+```yaml
+groups:
+  - name: soak-runner-logs
+    rules:
+      - alert: SoakRunnerNoHeartbeat
+        expr: |
+          absent_over_time({job="soak-runner"} |= "Heartbeat written"[15m])
+        for: 5m
+        labels:
+          severity: warning
+```
 
-Default: Last 1 hour (adjustable via time picker)
+---
 
+## 🔍 Панели и интерпретация
+
+### 1. **Runner Heartbeat Age**
+
+**Цвета:**
+- 🟢 Green (0-5 min): Healthy
+- 🟡 Yellow (5-10 min): Degraded
+- 🔴 Red (>10 min): Critical
+
+**Troubleshooting:**
+- Heartbeat >10 min → проверить runner process
+- Metric отсутствует → проверить Redis exporter
+
+### 2. **Alert Debounce Status**
+
+**Ключевые логи:**
+```
+ALERT_DEBOUNCED ... remaining_min=73
+```
+→ Следующий алёрт возможен через 73 минуты
+
+```
+ALERT_BYPASS_DEBOUNCE prev=WARN new=CRIT
+```
+→ Severity усилился, debounce проигнорирован
+
+**Действия:**
+- Если `remaining_min` постоянно высокий → возможно застрял в CRIT
+- Если много BYPASS → частые эскалации
+
+### 3. **Export Status**
+
+**Status values:**
+- `summary=OK violations=OK` → всё в порядке
+- `summary=SKIP reason=redis_unavailable` → Redis недоступен
+
+**Действия:**
+- SKIP с reason → проверить Redis connectivity
+- Посмотреть `artifacts/state/last_export_status.json` для деталей
+
+### 4. **Continuous Metrics**
+
+**Verdict values:**
+- `OK`: всё хорошо
+- `WARN`: предупреждения
+- `CRIT`: критические нарушения
+- `UNCHANGED`: summary не изменился (skip export)
+- `FAIL`: ошибка анализа
+
+**Ключевые метрики:**
+- `duration_ms`: время цикла (должно быть стабильным)
+- `windows`: количество окон анализа
+- `crit/warn/ok`: распределение статусов
+
+### 5. **Alert Policy**
+
+**Пример:**
+```
+ALERT_POLICY env=prod min_severity=CRIT source=alert-policy
+```
+
+**Интерпретация:**
+- `source=alert-policy` → используется env-specific политика
+- `source=alert-min-severity` → используется global fallback
+
+---
+
+## 🚀 Quick Start
+
+**1. Local smoke test (without Grafana):**
+```bash
+# Generate fake CRIT summary
+python -m tools.soak.generate_fake_summary --crit
+
+# Run runner (logs to stdout)
+make soak-alert-dry
+```
+
+**2. Check logs manually:**
+```bash
+# Heartbeat
+grep "Heartbeat written" soak_runner.log
+
+# Debounce ETA
+grep "ALERT_DEBOUNCED" soak_runner.log
+
+# Export status
+grep "EXPORT_STATUS" soak_runner.log
+```
+
+**3. Import dashboard:**
+- Open Grafana
+- Import `soak_runner_dashboard.json`
+- Select Prometheus + Loki datasources
+
+---
+
+## 📚 Дополнительные ресурсы
+
+- **Redis Exporter**: https://github.com/oliver006/redis_exporter
+- **Loki**: https://grafana.com/docs/loki/latest/
+- **Promtail**: https://grafana.com/docs/loki/latest/clients/promtail/
+
+**Questions?** See `SOAK_ANALYZER_GUIDE.md` for runner details.

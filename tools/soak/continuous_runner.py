@@ -140,6 +140,45 @@ def verdict_to_level(verdict: str) -> int:
     return levels.get(verdict.upper(), 0)
 
 
+def parse_alert_policy(policy_str: str) -> Dict[str, str]:
+    """
+    Parse alert policy string.
+    
+    Example: "dev=WARN,staging=WARN,prod=CRIT" -> {"dev": "WARN", "staging": "WARN", "prod": "CRIT"}
+    
+    Returns:
+        Dict mapping env to min severity
+    """
+    policy = {}
+    if not policy_str:
+        return policy
+    
+    for pair in policy_str.split(','):
+        pair = pair.strip()
+        if '=' not in pair:
+            continue
+        env, severity = pair.split('=', 1)
+        policy[env.strip()] = severity.strip().upper()
+    
+    return policy
+
+
+def get_effective_min_severity(
+    env: str,
+    alert_policy: Dict[str, str],
+    fallback_severity: str
+) -> tuple[str, str]:
+    """
+    Get effective min severity for given env.
+    
+    Returns:
+        (severity, source) where source is "alert-policy" or "alert-min-severity"
+    """
+    if alert_policy and env in alert_policy:
+        return alert_policy[env], "alert-policy"
+    return fallback_severity, "alert-min-severity"
+
+
 def should_send_alert(
     verdict: str,
     min_severity: str,
@@ -186,12 +225,19 @@ def should_send_alert(
         
         # Severity increased - bypass debounce
         if current_level > last_level:
-            logger.info(f"Alert: severity increased ({last_alert.get('last_level')} -> {verdict})")
+            logger.info(
+                f"ALERT_BYPASS_DEBOUNCE prev={last_alert.get('last_level')} "
+                f"new={verdict} reason=severity_increase"
+            )
             return True
         
         # Same or lower severity - check debounce
         if elapsed_min < debounce_min:
-            logger.info(f"Alert skipped: debounce window ({elapsed_min:.0f}/{debounce_min} min)")
+            remaining_min = max(0, int(debounce_min - elapsed_min))
+            logger.info(
+                f"ALERT_DEBOUNCED level={verdict} last_sent=\"{last_sent_str}\" "
+                f"debounce_min={debounce_min} remaining_min={remaining_min} verdict={verdict}"
+            )
             return False
         
         return True
@@ -515,6 +561,21 @@ def run_single_cycle(args) -> Dict[str, Any]:
     # Get Redis client (for debounce + heartbeat)
     redis_client = get_redis_client(args.redis_url) if not args.dry_run else None
     
+    # Parse alert policy and determine effective min severity
+    alert_policy = parse_alert_policy(getattr(args, 'alert_policy', ''))
+    effective_min_severity, severity_source = get_effective_min_severity(
+        args.env,
+        alert_policy,
+        args.alert_min_severity
+    )
+    
+    # Log alert policy on start
+    if args.alert:
+        logger.info(
+            f"ALERT_POLICY env={args.env} min_severity={effective_min_severity} "
+            f"source={severity_source}"
+        )
+    
     # Check if summary changed (idempotency)
     prev_hash = compute_file_hash(summary_path)
     
@@ -613,7 +674,7 @@ def run_single_cycle(args) -> Dict[str, Any]:
             args.exchange,
             args.alert,
             redis_client,
-            args.alert_min_severity,
+            effective_min_severity,  # Use policy-based severity
             args.alert_debounce_min,
             alert_key,
             args.dry_run
@@ -663,7 +724,8 @@ def main():
     
     parser.add_argument("--lock-file", default="/tmp/soak_continuous.lock", help="Lock file path")
     parser.add_argument("--alert", action="append", choices=["telegram", "slack"], help="Alert channels")
-    parser.add_argument("--alert-min-severity", default="CRIT", choices=["OK", "WARN", "CRIT"], help="Minimum severity for alerts (default: CRIT)")
+    parser.add_argument("--alert-policy", default="", help="Alert policy per environment (e.g., 'dev=WARN,staging=WARN,prod=CRIT')")
+    parser.add_argument("--alert-min-severity", default="CRIT", choices=["OK", "WARN", "CRIT"], help="Minimum severity for alerts (default: CRIT, overridden by --alert-policy if specified)")
     parser.add_argument("--alert-debounce-min", type=int, default=180, help="Alert debounce window in minutes (default: 180, 0=disabled)")
     parser.add_argument("--alert-key", default="soak:alerts:debounce", help="Redis key for alert debounce state")
     parser.add_argument("--heartbeat-key", default="", help="Redis key for runner heartbeat (empty=disabled)")

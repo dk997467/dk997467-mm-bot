@@ -1108,6 +1108,324 @@ python -m tools.soak.continuous_runner \
 make soak-alert-dry
 ```
 
+**Alert self-test (fake CRIT):**
+```bash
+make soak-alert-selftest
+```
+
+---
+
+## 🔔 Alert Routing (ENV-Specific Policies)
+
+### Параметр `--alert-policy`
+
+Позволяет задавать разные пороги для разных окружений:
+
+```bash
+--alert-policy "dev=WARN,staging=WARN,prod=CRIT"
+```
+
+**Приоритет:**
+- `--alert-policy` **переопределяет** `--alert-min-severity` для конкретного env
+- Если env не указан в policy → используется fallback из `--alert-min-severity`
+
+**Примеры:**
+
+**Dev/Staging: более чувствительные (WARN):**
+```bash
+python -m tools.soak.continuous_runner \
+  --env dev \
+  --alert-policy "dev=WARN,staging=WARN,prod=CRIT" \
+  --alert telegram
+```
+→ Логирование: `ALERT_POLICY env=dev min_severity=WARN source=alert-policy`
+
+**Prod: только критические (CRIT):**
+```bash
+python -m tools.soak.continuous_runner \
+  --env prod \
+  --alert-policy "dev=WARN,staging=WARN,prod=CRIT" \
+  --alert telegram
+```
+→ Логирование: `ALERT_POLICY env=prod min_severity=CRIT source=alert-policy`
+
+**Fallback на глобальный:**
+```bash
+python -m tools.soak.continuous_runner \
+  --env test \
+  --alert-min-severity OK \
+  --alert telegram
+```
+→ Логирование: `ALERT_POLICY env=test min_severity=OK source=alert-min-severity`
+
+### Формат лога
+
+```
+ALERT_POLICY env=prod min_severity=CRIT source=alert-policy
+```
+
+**Поля:**
+- `env`: текущее окружение
+- `min_severity`: эффективная минимальная серьёзность
+- `source`: `alert-policy` (из --alert-policy) или `alert-min-severity` (fallback)
+
+---
+
+## ⏱️ Debounce ETA (Remaining Time)
+
+### Формат логов
+
+**При дебаунсе (алёрт пропущен):**
+```
+ALERT_DEBOUNCED level=CRIT last_sent="2025-10-26T10:20:00Z" debounce_min=180 remaining_min=73 verdict=CRIT
+```
+
+**Интерпретация:**
+- `remaining_min=73` → следующий алёрт возможен через 73 минуты
+- `debounce_min=180` → полное окно дебаунса (3 часа)
+- `last_sent` → timestamp последнего отправленного алёрта
+
+**При эскалации (bypass debounce):**
+```
+ALERT_BYPASS_DEBOUNCE prev=WARN new=CRIT reason=severity_increase
+```
+
+**Интерпретация:**
+- Severity усилился (WARN → CRIT)
+- Debounce игнорируется
+- Алёрт отправлен немедленно
+
+### Расчёт remaining_min
+
+```python
+remaining_min = max(0, debounce_min - floor((now - last_sent) / 60))
+```
+
+**Пример сценария:**
+1. **12:00** - CRIT алёрт отправлен
+2. **12:45** - CRIT снова → `remaining_min=135` (ещё 2h 15m)
+3. **15:00** - CRIT → `remaining_min=0`, алёрт отправлен
+4. **15:15** - WARN→CRIT → `ALERT_BYPASS_DEBOUNCE`, отправлен сразу
+
+### Где смотреть
+
+**Logs (stdout):**
+```bash
+grep "ALERT_DEBOUNCED\|ALERT_BYPASS" soak_runner.log
+```
+
+**Grafana (Loki):**
+```logql
+{job="soak-runner"} |= "ALERT_DEBOUNCED" or "ALERT_BYPASS_DEBOUNCE"
+```
+
+**Интерпретация в Grafana panel:**
+- Видите много `ALERT_DEBOUNCED` с высоким `remaining_min` → система застряла в CRIT
+- Видите частые `ALERT_BYPASS_DEBOUNCE` → много эскалаций
+
+---
+
+## 📊 Heartbeat Dashboard (Grafana)
+
+### Доступные панели
+
+Dashboard: `ops/grafana/soak_runner_dashboard.json`
+
+**Панели:**
+1. **Runner Heartbeat Age**: Время с последнего heartbeat (минуты)
+2. **Alert Debounce Status**: Логи debounce событий
+3. **Export Status**: Redis export статусы
+4. **Continuous Metrics**: Cycle metrics
+5. **Alert Policy**: Активная политика алёртов
+
+### Как подключить
+
+**Вариант A: Redis Exporter (Production)**
+
+1. Deploy [redis_exporter](https://github.com/oliver006/redis_exporter):
+```yaml
+# docker-compose.yml
+redis-exporter:
+  image: oliver006/redis_exporter
+  environment:
+    REDIS_ADDR: redis:6379
+  ports:
+    - 9121:9121
+```
+
+2. Configure Prometheus:
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+```
+
+3. Import dashboard в Grafana
+
+**Heartbeat metric:**
+```promql
+(time() - redis_key_timestamp{key=~".*:soak:runner:heartbeat"}) / 60
+```
+
+**Вариант B: Log-Based (Minimal)**
+
+Если Redis exporter недоступен:
+
+1. Ensure runner logs → Loki (via Promtail)
+2. Import dashboard (heartbeat panel будет log-based)
+3. Use Loki queries для мониторинга:
+
+```logql
+# Heartbeat log entries
+{job="soak-runner"} |= "Heartbeat written"
+
+# Absence alert
+absent_over_time({job="soak-runner"} |= "Heartbeat written"[15m])
+```
+
+### Интерпретация панелей
+
+**Heartbeat Age:**
+- 🟢 0-5 min: Healthy
+- 🟡 5-10 min: Degraded
+- 🔴 >10 min: Critical
+
+**Alert Debounce Status:**
+- `ALERT_DEBOUNCED ... remaining_min=X` → следующий alert через X минут
+- `ALERT_BYPASS_DEBOUNCE` → эскалация, debounce игнорирован
+
+**Export Status:**
+- `summary=OK violations=OK` → нормально
+- `summary=SKIP reason=redis_unavailable` → Redis недоступен
+
+### Quick Start
+
+```bash
+# Local: Import dashboard JSON
+grafana-cli dashboard import ops/grafana/soak_runner_dashboard.json
+
+# API
+curl -X POST http://grafana:3000/api/dashboards/db \
+  -H "Authorization: Bearer $API_KEY" \
+  -d @ops/grafana/soak_runner_dashboard.json
+```
+
+**Подробности:** См. `ops/grafana/README.md`
+
+---
+
+## 🧪 Alert Self-Test CI (Daily)
+
+### Назначение
+
+Ежедневная автоматическая проверка цепочки алёртов:
+1. Generate fake CRIT summary
+2. Run continuous_runner
+3. Verify alerts sent to Telegram/Slack
+4. Upload artifacts
+
+**Workflow:** `.github/workflows/alert-selftest.yml`
+
+**Расписание:** Ежедневно в 07:07 UTC
+
+### Что проверяется
+
+✅ `generate_fake_summary.py` работает  
+✅ Runner обрабатывает fake data  
+✅ Alert routing по env работает  
+✅ Redis export (опционально)  
+✅ Telegram/Slack alerts delivery  
+
+### Особенности self-test
+
+**Безопасность:**
+- Использует отдельный heartbeat key: `dev:bybit:soak:runner:selftest_heartbeat`
+- Debounce отключён (`--alert-debounce-min 0`)
+- TTL короткий (600s)
+- **НЕ влияет на prod alert state**
+
+**Артефакты:**
+```
+reports/analysis/SOAK_SUMMARY.json   # Fake CRIT
+reports/analysis/VIOLATIONS.json     # Fake violations
+artifacts/state/last_export_status.json
+```
+
+### Запуск вручную
+
+**Локально:**
+```bash
+make soak-alert-selftest
+```
+
+**GitHub UI:**
+1. Actions → Alert Self-Test (Daily)
+2. Run workflow
+3. Выбрать `verdict`: crit/warn/ok
+
+**CLI:**
+```bash
+gh workflow run alert-selftest.yml -f verdict=crit
+```
+
+### Интерпретация результатов
+
+**Success:**
+- Workflow completes (green)
+- Telegram/Slack получили alert
+- Artifacts uploaded
+
+**Failure scenarios:**
+1. **Workflow fails** → проверить `generate_fake_summary.py` или runner
+2. **No alert received** → проверить ENV vars (TELEGRAM_BOT_TOKEN, etc)
+3. **Export status SKIP** → Redis недоступен (не критично для self-test)
+
+### Мониторинг
+
+**Check recent runs:**
+```bash
+gh run list --workflow=alert-selftest.yml --limit 5
+```
+
+**Download artifacts:**
+```bash
+gh run download <run-id> --name alert-selftest-<run-id>
+```
+
+**Verify в Grafana:**
+- Dashboard → Alert Debounce Status
+- Фильтр: `{job="soak-runner"} |= "selftest"`
+
+---
+
+## 🛠️ Makefile Quick Reference (Updated)
+
+```bash
+# Production
+make soak-continuous          # Infinite loop (60 min intervals)
+make soak-once                # Single cycle
+
+# Dry-run testing
+make soak-alert-dry           # Dry-run с debounce
+
+# Self-test
+make soak-alert-selftest      # Generate fake CRIT + run
+
+# Analysis
+make soak-analyze             # Post-soak analyzer
+
+# Redis
+make soak-violations-redis    # Export violations
+```
+
+**ENV overrides:**
+```bash
+ENV=prod EXCHANGE=kucoin make soak-once
+ALERT_POLICY="dev=WARN,prod=CRIT" make soak-alert-selftest
+```
+
 ---
 
 **Questions? Contact:** [dima@example.com](mailto:dima@example.com)

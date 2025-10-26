@@ -199,7 +199,29 @@ soak-alert-dry:
 	  --heartbeat-key "soak:runner:heartbeat" \
 	  --dry-run --verbose
 
-.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry
+soak-alert-selftest:
+	@echo "=== Generating fake CRIT summary ==="
+	python -m tools.soak.generate_fake_summary --crit --out reports/analysis
+	@echo ""
+	@echo "=== Creating fake ITER files ==="
+	mkdir -p reports/analysis
+	echo '{"window": 1}' > reports/analysis/FAKE_ITER_001.json
+	@echo ""
+	@echo "=== Running self-test (no debounce) ==="
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "reports/analysis/FAKE_*.json" \
+	  --min-windows 1 --max-iterations 1 \
+	  --out-dir reports/analysis \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 600 --stream --stream-maxlen 1000 \
+	  --alert telegram --alert slack \
+	  --alert-policy "$${ALERT_POLICY:-dev=WARN,staging=WARN,prod=CRIT}" \
+	  --alert-debounce-min 0 \
+	  --heartbeat-key "$${ENV:-dev}:$${EXCHANGE:-bybit}:soak:runner:selftest_heartbeat" \
+	  --verbose || echo "[WARN] Self-test completed with warnings"
+
+.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry soak-alert-selftest
 
 shadow-run:
 	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --source mock
