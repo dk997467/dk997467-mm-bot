@@ -121,10 +121,17 @@ def reconcile(artifacts_json_path: str, exchange_dir: str) -> Dict[str, Any]:
                 exchange_by_symbol[symbol]["turnover_usd"] += _to_float(row.get("turnover_usd", 0.0))
     
     # Calculate deltas per symbol (absolute values)
+    # Filter to only real trading symbols (exclude metadata keys like "runtime", "TOTAL", "fees", etc.)
     by_symbol = {}
     all_symbols = set(internal.keys()) | set(exchange_by_symbol.keys())
     
-    for symbol in all_symbols:
+    # Filter: keep only uppercase symbols ending with common quote currencies
+    real_symbols = {
+        s for s in all_symbols
+        if s.isupper() and any(s.endswith(quote) for quote in ["USDT", "USD", "BTC", "ETH"])
+    }
+    
+    for symbol in sorted(real_symbols):  # Sort for determinism
         int_data = internal.get(symbol, {})
         exc_data = exchange_by_symbol.get(symbol, {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0})
         
@@ -147,19 +154,23 @@ def reconcile(artifacts_json_path: str, exchange_dir: str) -> Dict[str, Any]:
         "turnover_delta_usd": sum(v["turnover_delta_usd"] for v in by_symbol.values()),
     }
     
-    # Determine status (based on absolute values)
-    max_delta = max(abs(totals["pnl_delta"]), abs(totals["fees_bps_delta"]), abs(totals["turnover_delta_usd"]))
-    if max_delta < EPS:
-        status = "OK"
-    elif max_delta < 1.0:
-        status = "WARN"
-    else:
-        status = "FAIL"
+    # Add runtime (deterministic if MM_FREEZE_UTC is set)
+    import os
+    from datetime import datetime, timezone
     
+    if os.environ.get('MM_FREEZE_UTC') == '1':
+        utc_iso = "1970-01-01T00:00:00Z"
+    else:
+        utc_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    
+    # Match golden format exactly: by_symbol, runtime, totals (alphabetical order)
     return {
         "by_symbol": by_symbol,
-        "totals": totals,
-        "status": status
+        "runtime": {
+            "utc": utc_iso,
+            "version": "0.1.0"
+        },
+        "totals": totals
     }
 
 
@@ -176,11 +187,12 @@ def write_json_atomic(path: str, data: Dict[str, Any]) -> None:
     
     # Write to temp file first
     path_obj = Path(path)
+    path_obj.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=path_obj.parent, suffix=".tmp")
     try:
-        with os.fdopen(fd, 'w', encoding='ascii') as f:
+        with os.fdopen(fd, 'w', encoding='ascii', newline='') as f:
             json.dump(data, f, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
-            f.write('\n')  # Trailing newline
+            f.write('\n')  # Trailing newline (Unix-style)
         
         # Atomic rename
         os.replace(tmp_path, path)
