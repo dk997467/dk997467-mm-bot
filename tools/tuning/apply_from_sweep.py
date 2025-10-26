@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Apply tuning parameters from sweep results."""
 from __future__ import annotations
+import json
+from pathlib import Path
 from typing import Dict, Any
 
 
@@ -44,3 +46,62 @@ def _simulate(config: Dict[str, Any]) -> Dict[str, Any]:
             "risk": risk
         }
     }
+
+
+if __name__ == "__main__":
+    """
+    CLI entry point: reads PARAM_SWEEP.json and generates TUNING_REPORT.json
+    """
+    # Find PARAM_SWEEP.json (check current dir and artifacts/)
+    sweep_path = Path("artifacts/PARAM_SWEEP.json")
+    if not sweep_path.exists():
+        sweep_path = Path("PARAM_SWEEP.json")
+    
+    if not sweep_path.exists():
+        print("[ERROR] PARAM_SWEEP.json not found", flush=True)
+        exit(1)
+    
+    # Load sweep results
+    with open(sweep_path, 'r', encoding='utf-8') as f:
+        sweep = json.load(f)
+    
+    # Extract top3_by_net_bps_safe (or fallback to results[0])
+    top3 = sweep.get("top3_by_net_bps_safe", [])
+    if not top3:
+        results = sweep.get("results", [])
+        if results:
+            top3 = [results[0]]
+    
+    if not top3:
+        print("[ERROR] No results in PARAM_SWEEP.json", flush=True)
+        exit(1)
+    
+    # Select best candidate (first in top3)
+    selected = top3[0]
+    
+    # Extract params and metrics
+    params = selected.get("params", {})
+    metrics_data = selected.get("metrics", {})
+    
+    # Build TUNING_REPORT.json
+    report = {
+        "selected": {
+            "params": params
+        },
+        "metrics": {
+            "net_bps": metrics_data.get("net_bps", 0.0),
+            "order_age_p95_ms": metrics_data.get("order_age_p95_ms", 0.0),
+            "replace_rate_per_min": metrics_data.get("replace_rate_per_min", 0.0),
+            "fill_rate": metrics_data.get("fill_rate", 0.0)
+        }
+    }
+    
+    # Write to artifacts/TUNING_REPORT.json
+    out_dir = Path("artifacts")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "TUNING_REPORT.json"
+    
+    with open(out_path, 'w', encoding='utf-8') as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+    
+    print(f"[OK] TUNING_REPORT.json written to {out_path}", flush=True)

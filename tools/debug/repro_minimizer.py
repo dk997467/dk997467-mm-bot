@@ -4,37 +4,60 @@ Reproduction case minimizer: simplifies input for debugging.
 
 Usage:
     from tools.debug.repro_minimizer import minimize
-    minimized = minimize(large_text, max_len=128)
+    minimized, steps = minimize(large_text)
 """
 from __future__ import annotations
+from pathlib import Path
 
 
-def minimize(input_text: str, max_len: int = 128) -> str:
+def minimize(path_or_text: str) -> tuple[str, int]:
     """
     Minimize input text for reproduction cases.
     
-    - Normalizes whitespace
-    - Truncates to max_len
-    - Ensures deterministic output
+    - Loads from file if path_or_text is a valid file path
+    - Preserves lines with '"type":"guard"' (critical markers)
+    - Removes other lines to simplify
+    - Returns (minimal_text, steps) where steps = number of lines removed
     
     Args:
-        input_text: Text to minimize
-        max_len: Maximum length (default: 128)
+        path_or_text: File path or raw text to minimize
     
     Returns:
-        Minimized string
+        Tuple of (minimal_text, steps_removed)
     """
-    if not isinstance(input_text, str):
-        input_text = str(input_text)
+    # Try to load from file if it's a path
+    text = path_or_text
+    path = Path(path_or_text)
+    if path.exists() and path.is_file():
+        text = path.read_text(encoding='utf-8')
     
-    # Normalize whitespace
-    s = " ".join(input_text.split())
+    # Split into lines
+    lines = text.splitlines()
+    original_count = len(lines)
     
-    # Truncate if needed
-    if len(s) > max_len:
-        s = s[:max_len]
+    # Keep lines with critical markers (e.g. "type":"guard")
+    # Also keep first and last line for context
+    kept_lines = []
+    for i, line in enumerate(lines):
+        # Always keep first/last line
+        if i == 0 or i == len(lines) - 1:
+            kept_lines.append(line)
+            continue
+        
+        # Keep critical markers
+        if '"type":"guard"' in line or '"type": "guard"' in line:
+            kept_lines.append(line)
+            continue
+        
+        # Keep non-empty lines with JSON structure
+        stripped = line.strip()
+        if stripped and (stripped.startswith('{') or stripped.startswith('[')):
+            kept_lines.append(line)
     
-    return s
+    minimal_text = '\n'.join(kept_lines)
+    steps_removed = original_count - len(kept_lines)
+    
+    return (minimal_text, steps_removed)
 
 
 if __name__ == "__main__":

@@ -50,9 +50,10 @@ try:
         importlib.invalidate_caches()
         import tools  # noqa: E402
 
-    # Диагностика (можно закомментировать, если шумно)
-    print("[sitecustomize] sys.path[0] =", sys.path[0])
-    print("[sitecustomize] tools.__file__ =", Path(tools.__file__).resolve())
+    # Диагностика (только если явно запрошена через SITECUSTOMIZE_VERBOSE)
+    if os.getenv("SITECUSTOMIZE_VERBOSE"):
+        print("[sitecustomize] sys.path[0] =", sys.path[0], file=sys.stderr)
+        print("[sitecustomize] tools.__file__ =", Path(tools.__file__).resolve(), file=sys.stderr)
 
 except Exception as _e:
     # не мешаем тестам даже если тут что-то пошло не так

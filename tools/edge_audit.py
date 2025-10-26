@@ -36,19 +36,20 @@ def _index_quotes(quotes: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]
     return indexed
 
 
-def _agg_symbols(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def _agg_symbols(trades: List[Dict[str, Any]], qidx: Dict[str, List[Dict[str, Any]]] | None = None) -> Dict[str, Dict[str, Any]]:
     """
-    Aggregate rows by symbol.
+    Aggregate trades by symbol, optionally using quote index.
     
     Args:
-        rows: List of dicts with 'symbol' and numeric fields
+        trades: List of trade dicts with 'symbol' and numeric fields
+        qidx: Optional quote index (symbol -> list of quotes), currently unused
     
     Returns:
         Dictionary mapping symbol to aggregated stats
     """
     agg = {}
     
-    for row in rows:
+    for row in trades:
         symbol = row.get("symbol")
         if not symbol:
             continue
@@ -62,7 +63,21 @@ def _agg_symbols(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         
         agg[symbol]["count"] += 1
         
-        # Try to aggregate numeric value (look for common field names)
+        # Try to calculate net edge if trade fields available
+        if all(k in row for k in ["mid_before", "mid_after_1s", "fee_bps"]):
+            mid_before = row.get("mid_before", 0.0)
+            mid_after = row.get("mid_after_1s", 0.0)
+            fee_bps = row.get("fee_bps", 0.0)
+            
+            if mid_before != 0:
+                # net_edge_bps ~ ((mid_after - mid_before) / mid_before) * 10000 - fee_bps
+                price_move_bps = ((mid_after - mid_before) / mid_before) * 10000
+                net_edge = price_move_bps - fee_bps
+                agg[symbol]["sum"] += net_edge
+                agg[symbol]["values"].append(net_edge)
+                continue
+        
+        # Fallback: Try to aggregate numeric value (look for common field names)
         for key in ["value", "edge", "spread", "price", "quantity"]:
             if key in row and _finite(row[key]):
                 val = float(row[key])

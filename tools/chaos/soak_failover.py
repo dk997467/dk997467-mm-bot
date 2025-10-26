@@ -5,24 +5,71 @@ from __future__ import annotations
 
 class FakeKVLock:
     """
-    Fake distributed lock for testing.
+    Fake distributed lock for testing with TTL and ownership tracking.
     
-    Simulates lock acquire/release without actual backend.
+    Simulates lock acquire/release/renew with time-based expiry.
     """
     
-    def __init__(self, key: str):
+    def __init__(self, key: str = "lock", ttl_ms: int = 1000):
         """
         Initialize fake lock.
         
         Args:
             key: Lock key name
+            ttl_ms: Lock TTL in milliseconds
         """
         self.key = key
-        self._locked = False
+        self.ttl_ms = ttl_ms
+        self.owner = None
+        self._expiry_ts_ms = 0
+        self.leader_elections_total = 0
+        self.renew_fail_total = 0
     
+    def try_acquire(self, owner: str, ts_ms: int) -> bool:
+        """
+        Try to acquire lock at given timestamp.
+        
+        Args:
+            owner: Owner identifier
+            ts_ms: Current timestamp in milliseconds
+        
+        Returns:
+            True if acquired, False otherwise
+        """
+        # Lock is free if no owner or expired
+        if self.owner is None or ts_ms >= self._expiry_ts_ms:
+            self.owner = owner
+            self._expiry_ts_ms = ts_ms + self.ttl_ms
+            self.leader_elections_total += 1
+            return True
+        
+        # Lock is held by someone else and not expired
+        return False
+    
+    def renew(self, owner: str, ts_ms: int) -> bool:
+        """
+        Renew lock if owned by this owner and not expired.
+        
+        Args:
+            owner: Owner identifier
+            ts_ms: Current timestamp in milliseconds
+        
+        Returns:
+            True if renewed, False otherwise
+        """
+        # Can only renew if you own it and it's not expired
+        if self.owner == owner and ts_ms < self._expiry_ts_ms:
+            self._expiry_ts_ms = ts_ms + self.ttl_ms
+            return True
+        
+        # Renew failed
+        self.renew_fail_total += 1
+        return False
+    
+    # Legacy methods for backward compatibility
     def acquire(self, timeout: float = 1.0) -> bool:
         """
-        Acquire lock.
+        Acquire lock (legacy API, no timestamp).
         
         Args:
             timeout: Timeout in seconds (ignored in fake)
@@ -30,14 +77,17 @@ class FakeKVLock:
         Returns:
             True if acquired, False otherwise
         """
-        if not self._locked:
-            self._locked = True
+        if self.owner is None:
+            self.owner = "legacy"
+            self._expiry_ts_ms = 999999999999  # Far future
+            self.leader_elections_total += 1
             return True
         return False
     
     def release(self) -> None:
-        """Release lock."""
-        self._locked = False
+        """Release lock (legacy API)."""
+        self.owner = None
+        self._expiry_ts_ms = 0
     
     def __enter__(self):
         """Context manager entry."""

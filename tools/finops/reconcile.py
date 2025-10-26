@@ -3,99 +3,148 @@
 FinOps Reconcile: Aggregate and reconcile financial metrics.
 
 Functions:
-    reconcile(base_dir: str) -> dict
+    reconcile(artifacts_json_path: str, exchange_dir: str) -> dict
     render_reconcile_md(summary: dict) -> str
 """
 from __future__ import annotations
+import json
+import csv
 from pathlib import Path
 from typing import Dict, Any
 
-from tools.finops.exporter import load_artifacts
+# Epsilon for tiny delta comparison
+EPS = 1e-6
 
 
-def reconcile(base_dir: str) -> Dict[str, Any]:
+def reconcile(artifacts_json_path: str, exchange_dir: str) -> Dict[str, Any]:
     """
-    Reconcile financial metrics from artifacts.
+    Reconcile financial metrics from artifacts vs exchange reports.
     
     Args:
-        base_dir: Base directory containing artifacts
+        artifacts_json_path: Path to metrics.json with internal tracking (per-symbol)
+        exchange_dir: Directory containing exchange CSV reports (pnl.csv, fees.csv, turnover.csv)
     
     Returns:
-        Summary dictionary with aggregated metrics
-    """
-    data = load_artifacts(base_dir)
-    
-    summary = {
-        "pnl": {
-            "total": 0.0,
-            "realized": 0.0,
-            "unrealized": 0.0,
-            "count": len(data.get("pnl", []))
-        },
-        "fees": {
-            "maker": 0.0,
-            "taker": 0.0,
-            "total": 0.0,
-            "count": len(data.get("fees", []))
-        },
-        "turnover": {
-            "volume": 0.0,
-            "turnover": 0.0,
-            "count": len(data.get("turnover", []))
-        },
-        "latency": {
-            "p50_avg": 0.0,
-            "p95_avg": 0.0,
-            "p99_avg": 0.0,
-            "count": len(data.get("latency", []))
-        },
-        "edge": {
-            "edge_avg": 0.0,
-            "spread_avg": 0.0,
-            "count": len(data.get("edge", []))
+        Summary dictionary with per-symbol and total deltas:
+        {
+          "by_symbol": {
+            "BTCUSDT": {
+              "pnl_delta": float,
+              "fees_bps_delta": float,
+              "turnover_delta_usd": float
+            }
+          },
+          "totals": {
+            "pnl_delta": float,
+            "fees_bps_delta": float,
+            "turnover_delta_usd": float
+          }
         }
+    """
+    # Load internal metrics (per-symbol)
+    metrics_path = Path(artifacts_json_path)
+    if metrics_path.exists():
+        with open(metrics_path, 'r', encoding='utf-8') as f:
+            internal = json.load(f)
+    else:
+        internal = {}
+    
+    # Load exchange reports (per-symbol)
+    exchange_path = Path(exchange_dir)
+    exchange_by_symbol = {}
+    
+    # Read PnL from exchange
+    pnl_csv = exchange_path / "pnl.csv"
+    if pnl_csv.exists():
+        with open(pnl_csv, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                symbol = row.get("symbol", "UNKNOWN")
+                if symbol not in exchange_by_symbol:
+                    exchange_by_symbol[symbol] = {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0}
+                exchange_by_symbol[symbol]["pnl"] += float(row.get("pnl", 0.0))
+    
+    # Read fees from exchange
+    fees_csv = exchange_path / "fees.csv"
+    if fees_csv.exists():
+        with open(fees_csv, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                symbol = row.get("symbol", "UNKNOWN")
+                if symbol not in exchange_by_symbol:
+                    exchange_by_symbol[symbol] = {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0}
+                exchange_by_symbol[symbol]["fees_bps"] += float(row.get("fees_bps", 0.0))
+    
+    # Read turnover from exchange
+    turnover_csv = exchange_path / "turnover.csv"
+    if turnover_csv.exists():
+        with open(turnover_csv, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                symbol = row.get("symbol", "UNKNOWN")
+                if symbol not in exchange_by_symbol:
+                    exchange_by_symbol[symbol] = {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0}
+                exchange_by_symbol[symbol]["turnover_usd"] += float(row.get("turnover_usd", 0.0))
+    
+    # Calculate deltas per symbol
+    by_symbol = {}
+    all_symbols = set(internal.keys()) | set(exchange_by_symbol.keys())
+    
+    for symbol in all_symbols:
+        int_data = internal.get(symbol, {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0})
+        exc_data = exchange_by_symbol.get(symbol, {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0})
+        
+        pnl_delta = round(int_data.get("pnl", 0.0) - exc_data.get("pnl", 0.0), 10)
+        fees_delta = round(int_data.get("fees_bps", 0.0) - exc_data.get("fees_bps", 0.0), 10)
+        turnover_delta = round(int_data.get("turnover_usd", 0.0) - exc_data.get("turnover_usd", 0.0), 10)
+        
+        by_symbol[symbol] = {
+            "pnl_delta": pnl_delta,
+            "fees_bps_delta": fees_delta,
+            "turnover_delta_usd": turnover_delta
+        }
+    
+    # Calculate totals
+    totals = {
+        "pnl_delta": round(sum(v["pnl_delta"] for v in by_symbol.values()), 10),
+        "fees_bps_delta": round(sum(v["fees_bps_delta"] for v in by_symbol.values()), 10),
+        "turnover_delta_usd": round(sum(v["turnover_delta_usd"] for v in by_symbol.values()), 10)
     }
     
-    # Aggregate PnL
-    for row in data.get("pnl", []):
-        summary["pnl"]["total"] += row.get("pnl", 0.0)
-        summary["pnl"]["realized"] += row.get("realized_pnl", 0.0)
-        summary["pnl"]["unrealized"] += row.get("unrealized_pnl", 0.0)
+    return {
+        "by_symbol": by_symbol,
+        "totals": totals
+    }
+
+
+def write_json_atomic(path: str, data: Dict[str, Any]) -> None:
+    """
+    Write JSON atomically with sorted keys and trailing newline.
     
-    # Aggregate fees
-    for row in data.get("fees", []):
-        summary["fees"]["maker"] += row.get("maker_fee", 0.0)
-        summary["fees"]["taker"] += row.get("taker_fee", 0.0)
-        summary["fees"]["total"] += row.get("total_fee", 0.0)
+    Args:
+        path: Output file path
+        data: Data to serialize
+    """
+    import tempfile
+    import os
     
-    # Aggregate turnover
-    for row in data.get("turnover", []):
-        summary["turnover"]["volume"] += row.get("volume", 0.0)
-        summary["turnover"]["turnover"] += row.get("turnover", 0.0)
-    
-    # Aggregate latency (averages)
-    lat_count = summary["latency"]["count"]
-    if lat_count > 0:
-        for row in data.get("latency", []):
-            summary["latency"]["p50_avg"] += row.get("p50_ms", 0.0)
-            summary["latency"]["p95_avg"] += row.get("p95_ms", 0.0)
-            summary["latency"]["p99_avg"] += row.get("p99_ms", 0.0)
+    # Write to temp file first
+    path_obj = Path(path)
+    fd, tmp_path = tempfile.mkstemp(dir=path_obj.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, 'w', encoding='ascii') as f:
+            json.dump(data, f, sort_keys=True, indent=2, ensure_ascii=True)
+            f.write('\n')  # Trailing newline
         
-        summary["latency"]["p50_avg"] /= lat_count
-        summary["latency"]["p95_avg"] /= lat_count
-        summary["latency"]["p99_avg"] /= lat_count
-    
-    # Aggregate edge (averages)
-    edge_count = summary["edge"]["count"]
-    if edge_count > 0:
-        for row in data.get("edge", []):
-            summary["edge"]["edge_avg"] += row.get("edge_bps", 0.0)
-            summary["edge"]["spread_avg"] += row.get("spread_bps", 0.0)
-        
-        summary["edge"]["edge_avg"] /= edge_count
-        summary["edge"]["spread_avg"] /= edge_count
-    
-    return summary
+        # Atomic rename
+        os.replace(tmp_path, path)
+    except Exception:
+        # Clean up temp file on error
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        raise
 
 
 def render_reconcile_md(summary: Dict[str, Any]) -> str:
@@ -103,48 +152,37 @@ def render_reconcile_md(summary: Dict[str, Any]) -> str:
     Render reconciliation summary as Markdown.
     
     Args:
-        summary: Summary dictionary from reconcile()
+        summary: Summary dictionary from reconcile() with by_symbol and totals
     
     Returns:
-        Markdown formatted string
+        Markdown formatted string with trailing newline
     """
     lines = [
         "# FinOps Reconciliation Summary",
         "",
-        "## PnL",
-        "",
-        f"- **Total PnL:** ${summary['pnl']['total']:.2f}",
-        f"- **Realized PnL:** ${summary['pnl']['realized']:.2f}",
-        f"- **Unrealized PnL:** ${summary['pnl']['unrealized']:.2f}",
-        f"- **Count:** {summary['pnl']['count']}",
-        "",
-        "## Fees",
-        "",
-        f"- **Maker Fees:** ${summary['fees']['maker']:.2f}",
-        f"- **Taker Fees:** ${summary['fees']['taker']:.2f}",
-        f"- **Total Fees:** ${summary['fees']['total']:.2f}",
-        f"- **Count:** {summary['fees']['count']}",
-        "",
-        "## Turnover",
-        "",
-        f"- **Volume:** {summary['turnover']['volume']:.2f}",
-        f"- **Turnover:** ${summary['turnover']['turnover']:.2f}",
-        f"- **Count:** {summary['turnover']['count']}",
-        "",
-        "## Latency",
-        "",
-        f"- **P50 Avg:** {summary['latency']['p50_avg']:.2f}ms",
-        f"- **P95 Avg:** {summary['latency']['p95_avg']:.2f}ms",
-        f"- **P99 Avg:** {summary['latency']['p99_avg']:.2f}ms",
-        f"- **Count:** {summary['latency']['count']}",
-        "",
-        "## Edge",
-        "",
-        f"- **Edge Avg:** {summary['edge']['edge_avg']:.2f} bps",
-        f"- **Spread Avg:** {summary['edge']['spread_avg']:.2f} bps",
-        f"- **Count:** {summary['edge']['count']}",
+        "## Per-Symbol Deltas",
         ""
     ]
+    
+    # Sort symbols for determinism
+    by_symbol = summary.get("by_symbol", {})
+    for symbol in sorted(by_symbol.keys()):
+        delta_info = by_symbol[symbol]
+        lines.append(f"### {symbol}")
+        lines.append("")
+        lines.append(f"- **PnL Delta:** {delta_info.get('pnl_delta', 0.0):.10f}")
+        lines.append(f"- **Fees BPS Delta:** {delta_info.get('fees_bps_delta', 0.0):.10f}")
+        lines.append(f"- **Turnover USD Delta:** {delta_info.get('turnover_delta_usd', 0.0):.10f}")
+        lines.append("")
+    
+    # Totals
+    totals = summary.get("totals", {})
+    lines.append("## Totals")
+    lines.append("")
+    lines.append(f"- **Total PnL Delta:** {totals.get('pnl_delta', 0.0):.10f}")
+    lines.append(f"- **Total Fees BPS Delta:** {totals.get('fees_bps_delta', 0.0):.10f}")
+    lines.append(f"- **Total Turnover USD Delta:** {totals.get('turnover_delta_usd', 0.0):.10f}")
+    lines.append("")
     
     return "\n".join(lines)
 
