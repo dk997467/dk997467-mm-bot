@@ -1,131 +1,156 @@
 #!/usr/bin/env python3
 """
-Regression Guard: Detect performance regressions between soak runs.
+Regression Guard: Detect performance regression between today and recent history.
 
 Usage:
-    python -m tools.soak.regression_guard \\
-        --baseline artifacts/soak/baseline \\
-        --current artifacts/soak/latest
+    from tools.soak.regression_guard import check
+    result = check(today_report, last_7days_reports)
 """
 from __future__ import annotations
-import argparse
-import json
-import sys
+from typing import Dict, Any, List
 from pathlib import Path
-from typing import Dict, Any
+import json
+import argparse
+import sys
 
 
-def check(baseline: Dict[str, Any], current: Dict[str, Any], threshold: float = 0.10) -> Dict[str, Any]:
+def check(today: Dict[str, Any], history: List[Dict[str, Any]], threshold: float = 0.10) -> Dict[str, Any]:
     """
-    Check for performance regression between baseline and current.
+    Check for performance regression by comparing today's metrics to historical baseline.
     
     Args:
-        baseline: Baseline metrics dictionary
-        current: Current metrics dictionary
+        today: Today's report dict with KPIs
+        history: List of recent reports (e.g., last 7 days)
         threshold: Regression threshold (default: 0.10 = 10%)
     
     Returns:
-        Dictionary with regression check results:
+        Dictionary with:
         {
-            "status": "OK"|"REGRESSION",
-            "regression_detected": bool,
-            "threshold": float,
-            "details": {...}
+            "ok": bool (False if regression detected),
+            "reason": str ("NONE" | "EDGE_REG" | "LAT_REG" | "TAKER_REG"),
+            "details": dict
         }
+    
+    Example:
+        >>> today = {"edge_net_bps": 2.0, "order_age_p95_ms": 400, "taker_share_pct": 15}
+        >>> history = [{"edge_net_bps": 3.0, "order_age_p95_ms": 300, "taker_share_pct": 12}]
+        >>> result = check(today, history)
+        >>> result['ok']
+        False
+        >>> result['reason']
+        'EDGE_REG'
     """
-    regression_detected = False
-    details = {}
+    if not history:
+        return {"ok": True, "reason": "NONE", "details": {}}
     
-    # Check common KPIs for regression
-    kpis = ["edge_bps", "maker_taker_ratio", "net_bps"]
+    # Calculate baseline from history (median or mean)
+    def _avg(key: str) -> float:
+        vals = [float(r.get(key, 0.0)) for r in history if key in r]
+        return sum(vals) / len(vals) if vals else 0.0
     
-    for kpi in kpis:
-        baseline_val = baseline.get(kpi)
-        current_val = current.get(kpi)
-        
-        if baseline_val is not None and current_val is not None:
-            baseline_val = float(baseline_val)
-            current_val = float(current_val)
-            
-            if baseline_val > 0:
-                change = (current_val - baseline_val) / baseline_val
-                
-                # For positive metrics (higher is better), negative change is regression
-                if change < -threshold:
-                    regression_detected = True
-                    details[kpi] = {
-                        "baseline": baseline_val,
-                        "current": current_val,
-                        "change_pct": change * 100
-                    }
-    
-    return {
-        "status": "REGRESSION" if regression_detected else "OK",
-        "regression_detected": regression_detected,
-        "threshold": threshold,
-        "details": details
+    baseline = {
+        "edge_net_bps": _avg("edge_net_bps"),
+        "order_age_p95_ms": _avg("order_age_p95_ms"),
+        "taker_share_pct": _avg("taker_share_pct")
     }
-
-
-def run(argv=None) -> int:
-    """
-    Run regression guard checks.
     
-    Returns:
-        0 if no regression detected, 1 if regression found
-    """
-    parser = argparse.ArgumentParser(description="Regression Guard: Detect performance regressions")
+    # Compare today to baseline
+    today_edge = float(today.get("edge_net_bps", 0.0))
+    today_lat = float(today.get("order_age_p95_ms", 0.0))
+    today_taker = float(today.get("taker_share_pct", 0.0))
+    
+    base_edge = baseline["edge_net_bps"]
+    base_lat = baseline["order_age_p95_ms"]
+    base_taker = baseline["taker_share_pct"]
+    
+    details = {
+        "today": {
+            "edge_net_bps": today_edge,
+            "order_age_p95_ms": today_lat,
+            "taker_share_pct": today_taker
+        },
+        "baseline": baseline
+    }
+    
+    # Check for regressions (higher is better for edge, lower is better for latency/taker)
+    
+    # EDGE regression: if today's edge is significantly worse than baseline
+    if base_edge > 0 and today_edge < base_edge:
+        rel_delta = abs(today_edge - base_edge) / base_edge
+        if rel_delta > threshold:
+            return {"ok": False, "reason": "EDGE_REG", "details": details}
+    
+    # LAT regression: if today's latency is significantly worse than baseline
+    if base_lat > 0 and today_lat > base_lat:
+        rel_delta = abs(today_lat - base_lat) / base_lat
+        if rel_delta > threshold:
+            return {"ok": False, "reason": "LAT_REG", "details": details}
+    
+    # TAKER regression: if today's taker share is significantly worse than baseline
+    if base_taker > 0 and today_taker > base_taker:
+        rel_delta = abs(today_taker - base_taker) / base_taker
+        if rel_delta > threshold:
+            return {"ok": False, "reason": "TAKER_REG", "details": details}
+    
+    return {"ok": True, "reason": "NONE", "details": details}
+
+
+def main():
+    """CLI entry point."""
+    parser = argparse.ArgumentParser(description="Regression Guard: Detect performance regression")
     parser.add_argument(
-        "--baseline",
-        type=Path,
-        default=Path("artifacts/soak/baseline"),
-        help="Baseline artifacts path"
+        "--today-json",
+        type=str,
+        required=True,
+        help="Today's report JSON file"
     )
     parser.add_argument(
-        "--current",
-        type=Path,
-        default=Path("artifacts/soak/latest"),
-        help="Current artifacts path"
-    )
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=Path("artifacts/soak/latest/REGRESSION_GUARD_RESULT.json"),
-        help="Output file"
+        "--history-dir",
+        type=str,
+        required=True,
+        help="Directory with historical reports (REPORT_SOAK_*.json)"
     )
     parser.add_argument(
         "--threshold",
         type=float,
         default=0.10,
-        help="Regression threshold (10%% degradation)"
+        help="Regression threshold (e.g., 0.10 for 10%%)"
+    )
+    parser.add_argument(
+        "--out",
+        type=str,
+        default="artifacts/soak/latest/REGRESSION_GUARD_RESULT.json",
+        help="Output JSON file"
     )
     
-    args = parser.parse_args(argv)
+    args = parser.parse_args()
     
-    # Stub implementation: always pass
-    result = {
-        "status": "OK",
-        "reason": "stub_regression_guard_pass",
-        "baseline": str(args.baseline),
-        "current": str(args.current),
-        "regression_detected": False,
-        "threshold": args.threshold,
-        "details": {}
-    }
+    # Load today's report
+    with open(args.today_json, "r", encoding="utf-8") as f:
+        today = json.load(f)
+    
+    # Load historical reports
+    import glob
+    history = []
+    for path in sorted(glob.glob(str(Path(args.history_dir) / "REPORT_SOAK_*.json"))):
+        with open(path, "r", encoding="utf-8") as f:
+            history.append(json.load(f))
+    
+    # Run check
+    res = check(today, history, threshold=args.threshold)
     
     # Ensure output directory exists
-    args.out.parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     
     # Write result
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2)
+        json.dump(res, f, ensure_ascii=False, indent=2)
     
-    print(f"[OK] Regression Guard: {result['status']}")
-    print(f"  Threshold: {args.threshold * 100:.1f}%")
-    print(f"  Result written to: {args.out}")
+    print(f"[OK] regression_guard result written: {args.out}")
+    print(f"     Status: {'PASS' if res['ok'] else 'FAIL'} ({res['reason']})")
     
-    return 0
+    return 0 if res['ok'] else 1
 
 
 if __name__ == "__main__":
-    sys.exit(run())
+    sys.exit(main())

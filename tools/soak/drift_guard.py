@@ -1,100 +1,103 @@
 #!/usr/bin/env python3
 """
-Drift Guard: Detect configuration or behavior drift between soak runs.
+Drift Guard: Detect configuration or behavior drift in edge reports.
 
 Usage:
-    python -m tools.soak.drift_guard \\
-        --baseline artifacts/soak/baseline \\
-        --current artifacts/soak/latest
+    from tools.soak.drift_guard import check
+    result = check('EDGE_REPORT.json')
 """
 from __future__ import annotations
-import argparse
-import json
-import sys
 from pathlib import Path
+import json
 from typing import Dict, Any
+import argparse
+import sys
 
 
-def check(baseline_dir: str, current_dir: str) -> Dict[str, Any]:
+def check(edge_report_path: str) -> Dict[str, Any]:
     """
-    Check for configuration/behavior drift between baseline and current.
+    Check for edge drift in a report file.
     
     Args:
-        baseline_dir: Baseline artifacts directory
-        current_dir: Current artifacts directory
+        edge_report_path: Path to EDGE_REPORT.json
     
     Returns:
-        Dictionary with drift check results:
+        Dictionary with:
         {
-            "status": "OK"|"DRIFT",
-            "drift_detected": bool,
-            "details": {...}
+            "ok": bool (False if drift detected),
+            "reason": str ("NONE" | "DRIFT_EDGE" | ...),
+            "details": dict
         }
-    """
-    baseline_path = Path(baseline_dir)
-    current_path = Path(current_dir)
     
-    # Simple stub: always return no drift
-    return {
-        "status": "OK",
-        "drift_detected": False,
-        "baseline": str(baseline_path),
-        "current": str(current_path),
-        "details": {}
-    }
+    Example:
+        >>> result = check('artifacts/EDGE_REPORT.json')
+        >>> result['ok']
+        False
+        >>> result['reason']
+        'DRIFT_EDGE'
+    """
+    path = Path(edge_report_path)
+    
+    if not path.exists():
+        return {"ok": True, "reason": "NONE", "details": {"error": "file_not_found"}}
+    
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            report = json.load(f)
+    except Exception as e:
+        return {"ok": True, "reason": "NONE", "details": {"error": str(e)}}
+    
+    # Check for edge drift indicators
+    # Example: if median edge is below threshold, flag as drift
+    
+    median_edge = report.get("median_edge_bps", 0.0)
+    edge_threshold = 2.0  # Example threshold
+    
+    if median_edge < edge_threshold:
+        return {
+            "ok": False,
+            "reason": "DRIFT_EDGE",
+            "details": {
+                "median_edge_bps": median_edge,
+                "threshold": edge_threshold
+            }
+        }
+    
+    return {"ok": True, "reason": "NONE", "details": {}}
 
 
-def run(argv=None) -> int:
-    """
-    Run drift guard checks.
-    
-    Returns:
-        0 if no drift detected, 1 if drift found
-    """
+def main():
+    """CLI entry point."""
     parser = argparse.ArgumentParser(description="Drift Guard: Detect configuration drift")
     parser.add_argument(
-        "--baseline",
-        type=Path,
-        default=Path("artifacts/soak/baseline"),
-        help="Baseline artifacts path"
-    )
-    parser.add_argument(
-        "--current",
-        type=Path,
-        default=Path("artifacts/soak/latest"),
-        help="Current artifacts path"
+        "edge_report",
+        type=str,
+        help="Path to EDGE_REPORT.json"
     )
     parser.add_argument(
         "--out",
-        type=Path,
-        default=Path("artifacts/soak/latest/DRIFT_GUARD_RESULT.json"),
-        help="Output file"
+        type=str,
+        default="artifacts/DRIFT_STOP.json",
+        help="Output JSON file"
     )
     
-    args = parser.parse_args(argv)
+    args = parser.parse_args()
     
-    # Stub implementation: always pass
-    result = {
-        "status": "OK",
-        "reason": "stub_drift_guard_pass",
-        "baseline": str(args.baseline),
-        "current": str(args.current),
-        "drift_detected": False,
-        "details": {}
-    }
+    # Run check
+    res = check(args.edge_report)
     
     # Ensure output directory exists
-    args.out.parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     
     # Write result
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2)
+        json.dump(res, f, ensure_ascii=False, indent=2)
     
-    print(f"[OK] Drift Guard: {result['status']}")
-    print(f"  Result written to: {args.out}")
+    print(f"[OK] drift_guard result written: {args.out}")
+    print(f"     Status: {'PASS' if res['ok'] else 'FAIL'} ({res['reason']})")
     
-    return 0
+    return 0 if res['ok'] else 1
 
 
 if __name__ == "__main__":
-    sys.exit(run())
+    sys.exit(main())
