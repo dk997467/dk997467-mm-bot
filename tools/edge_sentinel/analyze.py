@@ -89,7 +89,27 @@ def analyze(trades_path: str, quotes_path: str, bucket_ms: int) -> Dict[str, Any
         for symbol, score in sorted(symbol_scores.items(), key=lambda x: x[1], reverse=True)
     ]
     
+    # Summary stats
+    unique_symbols = {s["symbol"] for b in buckets for s in b.get("symbols", [])}
+    summary = {
+        "symbols": len(unique_symbols),
+        "buckets": len(buckets)
+    }
+    
+    # Top symbols by score (up to 5)
+    top_symbols = sorted(ranking, key=lambda x: x.get("score", 0.0), reverse=False)[:5]
+    
+    # Advice structure (list of action items)
+    advice_items = []
+    if top_symbols and top_symbols[0].get("score", 0.0) < 0:
+        advice_items.append({"action": "REVIEW", "reason": "Negative edge detected"})
+    else:
+        advice_items.append({"action": "KEEP", "reason": "Performance acceptable"})
+    
     return {
         "buckets": buckets,
-        "ranking": ranking
+        "ranking": ranking,
+        "summary": summary,
+        "top": {"top_symbols_by_net_drop": top_symbols},
+        "advice": advice_items
     }

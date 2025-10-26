@@ -36,60 +36,142 @@ def _index_quotes(quotes: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]
     return indexed
 
 
-def _agg_symbols(trades: List[Dict[str, Any]], qidx: Dict[str, List[Dict[str, Any]]] | None = None) -> Dict[str, Dict[str, Any]]:
+def _agg_symbols(trades: List[Dict[str, Any]], qidx: Dict[str, Any] | None = None) -> Dict[str, Dict[str, Any]]:
     """
-    Aggregate trades by symbol, optionally using quote index.
+    Aggregate trades by symbol, computing edge components.
     
     Args:
-        trades: List of trade dicts with 'symbol' and numeric fields
-        qidx: Optional quote index (symbol -> list of quotes), currently unused
+        trades: List of trade dicts with symbol, side, price, qty, mid_before, mid_after_1s, fee_bps, ts_ms
+        qidx: Optional quote index from _index_quotes(quotes), mapping symbol to list of quotes
     
     Returns:
-        Dictionary mapping symbol to aggregated stats
+        Dictionary mapping symbol to edge components:
+        {
+          "BTCUSDT": {
+            "gross_bps": float,
+            "fees_eff_bps": float,
+            "adverse_bps": float,
+            "slippage_bps": float,
+            "inventory_bps": float,
+            "net_bps": float (= gross + fees + slippage + inventory),
+            "fills": float,
+            "turnover_usd": float
+          }
+        }
     """
-    agg = {}
+    # Group trades by symbol
+    by_symbol = {}
     
-    for row in trades:
-        symbol = row.get("symbol")
+    for trade in trades:
+        symbol = trade.get("symbol")
         if not symbol:
             continue
         
-        if symbol not in agg:
-            agg[symbol] = {
-                "count": 0,
-                "sum": 0.0,
-                "values": []
-            }
+        if symbol not in by_symbol:
+            by_symbol[symbol] = []
+        by_symbol[symbol].append(trade)
+    
+    # Calculate components per symbol
+    result = {}
+    
+    for symbol, symbol_trades in by_symbol.items():
+        # Per-trade component lists
+        gross_list = []
+        fees_list = []
+        adverse_list = []
+        slippage_list = []
+        inv_signed_list = []
+        notional_list = []
         
-        agg[symbol]["count"] += 1
-        
-        # Try to calculate net edge if trade fields available
-        if all(k in row for k in ["mid_before", "mid_after_1s", "fee_bps"]):
-            mid_before = row.get("mid_before", 0.0)
-            mid_after = row.get("mid_after_1s", 0.0)
-            fee_bps = row.get("fee_bps", 0.0)
+        for trade in symbol_trades:
+            side = trade.get("side", "B")
+            price = trade.get("price", 0.0)
+            qty = trade.get("qty", 0.0)
+            mid_before = trade.get("mid_before", 0.0)
+            mid_after_1s = trade.get("mid_after_1s", 0.0)
+            fee_bps = trade.get("fee_bps", 0.0)
+            ts_ms = trade.get("ts_ms", 0)
             
+            # Side sign: +1 for BUY, -1 for SELL
+            side_sign = 1.0 if side == "B" else -1.0
+            
+            # 1. Gross BPS: side_sign * ((price - mid_before) / mid_before) * 1e4
             if mid_before != 0:
-                # net_edge_bps ~ ((mid_after - mid_before) / mid_before) * 10000 - fee_bps
-                price_move_bps = ((mid_after - mid_before) / mid_before) * 10000
-                net_edge = price_move_bps - fee_bps
-                agg[symbol]["sum"] += net_edge
-                agg[symbol]["values"].append(net_edge)
-                continue
+                gross_bps = side_sign * ((price - mid_before) / mid_before) * 1e4
+            else:
+                gross_bps = 0.0
+            gross_list.append(gross_bps)
+            
+            # 2. Fees (always negative cost): -abs(fee_bps)
+            fees_eff_bps = -abs(fee_bps)
+            fees_list.append(fees_eff_bps)
+            
+            # 3. Adverse BPS: side_sign * ((mid_after_1s - mid_before) / mid_before) * 1e4
+            if mid_before != 0:
+                adverse_bps = side_sign * ((mid_after_1s - mid_before) / mid_before) * 1e4
+            else:
+                adverse_bps = 0.0
+            adverse_list.append(adverse_bps)
+            
+            # 4. Slippage BPS (using quotes from qidx)
+            slip_bps = 0.0
+            if qidx and symbol in qidx:
+                # Find quote with matching ts_ms
+                matching_quote = None
+                for q in qidx[symbol]:
+                    if q.get("ts_ms") == ts_ms:
+                        matching_quote = q
+                        break
+                
+                if matching_quote:
+                    best_bid = matching_quote.get("best_bid", 0.0)
+                    best_ask = matching_quote.get("best_ask", 0.0)
+                    
+                    if side == "B" and best_ask != 0:
+                        # BUY: (price - best_ask) / best_ask * 1e4
+                        slip_bps = (price - best_ask) / best_ask * 1e4
+                    elif side == "S" and best_bid != 0:
+                        # SELL: -1 * ((price - best_bid) / best_bid) * 1e4
+                        slip_bps = -1.0 * ((price - best_bid) / best_bid) * 1e4
+            
+            slippage_list.append(slip_bps)
+            
+            # 5. Inventory tracking (signed qty and notional)
+            inv_signed = qty if side == "B" else -qty
+            inv_signed_list.append(inv_signed)
+            notional_list.append(price * qty)
         
-        # Fallback: Try to aggregate numeric value (look for common field names)
-        for key in ["value", "edge", "spread", "price", "quantity"]:
-            if key in row and _finite(row[key]):
-                val = float(row[key])
-                agg[symbol]["sum"] += val
-                agg[symbol]["values"].append(val)
-                break
-    
-    # Calculate averages
-    for symbol, stats in agg.items():
-        if stats["count"] > 0 and stats["sum"] != 0:
-            stats["avg"] = stats["sum"] / stats["count"]
+        # Calculate averages
+        fills = len(symbol_trades)
+        gross_avg = sum(gross_list) / fills if fills > 0 else 0.0
+        fees_avg = sum(fees_list) / fills if fills > 0 else 0.0
+        adverse_avg = sum(adverse_list) / fills if fills > 0 else 0.0
+        slippage_avg = sum(slippage_list) / fills if fills > 0 else 0.0
+        
+        # 6. Inventory BPS: -abs(avg_inv_signed / avg_notional)
+        avg_inv_signed = sum(inv_signed_list) / fills if fills > 0 else 0.0
+        avg_notional = sum(notional_list) / fills if fills > 0 else 0.0
+        
+        if avg_notional != 0:
+            inventory_bps = -abs(avg_inv_signed / avg_notional)
         else:
-            stats["avg"] = 0.0
+            inventory_bps = 0.0
+        
+        # 7. Net BPS = gross + fees + slippage + inventory (NO adverse!)
+        net_bps = gross_avg + fees_avg + slippage_avg + inventory_bps
+        
+        # 8. Turnover USD
+        turnover_usd = sum(notional_list)
+        
+        result[symbol] = {
+            "gross_bps": gross_avg,
+            "fees_eff_bps": fees_avg,
+            "adverse_bps": adverse_avg,
+            "slippage_bps": slippage_avg,
+            "inventory_bps": inventory_bps,
+            "net_bps": net_bps,
+            "fills": float(fills),
+            "turnover_usd": turnover_usd
+        }
     
-    return agg
+    return result

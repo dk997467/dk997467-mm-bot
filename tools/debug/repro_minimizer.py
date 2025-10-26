@@ -3,27 +3,41 @@
 Reproduction case minimizer: simplifies input for debugging.
 
 Usage:
-    from tools.debug.repro_minimizer import minimize
+    from tools.debug.repro_minimizer import minimize, _write_jsonl_atomic
     minimized, steps = minimize(large_text)
 """
 from __future__ import annotations
 from pathlib import Path
 
 
-def minimize(path_or_text: str) -> tuple[str, int]:
+def _write_jsonl_atomic(path: str, lines: list[str]) -> None:
+    """
+    Write JSONL file atomically (via temp file + replace).
+    
+    Args:
+        path: Target file path
+        lines: List of JSON line strings (without newlines)
+    """
+    p = Path(path)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="ascii")
+    tmp.replace(p)
+
+
+def minimize(path_or_text: str) -> tuple[list[str], int]:
     """
     Minimize input text for reproduction cases.
     
     - Loads from file if path_or_text is a valid file path
     - Preserves lines with '"type":"guard"' (critical markers)
     - Removes other lines to simplify
-    - Returns (minimal_text, steps) where steps = number of lines removed
+    - Returns (minimal_lines, steps) where steps = number of lines removed
     
     Args:
         path_or_text: File path or raw text to minimize
     
     Returns:
-        Tuple of (minimal_text, steps_removed)
+        Tuple of (list_of_json_lines, steps_removed)
     """
     # Try to load from file if it's a path
     text = path_or_text
@@ -36,35 +50,40 @@ def minimize(path_or_text: str) -> tuple[str, int]:
     original_count = len(lines)
     
     # Keep lines with critical markers (e.g. "type":"guard")
-    # Also keep first and last line for context
+    # Also keep minimal context: first line and line before guard
     kept_lines = []
-    for i, line in enumerate(lines):
-        # Always keep first/last line
-        if i == 0 or i == len(lines) - 1:
-            kept_lines.append(line)
-            continue
-        
-        # Keep critical markers
-        if '"type":"guard"' in line or '"type": "guard"' in line:
-            kept_lines.append(line)
-            continue
-        
-        # Keep non-empty lines with JSON structure
-        stripped = line.strip()
-        if stripped and (stripped.startswith('{') or stripped.startswith('[')):
-            kept_lines.append(line)
+    guard_indices = []
     
-    minimal_text = '\n'.join(kept_lines)
+    # Find guard lines
+    for i, line in enumerate(lines):
+        if '"type":"guard"' in line or '"type": "guard"' in line:
+            guard_indices.append(i)
+    
+    # Build minimal set: first line + guard lines + context before each guard
+    indices_to_keep = set()
+    if lines:
+        indices_to_keep.add(0)  # Always keep first line
+    
+    for guard_idx in guard_indices:
+        indices_to_keep.add(guard_idx)  # Keep guard line
+        if guard_idx > 0:
+            indices_to_keep.add(guard_idx - 1)  # Keep line before guard for context
+    
+    # Extract kept lines in order
+    for i in sorted(indices_to_keep):
+        kept_lines.append(lines[i].strip())
+    
     steps_removed = original_count - len(kept_lines)
     
-    return (minimal_text, steps_removed)
+    return (kept_lines, steps_removed)
 
 
 if __name__ == "__main__":
     # Simple smoke test
-    test_input = "   Hello    world   \n\n   from   repro_minimizer   "
-    result = minimize(test_input, max_len=20)
-    print(f"Input: {repr(test_input)}")
-    print(f"Output: {repr(result)}")
-    assert result == "Hello world from rep", f"Expected 'Hello world from rep', got {repr(result)}"
+    test_input = '{"type":"quote","symbol":"BTCUSDT"}\n{"type":"trade"}\n{"type":"guard","reason":"DRIFT"}\n'
+    lines, steps = minimize(test_input)
+    print(f"Input lines: {len(test_input.splitlines())}")
+    print(f"Output lines: {len(lines)}, steps removed: {steps}")
+    assert isinstance(lines, list), f"Expected list, got {type(lines)}"
+    assert len(lines) <= 3, f"Expected at most 3 lines, got {len(lines)}"
     print("[OK] Smoke test passed")

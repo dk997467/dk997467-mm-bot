@@ -83,6 +83,9 @@ if __name__ == "__main__":
     params = selected.get("params", {})
     metrics_data = selected.get("metrics", {})
     
+    # Extract all candidates (params only)
+    candidates = [c.get("params", {}) for c in sweep.get("top3_by_net_bps_safe", []) if isinstance(c, dict)]
+    
     # Build TUNING_REPORT.json
     report = {
         "selected": {
@@ -93,7 +96,8 @@ if __name__ == "__main__":
             "order_age_p95_ms": metrics_data.get("order_age_p95_ms", 0.0),
             "replace_rate_per_min": metrics_data.get("replace_rate_per_min", 0.0),
             "fill_rate": metrics_data.get("fill_rate", 0.0)
-        }
+        },
+        "candidates": candidates
     }
     
     # Write to artifacts/TUNING_REPORT.json
@@ -105,3 +109,18 @@ if __name__ == "__main__":
         json.dump(report, f, indent=2, ensure_ascii=False)
     
     print(f"[OK] TUNING_REPORT.json written to {out_path}", flush=True)
+    
+    # Write YAML overlay (tools/tuning/overlay_profile.yaml)
+    yaml_dir = Path("tools") / "tuning"
+    yaml_dir.mkdir(parents=True, exist_ok=True)
+    yaml_path = yaml_dir / "overlay_profile.yaml"
+    
+    # Simple YAML representation of selected params
+    yaml_lines = ["# Auto-generated tuning overlay\n", "profile:\n"]
+    for key, val in params.items():
+        yaml_lines.append(f"  {key}: {val}\n")
+    
+    with open(yaml_path, 'w', encoding='utf-8') as f:
+        f.writelines(yaml_lines)
+    
+    print(f"[OK] overlay_profile.yaml written to {yaml_path}", flush=True)

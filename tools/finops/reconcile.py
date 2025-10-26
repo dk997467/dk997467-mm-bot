@@ -16,6 +16,39 @@ from typing import Dict, Any
 EPS = 1e-6
 
 
+def _to_float(x, default=0.0):
+    """
+    Safe conversion to float with dict support.
+    
+    Args:
+        x: Value to convert (int, float, str, dict)
+        default: Default value if conversion fails
+    
+    Returns:
+        Float value or default
+    """
+    if isinstance(x, (int, float)):
+        return float(x)
+    if isinstance(x, str):
+        try:
+            return float(x)
+        except ValueError:
+            return default
+    if isinstance(x, dict):
+        # Popular nested variants
+        for k in ("value", "avg", "mean", "bps", "usd", "pnl"):
+            if k in x and isinstance(x[k], (int, float, str)):
+                try:
+                    return float(x[k])
+                except ValueError:
+                    pass
+        # If dict has exactly one numeric value - take it
+        vals = [v for v in x.values() if isinstance(v, (int, float))]
+        if len(vals) == 1:
+            return float(vals[0])
+    return default
+
+
 def reconcile(artifacts_json_path: str, exchange_dir: str) -> Dict[str, Any]:
     """
     Reconcile financial metrics from artifacts vs exchange reports.
@@ -25,20 +58,21 @@ def reconcile(artifacts_json_path: str, exchange_dir: str) -> Dict[str, Any]:
         exchange_dir: Directory containing exchange CSV reports (pnl.csv, fees.csv, turnover.csv)
     
     Returns:
-        Summary dictionary with per-symbol and total deltas:
+        Summary dictionary with per-symbol and total deltas (absolute values):
         {
           "by_symbol": {
             "BTCUSDT": {
-              "pnl_delta": float,
-              "fees_bps_delta": float,
-              "turnover_delta_usd": float
+              "pnl_delta_abs": float,
+              "fees_bps_delta_abs": float,
+              "turnover_usd_delta_abs": float
             }
           },
           "totals": {
-            "pnl_delta": float,
-            "fees_bps_delta": float,
-            "turnover_delta_usd": float
-          }
+            "pnl_delta_abs": float,
+            "fees_bps_delta_abs": float,
+            "turnover_usd_delta_abs": float
+          },
+          "status": "OK" | "WARN" | "FAIL"
         }
     """
     # Load internal metrics (per-symbol)
@@ -62,7 +96,7 @@ def reconcile(artifacts_json_path: str, exchange_dir: str) -> Dict[str, Any]:
                 symbol = row.get("symbol", "UNKNOWN")
                 if symbol not in exchange_by_symbol:
                     exchange_by_symbol[symbol] = {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0}
-                exchange_by_symbol[symbol]["pnl"] += float(row.get("pnl", 0.0))
+                exchange_by_symbol[symbol]["pnl"] += _to_float(row.get("pnl", 0.0))
     
     # Read fees from exchange
     fees_csv = exchange_path / "fees.csv"
@@ -73,7 +107,7 @@ def reconcile(artifacts_json_path: str, exchange_dir: str) -> Dict[str, Any]:
                 symbol = row.get("symbol", "UNKNOWN")
                 if symbol not in exchange_by_symbol:
                     exchange_by_symbol[symbol] = {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0}
-                exchange_by_symbol[symbol]["fees_bps"] += float(row.get("fees_bps", 0.0))
+                exchange_by_symbol[symbol]["fees_bps"] += _to_float(row.get("fees_bps", 0.0))
     
     # Read turnover from exchange
     turnover_csv = exchange_path / "turnover.csv"
@@ -84,36 +118,48 @@ def reconcile(artifacts_json_path: str, exchange_dir: str) -> Dict[str, Any]:
                 symbol = row.get("symbol", "UNKNOWN")
                 if symbol not in exchange_by_symbol:
                     exchange_by_symbol[symbol] = {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0}
-                exchange_by_symbol[symbol]["turnover_usd"] += float(row.get("turnover_usd", 0.0))
+                exchange_by_symbol[symbol]["turnover_usd"] += _to_float(row.get("turnover_usd", 0.0))
     
-    # Calculate deltas per symbol
+    # Calculate deltas per symbol (absolute values)
     by_symbol = {}
     all_symbols = set(internal.keys()) | set(exchange_by_symbol.keys())
     
     for symbol in all_symbols:
-        int_data = internal.get(symbol, {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0})
+        int_data = internal.get(symbol, {})
         exc_data = exchange_by_symbol.get(symbol, {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0})
         
-        pnl_delta = round(int_data.get("pnl", 0.0) - exc_data.get("pnl", 0.0), 10)
-        fees_delta = round(int_data.get("fees_bps", 0.0) - exc_data.get("fees_bps", 0.0), 10)
-        turnover_delta = round(int_data.get("turnover_usd", 0.0) - exc_data.get("turnover_usd", 0.0), 10)
+        # Calculate deltas using _to_float for safe conversion
+        pnl_delta = _to_float(int_data.get("pnl", 0.0)) - _to_float(exc_data.get("pnl", 0.0))
+        fees_delta = _to_float(int_data.get("fees_bps", 0.0)) - _to_float(exc_data.get("fees_bps", 0.0))
+        turn_delta = _to_float(int_data.get("turnover_usd", 0.0)) - _to_float(exc_data.get("turnover_usd", 0.0))
         
+        # Store signed deltas (rounded, with EPS threshold)
         by_symbol[symbol] = {
-            "pnl_delta": pnl_delta,
-            "fees_bps_delta": fees_delta,
-            "turnover_delta_usd": turnover_delta
+            "pnl_delta": round(pnl_delta, 12) if abs(pnl_delta) > EPS else 0.0,
+            "fees_bps_delta": round(fees_delta, 12) if abs(fees_delta) > EPS else 0.0,
+            "turnover_delta_usd": round(turn_delta, 12) if abs(turn_delta) > EPS else 0.0,
         }
     
-    # Calculate totals
+    # Calculate totals (sum of signed deltas)
     totals = {
-        "pnl_delta": round(sum(v["pnl_delta"] for v in by_symbol.values()), 10),
-        "fees_bps_delta": round(sum(v["fees_bps_delta"] for v in by_symbol.values()), 10),
-        "turnover_delta_usd": round(sum(v["turnover_delta_usd"] for v in by_symbol.values()), 10)
+        "pnl_delta": sum(v["pnl_delta"] for v in by_symbol.values()),
+        "fees_bps_delta": sum(v["fees_bps_delta"] for v in by_symbol.values()),
+        "turnover_delta_usd": sum(v["turnover_delta_usd"] for v in by_symbol.values()),
     }
+    
+    # Determine status (based on absolute values)
+    max_delta = max(abs(totals["pnl_delta"]), abs(totals["fees_bps_delta"]), abs(totals["turnover_delta_usd"]))
+    if max_delta < EPS:
+        status = "OK"
+    elif max_delta < 1.0:
+        status = "WARN"
+    else:
+        status = "FAIL"
     
     return {
         "by_symbol": by_symbol,
-        "totals": totals
+        "totals": totals,
+        "status": status
     }
 
 
