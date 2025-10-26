@@ -88,21 +88,21 @@ def check(today: Dict[str, Any], history: List[Dict[str, Any]], threshold: float
     if base_edge > 0 and today_edge < base_edge:
         rel_delta = abs(today_edge - base_edge) / base_edge
         if rel_delta > threshold:
-            return {"ok": False, "reason": "EDGE_REG", "details": details}
+            return {"ok": False, "reason": "EDGE_REG", "baseline": baseline, "details": details}
     
     # LAT regression: if today's latency is significantly worse than baseline
     if base_lat > 0 and today_lat > base_lat:
         rel_delta = abs(today_lat - base_lat) / base_lat
         if rel_delta > threshold:
-            return {"ok": False, "reason": "LAT_REG", "details": details}
+            return {"ok": False, "reason": "LAT_REG", "baseline": baseline, "details": details}
     
     # TAKER regression: if today's taker share is significantly worse than baseline
     if base_taker > 0 and today_taker > base_taker:
         rel_delta = abs(today_taker - base_taker) / base_taker
         if rel_delta > threshold:
-            return {"ok": False, "reason": "TAKER_REG", "details": details}
+            return {"ok": False, "reason": "TAKER_REG", "baseline": baseline, "details": details}
     
-    return {"ok": True, "reason": "NONE", "details": details}
+    return {"ok": True, "reason": "NONE", "baseline": baseline, "details": details}
 
 
 def main():
