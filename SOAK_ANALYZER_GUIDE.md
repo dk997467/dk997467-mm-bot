@@ -350,6 +350,197 @@ python -m tools.soak.analyze_post_soak \
 
 ---
 
+## 📊 SOAK_SUMMARY.json (Machine-Readable Snapshot)
+
+Post-Soak Analyzer V2 автоматически генерирует **SOAK_SUMMARY.json** — компактный JSON-снапшот для интеграции с пайплайнами, дашбордами и алертами.
+
+### Структура
+
+```json
+{
+  "generated_at_utc": "2025-10-21T12:34:56Z",
+  "windows": 24,
+  "min_windows_required": 24,
+  "symbols": {
+    "BTCUSDT": {
+      "edge_bps": {"median": 3.2, "last": 3.1, "trend": "↑", "status": "OK"},
+      "maker_taker_ratio": {"median": 0.84, "last": 0.86, "trend": "≈", "status": "OK"},
+      "p95_latency_ms": {"median": 245, "last": 232, "trend": "↓", "status": "OK"},
+      "risk_ratio": {"median": 0.33, "last": 0.34, "trend": "≈", "status": "OK"}
+    }
+  },
+  "overall": {
+    "crit_count": 0,
+    "warn_count": 2,
+    "ok_count": 2,
+    "verdict": "OK|WARN|CRIT"
+  },
+  "meta": {
+    "commit_range": "abc123..def456",
+    "profile": "moderate",
+    "source": "soak"
+  }
+}
+```
+
+### Использование
+
+```bash
+# Check overall verdict
+jq '.overall.verdict' reports/analysis/SOAK_SUMMARY.json
+
+# Extract edge for specific symbol
+jq '.symbols.BTCUSDT.edge_bps.last' reports/analysis/SOAK_SUMMARY.json
+
+# Count critical violations
+jq '.overall.crit_count' reports/analysis/SOAK_SUMMARY.json
+```
+
+### CLI Flags
+
+- `--emit-summary` (default: True) — генерировать SOAK_SUMMARY.json
+- `--no-emit-summary` — отключить генерацию
+
+---
+
+## 📈 CLI Mini-Plots (--verbose)
+
+При указании флага `--verbose` анализатор печатает компактную ASCII-таблицу со спарклайнами прямо в stdout:
+
+```bash
+python -m tools.soak.analyze_post_soak \
+  --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+  --verbose
+```
+
+### Пример вывода
+
+```
+============================================================================================================
+MINI-PLOTS SUMMARY
+============================================================================================================
+Symbol       Edge(bps)            Maker/Taker          p95(ms)              Risk                
+------------------------------------------------------------------------------------------------------------
+BTCUSDT      ▁▂▄▅▆█▇▅ 3.1 ↑      ▃▄▅▆▆▇██ 0.86 ≈     ▇▆▅▄▃▂▁▁ 232 ↓       ▂▃▃▃▃▃▃▃ 0.34 ≈     
+ETHUSDT      ▇▆▅▄▃▂▁▁ 2.9 ↓      ▅▄▄▃▃▃▂▁ 0.82 ↓     ▁▂▃▅▆▇▇█ 360 ↑       ▃▃▄▄▄▅▅▅ 0.42 ↑     
+============================================================================================================
+```
+
+**Формат:**
+- **Sparkline** (8 символов): визуализация динамики за все windows
+- **Last value**: последнее значение метрики
+- **Trend**: тренд (↑ рост / ↓ падение / ≈ стабильно)
+
+---
+
+## 🔴 Export Violations to Redis
+
+Модуль **`export_violations_to_redis.py`** экспортирует нарушения и summary в Redis для интеграции с алертингом, дашбордами и другими системами.
+
+### Ключи Redis
+
+**Hash per symbol:**
+```
+{env}:{exchange}:soak:violations:{symbol}
+```
+
+**Поля hash:**
+- `crit_count` — количество CRIT violations
+- `warn_count` — количество WARN violations
+- `last_edge` — последнее значение edge_bps
+- `last_maker_taker` — последнее значение maker_taker_ratio
+- `last_latency_p95` — последнее значение p95_latency_ms
+- `last_risk` — последнее значение risk_ratio
+- `verdict` — OK / WARN / CRIT
+- `updated_at` — ISO timestamp
+
+**Stream (optional):**
+```
+{env}:{exchange}:soak:violations:stream:{symbol}
+```
+
+### Usage
+
+```bash
+# Basic export
+python -m tools.soak.export_violations_to_redis \
+  --summary reports/analysis/SOAK_SUMMARY.json \
+  --violations reports/analysis/VIOLATIONS.json \
+  --env prod --exchange bybit \
+  --redis-url rediss://user:pass@host:6379/0 \
+  --ttl 3600
+
+# With stream
+python -m tools.soak.export_violations_to_redis \
+  --summary reports/analysis/SOAK_SUMMARY.json \
+  --violations reports/analysis/VIOLATIONS.json \
+  --env prod --exchange bybit \
+  --redis-url rediss://localhost:6379/0 \
+  --stream
+```
+
+### Makefile Target
+
+```bash
+make soak-violations-redis
+```
+
+### Redis CLI Examples
+
+```bash
+# Get hash for symbol
+redis-cli HGETALL prod:bybit:soak:violations:BTCUSDT
+
+# Check verdict
+redis-cli HGET prod:bybit:soak:violations:BTCUSDT verdict
+
+# Read stream
+redis-cli XREAD STREAMS prod:bybit:soak:violations:stream:BTCUSDT 0
+```
+
+### Graceful Fallback
+
+Если Redis недоступен, модуль выводит warning и завершается с `exit 0` (мягкий fallback). Это позволяет продолжить CI-пайплайн даже при недоступности Redis.
+
+---
+
+## 💬 PR Comment Integration
+
+В CI workflows (`.github/workflows/soak.yml` и `soak-windows.yml`) автоматически публикуется комментарий в PR с итогами анализа:
+
+### Пример комментария
+
+```markdown
+### 🧪 Soak Analysis Summary
+
+**Windows:** 24 (min=24) | **Verdict:** 🟡 **WARN**
+
+**Commit:** `abc123..def456` | **Profile:** `moderate`
+
+| Symbol | Edge(bps) | Trend | Maker/Taker | Trend | p95(ms) | Trend | Risk | Trend | Status |
+|--------|-----------|-------|-------------|-------|---------|-------|------|-------|--------|
+| BTCUSDT | 3.1 | ↑ | 0.86 | ≈ | 232 | ↓ | 0.34 | ≈ | ✅ OK |
+| ETHUSDT | 2.9 | ↓ | 0.82 | ↓ | 360 | ↑ | 0.42 | ↑ | 🟡 WARN |
+
+**Violations:** 🔴 CRIT: 0 | 🟡 WARN: 4 | ✅ OK: 1
+
+**Artifacts:** POST_SOAK_ANALYSIS.md, RECOMMENDATIONS.md, VIOLATIONS.json, SOAK_SUMMARY.json
+(see workflow artifacts above)
+```
+
+### Как включить/отключить
+
+**Включено по умолчанию** для PR workflows (`github.event_name == 'pull_request'`).
+
+**Отключить:**
+Закомментируйте шаг `Post Soak Summary to PR` в workflow file.
+
+**Требования:**
+- `GITHUB_TOKEN` (автоматически доступен в GitHub Actions)
+- `SOAK_SUMMARY.json` должен быть создан анализатором
+
+---
+
 ## ❓ FAQ
 
 ### Q: Почему Exit Code = 0 даже при WARN?

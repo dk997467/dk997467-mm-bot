@@ -728,6 +728,203 @@ def generate_violations_json(
     print(f"[INFO] Violations JSON written to: {violations_path}")
 
 
+def print_mini_plots(
+    windows_by_symbol: Dict[str, List[Dict[str, Any]]],
+    all_violations: List[Dict[str, Any]]
+):
+    """Print compact ASCII table with sparklines to stdout."""
+    print("")
+    print("=" * 120)
+    print("MINI-PLOTS SUMMARY")
+    print("=" * 120)
+    
+    # Header
+    print(f"{'Symbol':<12} {'Edge(bps)':<20} {'Maker/Taker':<20} {'p95(ms)':<20} {'Risk':<20}")
+    print("-" * 120)
+    
+    for symbol in sorted(windows_by_symbol.keys()):
+        windows = windows_by_symbol[symbol]
+        
+        # Extract metrics
+        metrics_series = {
+            "edge_bps": [],
+            "maker_taker_ratio": [],
+            "p95_latency_ms": [],
+            "risk_ratio": []
+        }
+        
+        for window in windows:
+            for metric_name in metrics_series.keys():
+                value = window["metrics"].get(metric_name)
+                metrics_series[metric_name].append(value)
+        
+        # Build row
+        cells = [f"{symbol:<12}"]
+        
+        for metric_name in ["edge_bps", "maker_taker_ratio", "p95_latency_ms", "risk_ratio"]:
+            values = metrics_series[metric_name]
+            clean_values = [v for v in values if v is not None and math.isfinite(v)]
+            
+            if not clean_values:
+                cells.append(f"{'n/a':<20}")
+                continue
+            
+            # Generate sparkline
+            sparkline = generate_sparkline(clean_values, width=8)
+            
+            # Last value
+            last_val = clean_values[-1]
+            
+            # Trend
+            trend_symbol, _ = calculate_trend(clean_values)
+            
+            # Format last value
+            if metric_name == "p95_latency_ms":
+                last_str = f"{int(last_val)}"
+            elif metric_name in ["maker_taker_ratio", "risk_ratio"]:
+                last_str = f"{last_val:.2f}"
+            else:
+                last_str = f"{last_val:.1f}"
+            
+            cell = f"{sparkline} {last_str} {trend_symbol}"
+            cells.append(f"{cell:<20}")
+        
+        print(" ".join(cells))
+    
+    print("=" * 120)
+    print("")
+
+
+def generate_summary_json(
+    windows_by_symbol: Dict[str, List[Dict[str, Any]]],
+    all_violations: List[Dict[str, Any]],
+    thresholds: Dict[str, float],
+    min_windows: int,
+    out_dir: Path
+):
+    """Generate SOAK_SUMMARY.json machine-readable snapshot."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = out_dir / "SOAK_SUMMARY.json"
+    
+    # Total windows across all symbols
+    total_windows = sum(len(windows) for windows in windows_by_symbol.values())
+    
+    # Per-symbol aggregates
+    symbols_data = {}
+    
+    for symbol, windows in windows_by_symbol.items():
+        # Extract metrics series
+        metrics_series = {
+            "edge_bps": [],
+            "maker_taker_ratio": [],
+            "p95_latency_ms": [],
+            "risk_ratio": []
+        }
+        
+        for window in windows:
+            for metric_name in metrics_series.keys():
+                value = window["metrics"].get(metric_name)
+                metrics_series[metric_name].append(value)
+        
+        # Calculate aggregates for each metric
+        symbol_metrics = {}
+        
+        for metric_name, values in metrics_series.items():
+            clean_values = [v for v in values if v is not None and math.isfinite(v)]
+            
+            if not clean_values:
+                symbol_metrics[metric_name] = {
+                    "median": None,
+                    "last": None,
+                    "trend": "n/a",
+                    "status": "n/a"
+                }
+                continue
+            
+            # Median
+            sorted_vals = sorted(clean_values)
+            median_val = sorted_vals[len(sorted_vals) // 2]
+            
+            # Last value
+            last_val = clean_values[-1]
+            
+            # Trend
+            trend_symbol, _ = calculate_trend(clean_values)
+            
+            # Status (determine from violations)
+            metric_violations = [v for v in all_violations if v["symbol"] == symbol and v["metric"] == metric_name]
+            if any(v["level"] == "CRIT" for v in metric_violations):
+                status = "CRIT"
+            elif any(v["level"] == "WARN" for v in metric_violations):
+                status = "WARN"
+            else:
+                status = "OK"
+            
+            symbol_metrics[metric_name] = {
+                "median": round(median_val, 3) if metric_name in ["maker_taker_ratio", "risk_ratio"] else round(median_val, 2) if metric_name == "edge_bps" else int(median_val),
+                "last": round(last_val, 3) if metric_name in ["maker_taker_ratio", "risk_ratio"] else round(last_val, 2) if metric_name == "edge_bps" else int(last_val),
+                "trend": trend_symbol,
+                "status": status
+            }
+        
+        symbols_data[symbol] = symbol_metrics
+    
+    # Overall aggregates
+    crit_count = len([v for v in all_violations if v["level"] == "CRIT"])
+    warn_count = len([v for v in all_violations if v["level"] == "WARN"])
+    
+    # Verdict: CRIT if any CRIT, WARN if any WARN, else OK
+    if crit_count > 0:
+        verdict = "CRIT"
+    elif warn_count > 0:
+        verdict = "WARN"
+    else:
+        verdict = "OK"
+    
+    # Extract metadata from first window (if available)
+    meta = {"commit_range": None, "profile": None, "source": None}
+    if windows_by_symbol:
+        first_symbol = next(iter(windows_by_symbol.keys()))
+        first_windows = windows_by_symbol[first_symbol]
+        if first_windows:
+            first_window = first_windows[0]
+            last_window = first_windows[-1]
+            
+            first_commit = first_window.get("metadata", {}).get("commit", "")
+            last_commit = last_window.get("metadata", {}).get("commit", "")
+            
+            if first_commit and last_commit:
+                meta["commit_range"] = f"{first_commit}..{last_commit}"
+            elif first_commit:
+                meta["commit_range"] = first_commit
+            
+            meta["profile"] = first_window.get("metadata", {}).get("profile")
+            meta["source"] = first_window.get("metadata", {}).get("source")
+    
+    # Unique symbols
+    ok_count = len([s for s, metrics in symbols_data.items() if all(m.get("status") == "OK" for m in metrics.values())])
+    
+    # Build summary
+    summary = {
+        "generated_at_utc": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        "windows": total_windows,
+        "min_windows_required": min_windows,
+        "symbols": symbols_data,
+        "overall": {
+            "crit_count": crit_count,
+            "warn_count": warn_count,
+            "ok_count": ok_count,
+            "verdict": verdict
+        },
+        "meta": meta
+    }
+    
+    with open(summary_path, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    
+    print(f"[INFO] Summary JSON written to: {summary_path}")
+
+
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -816,6 +1013,23 @@ def main():
         action="store_true",
         help="Exit with code 1 if critical violations found"
     )
+    parser.add_argument(
+        "--emit-summary",
+        action="store_true",
+        default=True,
+        help="Generate SOAK_SUMMARY.json (default: True)"
+    )
+    parser.add_argument(
+        "--no-emit-summary",
+        dest="emit_summary",
+        action="store_false",
+        help="Disable SOAK_SUMMARY.json generation"
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print mini-plots table to stdout"
+    )
 
     args = parser.parse_args()
 
@@ -867,6 +1081,20 @@ def main():
         all_violations,
         args.out_dir
     )
+    
+    # Generate machine-readable summary
+    if args.emit_summary:
+        generate_summary_json(
+            windows_by_symbol,
+            all_violations,
+            thresholds,
+            args.min_windows,
+            args.out_dir
+        )
+    
+    # Print mini-plots if verbose
+    if args.verbose:
+        print_mini_plots(windows_by_symbol, all_violations)
 
     # Summary
     print("")

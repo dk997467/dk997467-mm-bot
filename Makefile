@@ -165,7 +165,13 @@ soak-compare:
 soak-analyze:
 	python -m tools.soak.analyze_post_soak --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" --min-windows 24 --exit-on-crit
 
-.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive
+soak-violations-redis:
+	python -m tools.soak.export_violations_to_redis \
+	  --summary reports/analysis/SOAK_SUMMARY.json \
+	  --violations reports/analysis/VIOLATIONS.json \
+	  --env dev --exchange bybit --redis-url redis://localhost:6379/0 --ttl 3600
+
+.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis
 
 shadow-run:
 	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --source mock

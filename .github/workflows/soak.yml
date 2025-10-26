@@ -204,6 +204,7 @@ jobs:
             artifacts/reports/analysis/POST_SOAK_ANALYSIS.md
             artifacts/reports/analysis/RECOMMENDATIONS.md
             artifacts/reports/analysis/VIOLATIONS.json
+            artifacts/reports/analysis/SOAK_SUMMARY.json
             artifacts/soak/latest/SOAK_KPI.json
             artifacts/soak/latest/ITER_SUMMARY_*.json
           if-no-files-found: warn
@@ -220,6 +221,76 @@ jobs:
             **/*.err.log
           if-no-files-found: ignore
           retention-days: 30
+      
+      - name: Post Soak Summary to PR
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const sumPath = 'artifacts/reports/analysis/SOAK_SUMMARY.json';
+            
+            if (!fs.existsSync(sumPath)) {
+              core.warning('SOAK_SUMMARY.json not found, skipping comment.');
+              return;
+            }
+            
+            const sum = JSON.parse(fs.readFileSync(sumPath, 'utf8'));
+            
+            // Build comment
+            let body = `### 🧪 Soak Analysis Summary\n\n`;
+            body += `**Windows:** ${sum.windows} (min=${sum.min_windows_required}) | **Verdict:** `;
+            
+            // Verdict with emoji
+            if (sum.overall.verdict === 'CRIT') {
+              body += `🔴 **CRIT**`;
+            } else if (sum.overall.verdict === 'WARN') {
+              body += `🟡 **WARN**`;
+            } else {
+              body += `✅ **OK**`;
+            }
+            
+            body += `\n\n`;
+            body += `**Commit:** \`${sum.meta?.commit_range || 'n/a'}\` | **Profile:** \`${sum.meta?.profile || 'n/a'}\`\n\n`;
+            
+            // Per-symbol table
+            body += `| Symbol | Edge(bps) | Trend | Maker/Taker | Trend | p95(ms) | Trend | Risk | Trend | Status |\n`;
+            body += `|--------|-----------|-------|-------------|-------|---------|-------|------|-------|--------|\n`;
+            
+            for (const [sym, v] of Object.entries(sum.symbols)) {
+              const edge = v.edge_bps;
+              const maker = v.maker_taker_ratio;
+              const lat = v.p95_latency_ms;
+              const risk = v.risk_ratio;
+              
+              // Overall status for symbol (worst metric)
+              let symbolStatus = 'OK';
+              if ([edge.status, maker.status, lat.status, risk.status].includes('CRIT')) {
+                symbolStatus = '🔴 CRIT';
+              } else if ([edge.status, maker.status, lat.status, risk.status].includes('WARN')) {
+                symbolStatus = '🟡 WARN';
+              } else {
+                symbolStatus = '✅ OK';
+              }
+              
+              body += `| ${sym} | ${edge.last} | ${edge.trend} | ${maker.last} | ${maker.trend} | ${lat.last} | ${lat.trend} | ${risk.last} | ${risk.trend} | ${symbolStatus} |\n`;
+            }
+            
+            body += `\n**Violations:** `;
+            body += `🔴 CRIT: ${sum.overall.crit_count} | `;
+            body += `🟡 WARN: ${sum.overall.warn_count} | `;
+            body += `✅ OK: ${sum.overall.ok_count}\n\n`;
+            
+            body += `**Artifacts:** POST_SOAK_ANALYSIS.md, RECOMMENDATIONS.md, VIOLATIONS.json, SOAK_SUMMARY.json\n`;
+            body += `(see workflow artifacts above)`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body
+            });
       
       - name: Comment PR with results (if applicable)
         if: always() && github.event_name == 'pull_request'

@@ -189,7 +189,7 @@ def get_redis_client(redis_url: str) -> Optional[Any]:
             RuntimeWarning
         )
         return None
-    except Exception as e:
+        except Exception as e:
         warnings.warn(
             f"Cannot connect to Redis at {redis_url}: {e}\n"
             f"Falling back to dry-run mode (no actual export).",
@@ -201,11 +201,11 @@ def get_redis_client(redis_url: str) -> Optional[Any]:
 def load_iter_summaries(src_dir: Path) -> List[Dict[str, Any]]:
     """
     Load all ITER_SUMMARY_*.json files from source directory.
-    
-    Args:
+        
+        Args:
         src_dir: Directory containing ITER_SUMMARY files
         
-    Returns:
+        Returns:
         List of iteration summary dicts
     """
     summaries = []
@@ -290,8 +290,8 @@ def export_to_redis(
     - Flat mode: Each KPI as separate key
       SETEX dev:bybit:shadow:latest:BTCUSDT:edge_bps 3600 3.2
       SETEX dev:bybit:shadow:latest:BTCUSDT:maker_ratio 3600 0.85
-    
-    Args:
+        
+        Args:
         kpis: Dict mapping symbol to KPI values
         redis_client: Redis client (or None for dry-run)
         env: Environment namespace (dev, staging, prod)
@@ -301,7 +301,7 @@ def export_to_redis(
         hash_mode: If True, use HSET+EXPIRE; if False, use SETEX per key
         batch_size: Number of operations per pipeline batch
         
-    Returns:
+        Returns:
         Number of keys/symbols exported
     """
     if not kpis:
@@ -461,7 +461,7 @@ def _export_flat_mode(
         # Dry-run: just log what would be done
         for key, value in all_operations:
             print(f"[DRY-RUN] SETEX {key} {ttl} {value}")
-            exported_count += 1
+                exported_count += 1
         
         # Update metrics even in dry-run
         _increment_metric("redis_export_keys_written_total", env, exchange, mode, exported_count)
@@ -604,8 +604,8 @@ def main():
     # Load iteration summaries
     print(f"[INFO] Loading summaries from: {args.src}")
     summaries = load_iter_summaries(args.src)
-    
-    if not summaries:
+            
+            if not summaries:
         print("[ERROR] No iteration summaries found")
         return 1
     
