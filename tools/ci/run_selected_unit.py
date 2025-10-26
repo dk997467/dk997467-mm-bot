@@ -43,6 +43,10 @@ except Exception as e:
     print("[unit-runner] git ls-files failed:", e)
 
 # Жёсткая пред-проверка импортов (чтобы упасть раньше и с понятной диагностикой)
+import tools
+print("[unit-runner] tools.__file__ =", Path(tools.__file__).resolve())
+print("[unit-runner] tools is local? =", Path(tools.__file__).resolve().as_posix().startswith(repo_str))
+
 critical_mods = [
     "tools.soak.drift_guard",
     "tools.soak.regression_guard",
@@ -51,7 +55,7 @@ critical_mods = [
 for m in critical_mods:
     try:
         importlib.import_module(m)
-        print(f"[unit-runner] OK import {m}")
+        print(f"[unit-runner] OK pre-import {m}")
     except Exception as e:
         print(f"[unit-runner] FAIL import {m}: {e}")
         traceback.print_exc()
@@ -80,7 +84,8 @@ paths = [p.strip() for p in sel.read_text(encoding="ascii").splitlines()
 # Many tests spawn subprocesses (daily_check, postmortem, etc.)
 # Parallel execution can cause CPU overload and zombie process accumulation
 # Timeout: 15 minutes should be enough for all unit tests sequentially
-cmd = [sys.executable, "-m", "pytest", "-q", *paths]
+# CRITICAL: Use prepend import mode to ensure local 'tools' package is used
+cmd = [sys.executable, "-m", "pytest", "-q", "-o", "importmode=prepend", *paths]
 try:
     # CRITICAL: Pass environment to subprocess so PYTHONPATH is visible to pytest
     r = subprocess.run(cmd, check=False, timeout=900, env=os.environ)  # 15 min timeout
