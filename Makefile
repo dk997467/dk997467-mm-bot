@@ -273,7 +273,7 @@ soak-qol-smoke-new-viol:
 	  --heartbeat-key "$${ENV:-dev}:$${EXCHANGE:-bybit}:soak:runner:heartbeat" \
 	  --verbose
 
-.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry soak-alert-selftest soak-qol-smoke soak-qol-smoke-new-viol
+.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry soak-alert-selftest soak-qol-smoke soak-qol-smoke-new-viol accuracy-compare accuracy-ci
 
 shadow-run:
 	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --source mock
@@ -337,6 +337,52 @@ dryrun:
 
 dryrun-validate:
 	python -m tools.dryrun.run_dryrun --symbols BTCUSDT ETHUSDT --iterations 12 --duration 60
+
+.PHONY: accuracy-compare accuracy-ci
+
+accuracy-compare:
+	@echo "=== Accuracy Gate: Shadow ↔ Dry-Run Comparison ==="
+	python -m tools.accuracy.compare_shadow_dryrun \
+	  --shadow "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+	  --dryrun "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+	  --symbols $${SYMBOLS:-BTCUSDT,ETHUSDT} \
+	  --min-windows $${MIN_WINDOWS:-24} \
+	  --max-age-min $${MAX_AGE_MIN:-90} \
+	  --mape-threshold $${MAPE_THRESHOLD:-0.15} \
+	  --median-delta-threshold-bps $${MEDIAN_DELTA_THRESHOLD_BPS:-1.5} \
+	  --out-dir reports/analysis \
+	  --verbose
+
+accuracy-ci:
+	@echo "=== Accuracy Gate: CI Mode (strict) ==="
+	python -m tools.accuracy.compare_shadow_dryrun \
+	  --shadow "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+	  --dryrun "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+	  --symbols BTCUSDT,ETHUSDT \
+	  --min-windows 24 \
+	  --max-age-min 90 \
+	  --mape-threshold 0.15 \
+	  --median-delta-threshold-bps 1.5 \
+	  --out-dir reports/analysis \
+	  --verbose
+	@echo ""
+	@if [ -f reports/analysis/ACCURACY_SUMMARY.json ]; then \
+		VERDICT=$$(jq -r '.verdict' reports/analysis/ACCURACY_SUMMARY.json); \
+		echo "Verdict: $$VERDICT"; \
+		if [ "$$VERDICT" = "FAIL" ]; then \
+			echo "❌ Accuracy Gate FAILED - blocking PR"; \
+			exit 1; \
+		elif [ "$$VERDICT" = "WARN" ]; then \
+			echo "🟡 Accuracy Gate WARN - informational"; \
+			exit 0; \
+		else \
+			echo "✅ Accuracy Gate PASSED"; \
+			exit 0; \
+		fi; \
+	else \
+		echo "❌ ACCURACY_SUMMARY.json not found"; \
+		exit 1; \
+	fi
 
 .PHONY: pre-freeze pre-freeze-alt pre-freeze-fast
 
