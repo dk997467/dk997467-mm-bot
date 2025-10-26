@@ -498,6 +498,47 @@ redis-cli HGET prod:bybit:soak:violations:BTCUSDT verdict
 redis-cli XREAD STREAMS prod:bybit:soak:violations:stream:BTCUSDT 0
 ```
 
+### Stream Retention (MAXLEN + XTRIM)
+
+Для контроля размера Redis streams используйте флаг `--stream-maxlen`:
+
+```bash
+python -m tools.soak.export_violations_to_redis \
+  --summary reports/analysis/SOAK_SUMMARY.json \
+  --violations reports/analysis/VIOLATIONS.json \
+  --env prod --exchange bybit \
+  --redis-url rediss://localhost:6379/0 \
+  --stream \
+  --stream-maxlen 10000
+```
+
+**Механизм:**
+- При каждом `XADD` используется `MAXLEN ~ <maxlen>` (approximate) для производительности
+- После экспорта всех событий выполняется явный `XTRIM MAXLEN ~ <maxlen>` на каждый stream
+- Approximate trim (~) позволяет Redis оптимизировать удаление (быстрее, чем exact)
+
+**Рекомендации по выбору лимита:**
+
+| Scenario | Recommended MAXLEN | Rationale |
+|----------|-------------------|-----------|
+| Dev/Staging | 1000-5000 | Экономия памяти, быстрая итерация |
+| Production (low-traffic) | 5000-10000 | Баланс между историей и памятью |
+| Production (high-traffic) | 10000-20000 | Больше истории для анализа трендов |
+| Archive/Debug | 50000+ | Долгосрочное хранение (но рассмотрите перенос в TSDB) |
+
+**Пример с Redis CLI:**
+
+```bash
+# Check stream length
+redis-cli XLEN prod:bybit:soak:violations:stream:BTCUSDT
+
+# Manual trim (if needed)
+redis-cli XTRIM prod:bybit:soak:violations:stream:BTCUSDT MAXLEN ~ 5000
+
+# Read last 10 events
+redis-cli XREVRANGE prod:bybit:soak:violations:stream:BTCUSDT + - COUNT 10
+```
+
 ### Graceful Fallback
 
 Если Redis недоступен, модуль выводит warning и завершается с `exit 0` (мягкий fallback). Это позволяет продолжить CI-пайплайн даже при недоступности Redis.

@@ -370,3 +370,108 @@ def test_export_redis_unavailable(tmp_path, sample_summary, sample_violations):
     # Should exit 0 (graceful fallback)
     assert exit_code == 0
 
+
+def test_stream_retention_with_maxlen(sample_violations):
+    """Test stream export with maxlen parameter."""
+    from tools.soak.export_violations_to_redis import export_violations_stream
+    
+    mock_client = MagicMock()
+    mock_client.xadd.return_value = "1234567890-0"
+    mock_client.xtrim.return_value = True
+    
+    # Export with custom maxlen
+    exported = export_violations_stream(
+        mock_client,
+        sample_violations,
+        env="dev",
+        exchange="bybit",
+        stream_maxlen=10000
+    )
+    
+    # Should export 4 events
+    assert exported == 4
+    
+    # Verify xadd was called with maxlen and approximate
+    for call in mock_client.xadd.call_args_list:
+        assert call[1]["maxlen"] == 10000
+        assert call[1]["approximate"] is True
+    
+    # Verify xtrim was called (once per unique stream)
+    assert mock_client.xtrim.call_count == 1  # Only 1 unique symbol (ETHUSDT)
+    
+    # Verify xtrim parameters
+    xtrim_call = mock_client.xtrim.call_args
+    assert xtrim_call[1]["maxlen"] == 10000
+    assert xtrim_call[1]["approximate"] is True
+
+
+def test_stream_retention_cli_flag(tmp_path, sample_summary, sample_violations):
+    """Test --stream-maxlen CLI flag."""
+    from tools.soak.export_violations_to_redis import main
+    
+    # Create temporary files
+    summary_file = tmp_path / "SOAK_SUMMARY.json"
+    violations_file = tmp_path / "VIOLATIONS.json"
+    
+    summary_file.write_text(json.dumps(sample_summary), encoding="utf-8")
+    violations_file.write_text(json.dumps(sample_violations), encoding="utf-8")
+    
+    # Mock Redis client
+    mock_client = MagicMock()
+    mock_pipe = MagicMock()
+    mock_client.pipeline.return_value = mock_pipe
+    mock_pipe.execute.return_value = [True, True]
+    mock_client.xadd.return_value = "1234567890-0"
+    mock_client.xtrim.return_value = True
+    
+    with patch("tools.soak.export_violations_to_redis.get_redis_client", return_value=mock_client):
+        with patch("sys.argv", [
+            "export_violations_to_redis.py",
+            "--summary", str(summary_file),
+            "--violations", str(violations_file),
+            "--env", "dev",
+            "--exchange", "bybit",
+            "--redis-url", "redis://localhost:6379/0",
+            "--stream",
+            "--stream-maxlen", "20000"
+        ]):
+            exit_code = main()
+    
+    assert exit_code == 0
+    
+    # Verify xadd was called with correct maxlen
+    for call in mock_client.xadd.call_args_list:
+        assert call[1]["maxlen"] == 20000
+        assert call[1]["approximate"] is True
+    
+    # Verify xtrim was called
+    assert mock_client.xtrim.call_count >= 1
+    if mock_client.xtrim.call_count > 0:
+        xtrim_call = mock_client.xtrim.call_args
+        assert xtrim_call[1]["maxlen"] == 20000
+
+
+def test_stream_default_maxlen(sample_violations):
+    """Test stream export with default maxlen (5000)."""
+    from tools.soak.export_violations_to_redis import export_violations_stream
+    
+    mock_client = MagicMock()
+    mock_client.xadd.return_value = "1234567890-0"
+    mock_client.xtrim.return_value = True
+    
+    # Export without specifying maxlen (should use default 5000)
+    exported = export_violations_stream(
+        mock_client,
+        sample_violations,
+        env="dev",
+        exchange="bybit"
+        # stream_maxlen not specified, should default to 5000
+    )
+    
+    assert exported == 4
+    
+    # Verify default maxlen (5000)
+    for call in mock_client.xadd.call_args_list:
+        assert call[1]["maxlen"] == 5000
+        assert call[1]["approximate"] is True
+

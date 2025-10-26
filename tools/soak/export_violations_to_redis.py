@@ -124,15 +124,24 @@ def export_violations_stream(
     client: Any,
     violations: List[Dict[str, Any]],
     env: str,
-    exchange: str
+    exchange: str,
+    stream_maxlen: int = 5000
 ) -> int:
     """
-    Export violations as Redis stream events.
+    Export violations as Redis stream events with retention.
+    
+    Args:
+        client: Redis client
+        violations: List of violations
+        env: Environment (e.g., dev, prod)
+        exchange: Exchange (e.g., bybit)
+        stream_maxlen: Maximum stream length (default: 5000)
     
     Returns:
         Number of events exported
     """
     exported = 0
+    streams_seen = set()
     
     for violation in violations:
         symbol = violation.get("symbol")
@@ -145,6 +154,7 @@ def export_violations_stream(
         
         # Build stream key
         stream_key = f"{env}:{exchange}:soak:violations:stream:{symbol}"
+        streams_seen.add(stream_key)
         
         # Stream entry
         entry = {
@@ -158,10 +168,18 @@ def export_violations_stream(
         }
         
         try:
-            client.xadd(stream_key, entry, maxlen=1000)  # Keep last 1000 events
+            # Use approximate MAXLEN for performance
+            client.xadd(stream_key, entry, maxlen=stream_maxlen, approximate=True)
             exported += 1
         except Exception as e:
             print(f"[ERROR] Failed to export stream event for {symbol}/{metric}: {e}")
+    
+    # Explicit XTRIM for all streams (ensure retention)
+    for stream_key in streams_seen:
+        try:
+            client.xtrim(stream_key, maxlen=stream_maxlen, approximate=True)
+        except Exception as e:
+            print(f"[WARN] Failed to trim stream {stream_key}: {e}")
     
     return exported
 
@@ -213,6 +231,12 @@ def main():
         action="store_true",
         help="Also export violations as stream events"
     )
+    parser.add_argument(
+        "--stream-maxlen",
+        type=int,
+        default=5000,
+        help="Maximum stream length (default: 5000, for retention)"
+    )
     
     args = parser.parse_args()
     
@@ -261,14 +285,15 @@ def main():
     
     # Export stream (optional)
     if args.stream:
-        print(f"[INFO] Exporting violations stream")
+        print(f"[INFO] Exporting violations stream (maxlen={args.stream_maxlen})")
         stream_count = export_violations_stream(
             client,
             violations,
             args.env,
-            args.exchange
+            args.exchange,
+            stream_maxlen=args.stream_maxlen
         )
-        print(f"[INFO] Exported {stream_count} stream events")
+        print(f"[INFO] Exported {stream_count} stream events (retention: {args.stream_maxlen})")
     
     print("[INFO] Export complete")
     return 0

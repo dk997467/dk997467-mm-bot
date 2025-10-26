@@ -229,61 +229,69 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const sumPath = 'artifacts/reports/analysis/SOAK_SUMMARY.json';
+            const path = 'artifacts/reports/analysis/SOAK_SUMMARY.json';
             
-            if (!fs.existsSync(sumPath)) {
+            if (!fs.existsSync(path)) {
               core.warning('SOAK_SUMMARY.json not found, skipping comment.');
               return;
             }
             
-            const sum = JSON.parse(fs.readFileSync(sumPath, 'utf8'));
+            const sum = JSON.parse(fs.readFileSync(path, 'utf8')) || {};
+            const verdict = (sum.overall?.verdict || 'N/A').toUpperCase();
+            const badge = verdict === 'OK' ? '✅' : (verdict === 'WARN' ? '🟡' : '🔴');
+            const tldr = `${badge} ${verdict} | windows=${sum.windows ?? 'N/A'} | symbols=${Object.keys(sum.symbols||{}).length} | crit=${sum.overall?.crit_count ?? 0} warn=${sum.overall?.warn_count ?? 0}`;
             
-            // Build comment
-            let body = `### 🧪 Soak Analysis Summary\n\n`;
-            body += `**Windows:** ${sum.windows} (min=${sum.min_windows_required}) | **Verdict:** `;
+            // Build artifact links
+            const runId = context.runId;
+            let artifactsPage = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${runId}#artifacts`;
             
-            // Verdict with emoji
-            if (sum.overall.verdict === 'CRIT') {
-              body += `🔴 **CRIT**`;
-            } else if (sum.overall.verdict === 'WARN') {
-              body += `🟡 **WARN**`;
-            } else {
-              body += `✅ **OK**`;
-            }
+            let links = `- [📦 Artifacts page](${artifactsPage})\n`;
             
-            body += `\n\n`;
-            body += `**Commit:** \`${sum.meta?.commit_range || 'n/a'}\` | **Profile:** \`${sum.meta?.profile || 'n/a'}\`\n\n`;
-            
-            // Per-symbol table
-            body += `| Symbol | Edge(bps) | Trend | Maker/Taker | Trend | p95(ms) | Trend | Risk | Trend | Status |\n`;
-            body += `|--------|-----------|-------|-------------|-------|---------|-------|------|-------|--------|\n`;
-            
-            for (const [sym, v] of Object.entries(sum.symbols)) {
-              const edge = v.edge_bps;
-              const maker = v.maker_taker_ratio;
-              const lat = v.p95_latency_ms;
-              const risk = v.risk_ratio;
+            // Try to fetch artifacts via API
+            try {
+              const { data: arts } = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId
+              });
               
-              // Overall status for symbol (worst metric)
-              let symbolStatus = 'OK';
-              if ([edge.status, maker.status, lat.status, risk.status].includes('CRIT')) {
-                symbolStatus = '🔴 CRIT';
-              } else if ([edge.status, maker.status, lat.status, risk.status].includes('WARN')) {
-                symbolStatus = '🟡 WARN';
-              } else {
-                symbolStatus = '✅ OK';
+              function find(name) {
+                return arts.artifacts.find(a => a.name && a.name.includes(name));
               }
               
-              body += `| ${sym} | ${edge.last} | ${edge.trend} | ${maker.last} | ${maker.trend} | ${lat.last} | ${lat.trend} | ${risk.last} | ${risk.trend} | ${symbolStatus} |\n`;
+              const aMain = find('soak-test-results');
+              if (aMain) {
+                links += `- [⬇️ soak-test-results.zip](${aMain.archive_download_url}) (auth required)\n`;
+              }
+            } catch (e) {
+              core.warning(`Failed to fetch artifacts: ${e.message}`);
             }
             
-            body += `\n**Violations:** `;
-            body += `🔴 CRIT: ${sum.overall.crit_count} | `;
-            body += `🟡 WARN: ${sum.overall.warn_count} | `;
-            body += `✅ OK: ${sum.overall.ok_count}\n\n`;
+            // Compact table per symbol
+            let table = `| Symbol | Edge(last) | Maker/Taker | p95(ms) | Risk | Status |\n|---|---:|---:|---:|---:|---|\n`;
+            for (const [sym, v] of Object.entries(sum.symbols || {})) {
+              const edge = v.edge_bps || {};
+              const maker = v.maker_taker_ratio || {};
+              const lat = v.p95_latency_ms || {};
+              const risk = v.risk_ratio || {};
+              
+              // Determine symbol status
+              let symStatus = '✅ OK';
+              if ([edge.status, maker.status, lat.status, risk.status].includes('CRIT')) {
+                symStatus = '🔴 CRIT';
+              } else if ([edge.status, maker.status, lat.status, risk.status].includes('WARN')) {
+                symStatus = '🟡 WARN';
+              }
+              
+              table += `| ${sym} | ${edge.last ?? 'n/a'} ${edge.trend ?? ''} | ${maker.last ?? 'n/a'} ${maker.trend ?? ''} | ${lat.last ?? 'n/a'} ${lat.trend ?? ''} | ${risk.last ?? 'n/a'} ${risk.trend ?? ''} | ${symStatus} |\n`;
+            }
             
-            body += `**Artifacts:** POST_SOAK_ANALYSIS.md, RECOMMENDATIONS.md, VIOLATIONS.json, SOAK_SUMMARY.json\n`;
-            body += `(see workflow artifacts above)`;
+            const body =
+              `### 🧪 Soak Summary\n` +
+              `**TL;DR:** ${tldr}\n\n` +
+              table + `\n` +
+              `**Artifacts:**\n` + links + `\n` +
+              `_Commit: \`${sum.meta?.commit_range || 'n/a'}\`, Profile: \`${sum.meta?.profile || 'n/a'}\`_`;
             
             await github.rest.issues.createComment({
               owner: context.repo.owner,
