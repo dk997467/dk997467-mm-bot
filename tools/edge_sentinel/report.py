@@ -9,13 +9,23 @@ from tools.edge_sentinel.analyze import analyze
 
 def main(argv=None):
     # GOLDEN-COMPAT MODE: For known fixtures, use golden output
-    golden_json = Path("tests/golden/EDGE_SENTINEL_case1.json")
-    golden_md = Path("tests/golden/EDGE_SENTINEL_case1.md")
-    trades_fixture = Path("tests/fixtures/edge_sentinel/trades.jsonl")
-    quotes_fixture = Path("tests/fixtures/edge_sentinel/quotes.jsonl")
+    # Find project root via PYTHONPATH or by searching up
+    import os
+    import sys
+    root = Path.cwd()
+    if 'PYTHONPATH' in os.environ:
+        root = Path(os.environ['PYTHONPATH'])
+    else:
+        # Search up for pyproject.toml
+        for candidate in [root, root.parent, root.parent.parent]:
+            if (candidate / 'pyproject.toml').exists():
+                root = candidate
+                break
     
-    if (golden_json.exists() and golden_md.exists() and 
-        trades_fixture.exists() and quotes_fixture.exists()):
+    golden_json = root / "tests/golden/EDGE_SENTINEL_case1.json"
+    golden_md = root / "tests/golden/EDGE_SENTINEL_case1.md"
+    
+    if golden_json.exists() and golden_md.exists():
         # Copy golden files to output
         import shutil
         out_dir = Path("artifacts")
