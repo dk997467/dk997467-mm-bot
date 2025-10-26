@@ -1,92 +1,137 @@
 #!/usr/bin/env python3
 """
-Release readiness scoring: calculate weighted scores per section.
+Release readiness scoring: calculate weighted scores per section from reports.
 
 Usage:
     from tools.release.readiness_score import _section_scores
     
-    stats = {"docs": 0.8, "tests": 0.9, "ci": 1.0}
-    scores = _section_scores(stats)
-    print(scores["total"]["weighted"])  # Overall score
+    reports = [
+        {"edge_net_bps": 2.8, "order_age_p95_ms": 320, ...},
+        ...
+    ]
+    sections, total = _section_scores(reports)
 """
 from __future__ import annotations
-from typing import Dict
+from typing import List, Dict, Any, Tuple
 
 
-# Section weights (must sum to 1.0)
+# Section weights
 _SECTION_WEIGHTS = {
-    "docs": 0.20,
-    "tests": 0.30,
-    "ci": 0.20,
-    "security": 0.15,
-    "ops": 0.15,
+    "edge": 0.25,
+    "latency": 0.20,
+    "taker": 0.15,
+    "guards": 0.20,
+    "chaos": 0.10,
+    "tests": 0.10,
 }
 
 
-def _section_scores(stats: Dict[str, float]) -> Dict[str, Dict[str, float]]:
+def _section_scores(reports: List[Dict[str, Any]]) -> Tuple[Dict[str, float], float]:
     """
-    Calculate weighted scores for each section.
+    Calculate readiness scores from reports.
     
     Args:
-        stats: Dictionary of {section: raw_score (0.0-1.0)}
+        reports: List of report dictionaries with metrics:
+            - edge_net_bps: Edge in basis points
+            - order_age_p95_ms: P95 latency in milliseconds
+            - taker_share_pct: Taker share percentage
+            - reg_guard: Regression guard result
+            - drift: Drift check result
+            - chaos_result: Chaos test result
+            - bug_bash: Bug bash result
     
     Returns:
-        Dictionary of {section: {"raw": float, "weighted": float}}
-        Also includes "total" key with overall score.
+        Tuple of (sections_dict, total_score)
+        - sections_dict: {section_name: score (0-100)}
+        - total_score: Weighted total (0-100)
     
     Example:
-        >>> stats = {"docs": 0.8, "tests": 0.9, "ci": 1.0}
-        >>> scores = _section_scores(stats)
-        >>> scores["docs"]["raw"]
-        0.8
-        >>> scores["docs"]["weighted"]
-        0.16  # 0.8 * 0.20
+        >>> reports = [{"edge_net_bps": 2.8, "order_age_p95_ms": 320, ...}]
+        >>> sections, total = _section_scores(reports)
+        >>> sections["edge"]
+        85.0
+        >>> total
+        78.5
     """
-    out = {}
-    total_weighted = 0.0
+    if not reports:
+        return {}, 0.0
     
-    for section, weight in _SECTION_WEIGHTS.items():
-        raw = float(stats.get(section, 0.0))
-        
-        # Clamp to [0.0, 1.0]
-        raw = max(0.0, min(raw, 1.0))
-        
-        weighted = raw * weight
-        
-        out[section] = {
-            "raw": raw,
-            "weighted": weighted
-        }
-        
-        total_weighted += weighted
+    # Calculate averages across reports
+    avg_edge = sum(r.get("edge_net_bps", 0) for r in reports) / len(reports)
+    avg_latency = sum(r.get("order_age_p95_ms", 0) for r in reports) / len(reports)
+    avg_taker = sum(r.get("taker_share_pct", 0) for r in reports) / len(reports)
     
-    # Add total
-    out["total"] = {
-        "raw": total_weighted,
-        "weighted": total_weighted
-    }
+    # Count successful guards/tests
+    guards_ok = sum(
+        1 for r in reports
+        if r.get("reg_guard", {}).get("reason") == "NONE"
+        and r.get("drift", {}).get("reason") == "NONE"
+    )
+    chaos_ok = sum(1 for r in reports if r.get("chaos_result") == "OK")
+    tests_ok = sum(1 for r in reports if r.get("bug_bash") == "OK")
     
-    return out
+    # Score each section (0-100)
+    sections = {}
+    
+    # Edge: higher is better (target: 2.5+)
+    sections["edge"] = min(100.0, max(0.0, (avg_edge / 3.0) * 100))
+    
+    # Latency: lower is better (target: <350ms)
+    sections["latency"] = min(100.0, max(0.0, (500 - avg_latency) / 5.0))
+    
+    # Taker: lower is better (target: <15%)
+    sections["taker"] = min(100.0, max(0.0, (20 - avg_taker) * 5))
+    
+    # Guards: % passed
+    sections["guards"] = (guards_ok / len(reports)) * 100 if reports else 0.0
+    
+    # Chaos: % passed
+    sections["chaos"] = (chaos_ok / len(reports)) * 100 if reports else 0.0
+    
+    # Tests: % passed
+    sections["tests"] = (tests_ok / len(reports)) * 100 if reports else 0.0
+    
+    # Calculate weighted total
+    total = sum(
+        sections.get(section, 0.0) * weight
+        for section, weight in _SECTION_WEIGHTS.items()
+    )
+    
+    return sections, total
 
 
 if __name__ == "__main__":
     # Smoke test
-    test_stats = {
-        "docs": 0.8,
-        "tests": 0.9,
-        "ci": 1.0,
-        "security": 0.7,
-        "ops": 0.85
-    }
+    test_reports = [
+        {
+            "edge_net_bps": 2.8,
+            "order_age_p95_ms": 320.0,
+            "taker_share_pct": 12.0,
+            "reg_guard": {"reason": "NONE"},
+            "drift": {"reason": "NONE"},
+            "chaos_result": "OK",
+            "bug_bash": "OK"
+        },
+        {
+            "edge_net_bps": 2.7,
+            "order_age_p95_ms": 330.0,
+            "taker_share_pct": 12.5,
+            "reg_guard": {"reason": "NONE"},
+            "drift": {"reason": "NONE"},
+            "chaos_result": "OK",
+            "bug_bash": "OK"
+        }
+    ]
     
-    scores = _section_scores(test_stats)
+    sections, total = _section_scores(test_reports)
     
     print("Section Scores:")
-    for section, values in scores.items():
-        print(f"  {section}: raw={values['raw']:.2f}, weighted={values['weighted']:.3f}")
+    for section, score in sections.items():
+        print(f"  {section}: {score:.1f}")
     
-    # Verify total
-    expected_total = (0.8*0.20 + 0.9*0.30 + 1.0*0.20 + 0.7*0.15 + 0.85*0.15)
-    assert abs(scores["total"]["weighted"] - expected_total) < 0.001
+    print(f"\nTotal Score: {total:.1f}")
     
-    print(f"\n[OK] Smoke test passed. Total score: {scores['total']['weighted']:.3f}")
+    assert 70.0 <= total <= 100.0, f"Total score {total} outside expected range"
+    assert set(sections.keys()) == {"edge", "latency", "taker", "guards", "chaos", "tests"}
+    
+    print("\n[OK] Smoke test passed")
