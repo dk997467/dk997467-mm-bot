@@ -67,8 +67,8 @@ def load_windows(iter_glob: str,
                 print(
                     f"[WARN] No symbol found in {
                         Path(file_path).name}, skipping")
-                continue
-
+            continue
+        
             # Apply symbol filter
             if symbols_filter and symbol not in symbols_filter:
                 continue
@@ -105,11 +105,11 @@ def load_windows(iter_glob: str,
 def generate_sparkline(values: List[float], width: int = 10) -> str:
     """
     Generate ASCII sparkline from values.
-
+    
     Args:
         values: List of numeric values
         width: Number of characters in sparkline
-
+    
     Returns:
         Sparkline string
     """
@@ -496,7 +496,7 @@ def generate_analysis_report(
     lines.append(f"**Total Windows:** {total_windows}")
     lines.append(f"**Symbols:** {len(windows_by_symbol)}")
     lines.append("")
-
+    
     # Check min windows
     if total_windows < min_windows:
         lines.append(
@@ -532,10 +532,10 @@ def generate_analysis_report(
         windows = windows_by_symbol[symbol]
 
         lines.append(f"## {symbol}")
-        lines.append("")
+    lines.append("")
         lines.append(f"**Windows:** {len(windows)}")
-        lines.append("")
-
+    lines.append("")
+    
         # Extract metrics series
         metrics_series = {
             "edge_bps": [],
@@ -587,7 +587,7 @@ def generate_analysis_report(
                 status = "🔴 CRIT"
             elif any(v["level"] == "WARN" for v in metric_violations):
                 status = "🟡 WARN"
-            else:
+    else:
                 status = "✅ OK"
 
             # Format values
@@ -610,8 +610,8 @@ def generate_analysis_report(
             lines.append(
                 f"| {metric_name} | {current_str} | {min_str} | {max_str} | {median_str} | {sparkline} | {trend_symbol} | {status} |")
 
-        lines.append("")
-
+    lines.append("")
+    
         # List violations for this symbol
         if metric_violations := [
                 v for v in violations if v["symbol"] == symbol]:
@@ -619,13 +619,13 @@ def generate_analysis_report(
             for v in metric_violations:
                 lines.append(f"- {v['level']}: {v['note']}")
     lines.append("")
-
+    
     # Summary
     lines.append("---")
     lines.append("")
     lines.append("## Summary")
     lines.append("")
-
+    
     warn_count = sum(1 for v in all_violations if v["level"] == "WARN")
     ok_count = len(windows_by_symbol) - (crit_count + warn_count)
 
@@ -697,13 +697,13 @@ def generate_recommendations_report(
             symbol, metrics_series, symbol_violations)
 
         lines.append(f"## {symbol}")
-        lines.append("")
-
+    lines.append("")
+    
         for rec in recommendations:
             lines.append(f"{rec}")
-            lines.append("")
-
-        lines.append("---")
+        lines.append("")
+    
+    lines.append("---")
     lines.append("")
 
     # Write recommendations
@@ -857,7 +857,7 @@ def generate_summary_json(
                 status = "CRIT"
             elif any(v["level"] == "WARN" for v in metric_violations):
                 status = "WARN"
-            else:
+    else:
                 status = "OK"
             
             symbol_metrics[metric_name] = {
@@ -929,7 +929,7 @@ def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
         description="Post-Soak Analyzer V2 - Trends, violations, recommendations")
-
+    
     parser.add_argument(
         "--iter-glob",
         type=str,
@@ -1030,9 +1030,9 @@ def main():
         action="store_true",
         help="Print mini-plots table to stdout"
     )
-
+    
     args = parser.parse_args()
-
+    
     # Parse symbols filter
     symbols_filter = None
     if args.symbols != "*":
