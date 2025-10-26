@@ -72,10 +72,42 @@
         "description": "Time since last heartbeat from runner.\n\n**Note**: Requires Redis exporter with key timestamp metrics.\n\nAlternative: Check logs for CONTINUOUS_METRICS or heartbeat entries."
       },
       {
+        "id": 6,
+        "title": "Debounce Remaining (min)",
+        "type": "stat",
+        "gridPos": {"x": 8, "y": 0, "w": 8, "h": 4},
+        "targets": [
+          {
+            "expr": "soak_alert_debounce_remaining_minutes{env=\"$env\", exchange=\"$exchange\"}",
+            "legendFormat": "Remaining",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "orientation": "auto"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "m",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 1, "color": "yellow"},
+                {"value": 60, "color": "orange"}
+              ]
+            }
+          }
+        },
+        "description": "Minutes until next alert is allowed.\n\n0 = ready to send\n>0 = in debounce window\n\n**Note**: Requires prometheus_client in runner.\n\nAlternative: Check logs for 'remaining_min' field."
+      },
+      {
         "id": 2,
         "title": "Alert Debounce Status (Logs)",
         "type": "logs",
-        "gridPos": {"x": 8, "y": 0, "w": 16, "h": 8},
+        "gridPos": {"x": 16, "y": 0, "w": 8, "h": 8},
         "targets": [
           {
             "expr": "{job=\"soak-runner\"} |= \"ALERT_DEBOUNCED\" or \"ALERT_BYPASS_DEBOUNCE\"",

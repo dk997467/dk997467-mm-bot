@@ -12,69 +12,133 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-def generate_crit_summary(out_dir: Path):
+def generate_crit_summary(out_dir: Path, variant: int = 1):
     """Generate CRIT-level fake summary and violations."""
     
-    summary = {
-        "generated_at_utc": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-        "windows": 24,
-        "min_windows_required": 24,
-        "symbols": {
-            "BTCUSDT": {
-                "edge_bps": {"median": 2.1, "last": 2.0, "trend": "↓", "status": "CRIT"},
-                "maker_taker_ratio": {"median": 0.82, "last": 0.81, "trend": "↓", "status": "OK"},
-                "p95_latency_ms": {"median": 380, "last": 420, "trend": "↑", "status": "CRIT"},
-                "risk_ratio": {"median": 0.38, "last": 0.39, "trend": "≈", "status": "OK"}
+    if variant == 2:
+        # Variant 2: Different violations (different signature)
+        summary = {
+            "generated_at_utc": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            "windows": 24,
+            "min_windows_required": 24,
+            "symbols": {
+                "BTCUSDT": {
+                    "edge_bps": {"median": 2.1, "last": 2.05, "trend": "≈", "status": "CRIT"},
+                    "maker_taker_ratio": {"median": 0.72, "last": 0.70, "trend": "↓", "status": "CRIT"},
+                    "p95_latency_ms": {"median": 320, "last": 315, "trend": "≈", "status": "OK"},
+                    "risk_ratio": {"median": 0.38, "last": 0.39, "trend": "≈", "status": "OK"}
+                },
+                "SOLUSDT": {
+                    "edge_bps": {"median": 1.9, "last": 1.85, "trend": "↓", "status": "CRIT"},
+                    "maker_taker_ratio": {"median": 0.80, "last": 0.81, "trend": "≈", "status": "OK"},
+                    "p95_latency_ms": {"median": 340, "last": 335, "trend": "≈", "status": "OK"},
+                    "risk_ratio": {"median": 0.35, "last": 0.36, "trend": "≈", "status": "OK"}
+                }
             },
-            "ETHUSDT": {
-                "edge_bps": {"median": 2.8, "last": 2.7, "trend": "≈", "status": "OK"},
-                "maker_taker_ratio": {"median": 0.73, "last": 0.71, "trend": "↓", "status": "CRIT"},
-                "p95_latency_ms": {"median": 340, "last": 335, "trend": "≈", "status": "OK"},
-                "risk_ratio": {"median": 0.35, "last": 0.36, "trend": "≈", "status": "OK"}
+            "overall": {
+                "crit_count": 3,
+                "warn_count": 0,
+                "ok_count": 5,
+                "verdict": "CRIT"
+            },
+            "meta": {
+                "commit_range": "fake-test-v2",
+                "profile": "selftest",
+                "source": "generate_fake_summary"
             }
-        },
-        "overall": {
-            "crit_count": 3,
-            "warn_count": 0,
-            "ok_count": 5,
-            "verdict": "CRIT"
-        },
-        "meta": {
-            "commit_range": "fake-test",
-            "profile": "selftest",
-            "source": "generate_fake_summary"
         }
-    }
-    
-    violations = [
-        {
-            "symbol": "BTCUSDT",
-            "metric": "edge_bps",
-            "level": "CRIT",
-            "window_index": 23,
-            "value": 2.0,
-            "threshold": 2.5,
-            "note": "edge_bps (2.0) < critical threshold (2.5)"
-        },
-        {
-            "symbol": "BTCUSDT",
-            "metric": "p95_latency_ms",
-            "level": "CRIT",
-            "window_index": 24,
-            "value": 420.0,
-            "threshold": 400.0,
-            "note": "p95_latency_ms (420.0) > critical threshold (400.0)"
-        },
-        {
-            "symbol": "ETHUSDT",
-            "metric": "maker_taker_ratio",
-            "level": "CRIT",
-            "window_index": 24,
-            "value": 0.71,
-            "threshold": 0.75,
-            "note": "maker_taker_ratio (0.71) < critical threshold (0.75)"
+        
+        violations = [
+            {
+                "symbol": "BTCUSDT",
+                "metric": "edge_bps",
+                "level": "CRIT",
+                "window_index": 24,
+                "value": 2.05,
+                "threshold": 2.5,
+                "note": "edge_bps (2.05) < critical threshold (2.5)"
+            },
+            {
+                "symbol": "BTCUSDT",
+                "metric": "maker_taker_ratio",
+                "level": "CRIT",
+                "window_index": 24,
+                "value": 0.70,
+                "threshold": 0.75,
+                "note": "maker_taker_ratio (0.70) < critical threshold (0.75)"
+            },
+            {
+                "symbol": "SOLUSDT",
+                "metric": "edge_bps",
+                "level": "CRIT",
+                "window_index": 23,
+                "value": 1.85,
+                "threshold": 2.5,
+                "note": "edge_bps (1.85) < critical threshold (2.5)"
+            }
+        ]
+    else:
+        # Variant 1: Original violations
+        summary = {
+            "generated_at_utc": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            "windows": 24,
+            "min_windows_required": 24,
+            "symbols": {
+                "BTCUSDT": {
+                    "edge_bps": {"median": 2.1, "last": 2.0, "trend": "↓", "status": "CRIT"},
+                    "maker_taker_ratio": {"median": 0.82, "last": 0.81, "trend": "↓", "status": "OK"},
+                    "p95_latency_ms": {"median": 380, "last": 420, "trend": "↑", "status": "CRIT"},
+                    "risk_ratio": {"median": 0.38, "last": 0.39, "trend": "≈", "status": "OK"}
+                },
+                "ETHUSDT": {
+                    "edge_bps": {"median": 2.8, "last": 2.7, "trend": "≈", "status": "OK"},
+                    "maker_taker_ratio": {"median": 0.73, "last": 0.71, "trend": "↓", "status": "CRIT"},
+                    "p95_latency_ms": {"median": 340, "last": 335, "trend": "≈", "status": "OK"},
+                    "risk_ratio": {"median": 0.35, "last": 0.36, "trend": "≈", "status": "OK"}
+                }
+            },
+            "overall": {
+                "crit_count": 3,
+                "warn_count": 0,
+                "ok_count": 5,
+                "verdict": "CRIT"
+            },
+            "meta": {
+                "commit_range": "fake-test",
+                "profile": "selftest",
+                "source": "generate_fake_summary"
+            }
         }
-    ]
+        
+        violations = [
+            {
+                "symbol": "BTCUSDT",
+                "metric": "edge_bps",
+                "level": "CRIT",
+                "window_index": 23,
+                "value": 2.0,
+                "threshold": 2.5,
+                "note": "edge_bps (2.0) < critical threshold (2.5)"
+            },
+            {
+                "symbol": "BTCUSDT",
+                "metric": "p95_latency_ms",
+                "level": "CRIT",
+                "window_index": 24,
+                "value": 420.0,
+                "threshold": 400.0,
+                "note": "p95_latency_ms (420.0) > critical threshold (400.0)"
+            },
+            {
+                "symbol": "ETHUSDT",
+                "metric": "maker_taker_ratio",
+                "level": "CRIT",
+                "window_index": 24,
+                "value": 0.71,
+                "threshold": 0.75,
+                "note": "maker_taker_ratio (0.71) < critical threshold (0.75)"
+            }
+        ]
     
     # Write files
     summary_path = out_dir / "SOAK_SUMMARY.json"
@@ -188,6 +252,8 @@ def main():
     parser.add_argument("--warn", action="store_true", help="Generate WARN-level summary")
     parser.add_argument("--ok", action="store_true", help="Generate OK-level summary")
     parser.add_argument("--out", type=Path, default=Path("reports/analysis"), help="Output directory")
+    parser.add_argument("--variant", type=int, default=1, choices=[1, 2], 
+                        help="Violation variant (1 or 2) for different signatures (CRIT only)")
     
     args = parser.parse_args()
     
@@ -199,7 +265,7 @@ def main():
         args.crit = True
     
     if args.crit:
-        generate_crit_summary(args.out)
+        generate_crit_summary(args.out, args.variant)
     elif args.warn:
         generate_warn_summary(args.out)
     elif args.ok:

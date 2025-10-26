@@ -1,0 +1,93 @@
+# Prometheus Alert Rules для Soak Runner Monitoring
+
+groups:
+  - name: soak-runner
+    interval: 1m
+    rules:
+      # Heartbeat missing (no updates for 10+ minutes)
+      - alert: SoakRunnerHeartbeatMissing
+        expr: (time() - redis_key_timestamp{key=~".*:soak:runner:heartbeat"}) > 600
+        for: 5m
+        labels:
+          severity: warning
+          component: soak-runner
+        annotations:
+          summary: "Soak runner heartbeat stale (>10 min)"
+          description: |
+            Heartbeat key {{ $labels.key }} has not been updated for {{ $value | humanizeDuration }}.
+            This indicates the runner may be stuck or stopped.
+          
+            Check:
+            - Runner process status
+            - Runner logs for errors
+            - Redis connectivity
+          
+          action: "Investigate runner health immediately"
+      
+      # Debounce gauge stuck (same non-zero value for 6+ hours)
+      - alert: SoakRunnerDebounceStuck
+        expr: |
+          (soak_alert_debounce_remaining_minutes > 0) and
+          (changes(soak_alert_debounce_remaining_minutes[6h]) == 0)
+        for: 10m
+        labels:
+          severity: warning
+          component: soak-runner
+        annotations:
+          summary: "Debounce gauge stuck at {{ $value }} minutes"
+          description: |
+            Alert debounce remaining time (env={{ $labels.env }}, exchange={{ $labels.exchange }}) 
+            has been {{ $value }} minutes for 6+ hours without change.
+            
+            This may indicate:
+            - Runner not cycling
+            - Metric export issue
+            - Alert logic frozen
+          
+          action: "Check runner logs and restart if necessary"
+      
+      # High debounce remaining (>2 hours, indicating persistent CRIT)
+      - alert: SoakRunnerDebounceHigh
+        expr: soak_alert_debounce_remaining_minutes > 120
+        for: 30m
+        labels:
+          severity: info
+          component: soak-runner
+        annotations:
+          summary: "Debounce remaining high: {{ $value }} minutes"
+          description: |
+            Alert debounce window (env={{ $labels.env }}, exchange={{ $labels.exchange }}) 
+            has {{ $value }} minutes remaining, indicating recent CRIT verdict.
+            
+            This is informational - system is in debounce cooldown.
+          
+          action: "Review recent CRIT alerts and violations"
+
+---
+
+# Alternative: Log-Based Alerting (if Redis exporter not available)
+#
+# Use Loki ruler for log-based alerts:
+#
+# groups:
+#   - name: soak-runner-logs
+#     interval: 1m
+#     rules:
+#       - alert: SoakRunnerNoHeartbeat
+#         expr: |
+#           absent_over_time({job="soak-runner"} |= "Heartbeat written"[15m])
+#         for: 5m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "No heartbeat log entries for 15+ minutes"
+#       
+#       - alert: SoakRunnerDebounceAlways
+#         expr: |
+#           rate({job="soak-runner"} |= "ALERT_DEBOUNCED"[1h]) > 0
+#         for: 6h
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "Alert debounced continuously for 6+ hours"
+

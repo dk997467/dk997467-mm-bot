@@ -1412,6 +1412,8 @@ make soak-alert-dry           # Dry-run с debounce
 
 # Self-test
 make soak-alert-selftest      # Generate fake CRIT + run
+make soak-qol-smoke           # QoL smoke test (debounce check)
+make soak-qol-smoke-new-viol  # Signature bypass test
 
 # Analysis
 make soak-analyze             # Post-soak analyzer
@@ -1424,7 +1426,331 @@ make soak-violations-redis    # Export violations
 ```bash
 ENV=prod EXCHANGE=kucoin make soak-once
 ALERT_POLICY="dev=WARN,prod=CRIT" make soak-alert-selftest
+REDIS_URL=redis://localhost:6380/1 make soak-qol-smoke
 ```
+
+---
+
+## 🎯 Safety & Observability Pack
+
+### Debounce Gauge (Prometheus Метрика)
+
+**Назначение:** Real-time мониторинг оставшегося времени до следующего разрешённого алерта.
+
+**Метрика:**
+```promql
+soak_alert_debounce_remaining_minutes{env="prod", exchange="bybit"}
+```
+
+**Значения:**
+- `> 0` → debounce активен, алерты подавляются
+- `== 0` → debounce неактивен или bypass
+- Отсутствует → metrics не экспортируются
+
+**Обновление:**
+- При debounce: `remaining_min = debounce_min - elapsed_min`
+- При bypass (severity increase): `0`
+- При bypass (new violations signature): `0`
+- При Redis недоступен: `0`
+
+**Grafana Panel:**
+```json
+{
+  "title": "Debounce Remaining (min)",
+  "type": "stat",
+  "targets": [{
+    "expr": "soak_alert_debounce_remaining_minutes{env=\"$env\", exchange=\"$exchange\"}"
+  }],
+  "fieldConfig": {
+    "thresholds": {
+      "steps": [
+        {"value": 0, "color": "green"},
+        {"value": 60, "color": "yellow"},
+        {"value": 120, "color": "red"}
+      ]
+    }
+  }
+}
+```
+
+**Alert Rules:**
+```yaml
+- alert: SoakRunnerDebounceStuck
+  expr: changes(soak_alert_debounce_remaining_minutes[6h]) == 0 AND soak_alert_debounce_remaining_minutes > 0
+  for: 5m
+  annotations:
+    summary: "Debounce gauge stuck (no change for 6h)"
+```
+
+**Интерпретация:**
+- **0 min** → можно отправлять алерт
+- **60 min** → ещё час до следующего алерта
+- **180 min** → максимальное debounce время (3h)
+- **Stuck (не меняется 6h)** → вероятно, bug или Redis state проблема
+
+**Prometheus Exporter:**
+- Runner должен экспортировать metrics в Redis
+- Redis Exporter (опционально) → Prometheus → Grafana
+- Альтернатива: Loki logs + LogQL (без Prometheus)
+
+---
+
+### Violation Signature Bypass (Smart Debounce)
+
+**Назначение:** Bypass debounce если *состав* нарушений изменился, даже если severity остался тем же (CRIT→CRIT).
+
+**Как работает:**
+
+1. **Signature Computation:**
+   ```python
+   def compute_violations_signature(violations, top_k=5):
+       # Берём top-K самых серьёзных
+       top = sorted(violations, key=lambda v: (v['level'], v['symbol']))[:top_k]
+       canonical = [f"{v['symbol']}:{v['metric']}:{v['window_index']}" for v in top]
+       return hashlib.sha1("|".join(canonical).encode()).hexdigest()
+   ```
+
+2. **Comparison:**
+   ```python
+   current_signature = compute_violations_signature(violations)
+   last_signature = redis.get("alert_key").get("last_signature", "")
+   
+   if current_signature != last_signature:
+       logger.info("ALERT_BYPASS_DEBOUNCE reason=new_violations signature_changed=true")
+       return True  # Send alert despite debounce
+   ```
+
+3. **Storage in Redis:**
+   ```json
+   {
+     "last_sent_at": "2025-10-26T12:00:00Z",
+     "last_level": "CRIT",
+     "last_signature": "a1b2c3d4e5f6..."
+   }
+   ```
+
+**Примеры:**
+
+**Scenario 1: Same violations → DEBOUNCE**
+```
+12:00 - CRIT: [BTCUSDT edge_bps, BTCUSDT p95_latency]
+12:30 - CRIT: [BTCUSDT edge_bps, BTCUSDT p95_latency] (same signature)
+→ ALERT_DEBOUNCED remaining_min=150
+```
+
+**Scenario 2: New violations → BYPASS**
+```
+12:00 - CRIT: [BTCUSDT edge_bps, BTCUSDT p95_latency]
+12:30 - CRIT: [ETHUSDT edge_bps, SOLUSDT maker_taker] (different signature)
+→ ALERT_BYPASS_DEBOUNCE reason=new_violations signature_changed=true
+```
+
+**Конфигурация:**
+- `top_k=5` (по умолчанию) в `compute_violations_signature()`
+- Signature хранится в Redis (key: `{env}:{exchange}:soak:alert_state`)
+
+**Тестирование:**
+```bash
+# Вариант 1: Same violations (debounce)
+make soak-qol-smoke
+
+# Вариант 2: Different violations (bypass)
+make soak-qol-smoke-new-viol
+```
+
+---
+
+### Redis Unavailable WARN Alert
+
+**Назначение:** Автоматическое оповещение если Redis export стабильно не работает N циклов подряд.
+
+**Условия отправки:**
+- Redis export failed >= `--redis-down-max` consecutive cycles (default: 3)
+- Отправка WARN alert (независимо от soak verdict)
+- После успешного export — счётчик сбрасывается
+
+**Формат сообщения:**
+```
+[🟡 WARN] Redis export skipped 3 cycles in a row
+
+Env: dev
+Exchange: bybit
+Consecutive failures: 3
+Last check: 2025-10-26T12:45:00Z
+
+Redis may be unavailable. Check REDIS_URL and connectivity.
+```
+
+**Tracking:**
+```json
+// artifacts/state/last_export_status.json
+{
+  "timestamp": "2025-10-26T12:45:00Z",
+  "status": "SKIP",
+  "reason": "redis_unavailable",
+  "consecutive_failures": 3
+}
+```
+
+**Логика:**
+```python
+def check_redis_down_streak(export_status, state_dir):
+    state_file = state_dir / "last_export_status.json"
+    
+    if export_status.get("status") == "SKIP" and "redis" in export_status.get("reason", ""):
+        # Increment consecutive failures
+        old_count = old_state.get("consecutive_failures", 0)
+        new_count = old_count + 1
+    else:
+        # Reset on success
+        new_count = 0
+    
+    return new_count
+```
+
+**Конфигурация:**
+```bash
+python -m tools.soak.continuous_runner \
+  --redis-down-max 5 \     # Send WARN after 5 consecutive failures
+  --alert telegram \        # Send to Telegram
+  --verbose
+```
+
+**Troubleshooting:**
+1. **Check Redis connectivity:**
+   ```bash
+   redis-cli -u "$REDIS_URL" PING
+   ```
+
+2. **Check state file:**
+   ```bash
+   cat artifacts/state/last_export_status.json
+   ```
+
+3. **Reset counter (если false positive):**
+   ```bash
+   echo '{"status":"OK","consecutive_failures":0}' > artifacts/state/last_export_status.json
+   ```
+
+**Prometheus Alert (optional):**
+```yaml
+- alert: SoakRedisExportDown
+  expr: redis_export_fail_total{env="prod"} > 3
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Soak Redis export failing ({{ $labels.env }})"
+```
+
+---
+
+### One-Shot Smoke Tests (QoL Pack)
+
+**Назначение:** Быстрая проверка debounce логики и violation signature bypass в isolated режиме.
+
+**Makefile Targets:**
+
+#### `make soak-qol-smoke`
+**Что делает:**
+1. Generate fake CRIT (variant 1)
+2. Run continuous_runner (должен отправить alert)
+3. Run снова (должен DEBOUNCE — same violations)
+
+**Ожидаемый вывод:**
+```
+Step 2: First run (should alert)
+[INFO] ALERT_SENT verdict=CRIT severity_increased=False
+
+Step 3: Second run (should DEBOUNCE - same violations)
+[INFO] ALERT_DEBOUNCED level=CRIT remaining_min=180
+```
+
+**Использование:**
+```bash
+# Default: dev env, bybit exchange
+make soak-qol-smoke
+
+# Custom env
+ENV=staging EXCHANGE=kucoin make soak-qol-smoke
+
+# Custom Redis
+REDIS_URL=redis://localhost:6380/1 make soak-qol-smoke
+```
+
+#### `make soak-qol-smoke-new-viol`
+**Что делает:**
+1. Generate fake CRIT (variant 2 — **different violations**)
+2. Run continuous_runner (должен BYPASS debounce → `signature_changed=true`)
+
+**Ожидаемый вывод:**
+```
+[INFO] ALERT_BYPASS_DEBOUNCE prev=CRIT new=CRIT reason=new_violations signature_changed=true
+```
+
+**Сравнение violations:**
+```
+# Variant 1:
+BTCUSDT edge_bps (window 23)
+BTCUSDT p95_latency_ms (window 24)
+ETHUSDT maker_taker_ratio (window 24)
+
+# Variant 2 (different signature):
+BTCUSDT edge_bps (window 24)  ← другой window
+BTCUSDT maker_taker_ratio (window 24)  ← другая метрика
+SOLUSDT edge_bps (window 23)  ← другой symbol
+```
+
+**Вариант генератора:**
+```bash
+# Variant 1 (default)
+python -m tools.soak.generate_fake_summary --crit --out reports/analysis --variant 1
+
+# Variant 2 (new signature)
+python -m tools.soak.generate_fake_summary --crit --out reports/analysis --variant 2
+```
+
+**Тестовый сценарий:**
+```bash
+# 1. Clean state
+redis-cli DEL "dev:bybit:soak:alert_state"
+
+# 2. First alert (variant 1)
+make soak-qol-smoke
+# → ALERT_SENT
+
+# 3. Same violations (should debounce)
+make soak-qol-smoke
+# → ALERT_DEBOUNCED remaining_min=180
+
+# 4. New violations (should bypass)
+make soak-qol-smoke-new-viol
+# → ALERT_BYPASS_DEBOUNCE signature_changed=true
+```
+
+**Isolation от Production:**
+- Uses `reports/analysis/FAKE_*.json` (fake glob pattern)
+- Separate Redis heartbeat key: `dev:bybit:soak:runner:heartbeat`
+- Short TTL (600s)
+- Can use `--dry-run` for no-op alerts
+
+**Debugging:**
+```bash
+# Check Redis state
+redis-cli GET "dev:bybit:soak:alert_state"
+
+# Check last signature
+redis-cli GET "dev:bybit:soak:alert_state" | jq .last_signature
+
+# Clear state (для повторного теста)
+redis-cli DEL "dev:bybit:soak:alert_state"
+```
+
+**Acceptance Criteria:**
+✅ `soak-qol-smoke` → ALERT_SENT (1st), ALERT_DEBOUNCED (2nd)  
+✅ `soak-qol-smoke-new-viol` → ALERT_BYPASS_DEBOUNCE signature_changed=true  
+✅ Prometheus gauge `soak_alert_debounce_remaining_minutes` updates  
+✅ Redis state includes `last_signature`  
 
 ---
 

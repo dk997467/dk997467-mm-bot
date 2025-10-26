@@ -28,6 +28,14 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 import logging
 
+# Prometheus metrics (optional)
+try:
+    from prometheus_client import Gauge
+    METRICS_AVAILABLE = True
+except ImportError:
+    METRICS_AVAILABLE = False
+    Gauge = None
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -35,6 +43,16 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+# Prometheus Gauge for debounce remaining time
+if METRICS_AVAILABLE:
+    GAUGE_DEBOUNCE_LEFT = Gauge(
+        'soak_alert_debounce_remaining_minutes',
+        'Minutes left until next alert is allowed by debounce window',
+        ['env', 'exchange']
+    )
+else:
+    GAUGE_DEBOUNCE_LEFT = None
 
 # Conditional Redis import
 try:
@@ -179,13 +197,69 @@ def get_effective_min_severity(
     return fallback_severity, "alert-min-severity"
 
 
+def update_debounce_gauge(env: str, exchange: str, remaining_min: int):
+    """Update Prometheus gauge for debounce remaining minutes."""
+    if GAUGE_DEBOUNCE_LEFT is not None:
+        try:
+            GAUGE_DEBOUNCE_LEFT.labels(env=env, exchange=exchange).set(remaining_min)
+        except Exception as e:
+            logger.debug(f"Failed to update debounce gauge: {e}")
+
+
+def compute_violations_signature(violations: List[Dict[str, Any]], top_k: int = 5) -> str:
+    """
+    Compute signature of top-K violations.
+    
+    Signature is based on (symbol, metric, level, window_index, value_rounded).
+    Changes in violation composition will result in different signature.
+    
+    Args:
+        violations: List of violation dicts
+        top_k: Number of top violations to consider
+    
+    Returns:
+        SHA1 hex digest of violations signature
+    """
+    if not violations:
+        return hashlib.sha1(b"no_violations").hexdigest()
+    
+    # Sort by: level (CRIT first), then by symbol+metric
+    def sort_key(v):
+        level_priority = {"CRIT": 0, "WARN": 1, "OK": 2}
+        level = v.get("level", "OK")
+        symbol = v.get("symbol", "")
+        metric = v.get("metric", "")
+        return (level_priority.get(level, 3), symbol, metric)
+    
+    sorted_violations = sorted(violations, key=sort_key)[:top_k]
+    
+    # Build signature components
+    components = []
+    for v in sorted_violations:
+        symbol = v.get("symbol", "")
+        metric = v.get("metric", "")
+        level = v.get("level", "")
+        window = v.get("window_index", 0)
+        value = v.get("value", 0.0)
+        # Round value to 2 decimals to avoid float precision issues
+        value_rounded = round(float(value), 2) if value is not None else 0.0
+        
+        components.append(f"{symbol}:{metric}:{level}:{window}:{value_rounded}")
+    
+    signature_str = "|".join(components)
+    return hashlib.sha1(signature_str.encode('utf-8')).hexdigest()
+
+
 def should_send_alert(
     verdict: str,
     min_severity: str,
     redis_client: Optional[Any],
     alert_key: str,
     debounce_min: int,
-    dry_run: bool
+    dry_run: bool,
+    env: str = "dev",
+    exchange: str = "bybit",
+    violations: Optional[List[Dict[str, Any]]] = None
 ) -> bool:
     """
     Check if alert should be sent based on severity and debounce.
@@ -199,10 +273,12 @@ def should_send_alert(
     # Check minimum severity
     if current_level < min_level:
         logger.info(f"Alert skipped: {verdict} below min severity {min_severity}")
+        update_debounce_gauge(env, exchange, 0)
         return False
     
     # Debounce disabled or Redis unavailable
     if debounce_min <= 0 or not redis_client:
+        update_debounce_gauge(env, exchange, 0)
         return True
     
     try:
@@ -210,6 +286,7 @@ def should_send_alert(
         last_alert_json = redis_client.get(alert_key)
         if not last_alert_json:
             # First alert
+            update_debounce_gauge(env, exchange, 0)
             return True
         
         last_alert = json.loads(last_alert_json)
@@ -217,6 +294,7 @@ def should_send_alert(
         last_sent_str = last_alert.get("last_sent_utc", "")
         
         if not last_sent_str:
+            update_debounce_gauge(env, exchange, 0)
             return True
         
         last_sent = datetime.fromisoformat(last_sent_str.replace('Z', '+00:00'))
@@ -229,7 +307,21 @@ def should_send_alert(
                 f"ALERT_BYPASS_DEBOUNCE prev={last_alert.get('last_level')} "
                 f"new={verdict} reason=severity_increase"
             )
+            update_debounce_gauge(env, exchange, 0)
             return True
+        
+        # Same or lower severity - check violations signature if provided
+        if violations is not None:
+            current_signature = compute_violations_signature(violations)
+            last_signature = last_alert.get("last_signature", "")
+            
+            if current_signature != last_signature:
+                logger.info(
+                    f"ALERT_BYPASS_DEBOUNCE prev={last_alert.get('last_level')} "
+                    f"new={verdict} reason=new_violations signature_changed=true"
+                )
+                update_debounce_gauge(env, exchange, 0)
+                return True
         
         # Same or lower severity - check debounce
         if elapsed_min < debounce_min:
@@ -238,11 +330,15 @@ def should_send_alert(
                 f"ALERT_DEBOUNCED level={verdict} last_sent=\"{last_sent_str}\" "
                 f"debounce_min={debounce_min} remaining_min={remaining_min} verdict={verdict}"
             )
+            update_debounce_gauge(env, exchange, remaining_min)
             return False
         
+        # Debounce window passed
+        update_debounce_gauge(env, exchange, 0)
         return True
     except Exception as e:
         logger.warning(f"Debounce check failed: {e}")
+        update_debounce_gauge(env, exchange, 0)
         return True  # Fail open
 
 
@@ -251,7 +347,8 @@ def record_alert_sent(
     redis_client: Optional[Any],
     alert_key: str,
     debounce_min: int,
-    dry_run: bool
+    dry_run: bool,
+    violations: Optional[List[Dict[str, Any]]] = None
 ):
     """Record that an alert was sent (for debounce)."""
     if dry_run or not redis_client:
@@ -264,6 +361,11 @@ def record_alert_sent(
             "last_level": verdict,
             "last_sent_utc": now.strftime('%Y-%m-%dT%H:%M:%SZ')
         }
+        
+        # Add violations signature if provided
+        if violations is not None:
+            alert_data["last_signature"] = compute_violations_signature(violations)
+        
         redis_client.setex(alert_key, debounce_min * 60, json.dumps(alert_data))
         logger.info(f"Recorded alert: {verdict} at {alert_data['last_sent_utc']}")
     except Exception as e:
@@ -303,6 +405,80 @@ def write_export_status(status: Dict[str, Any], state_dir: Path):
         logger.warning(f"Failed to write export status: {e}")
         if tmp_file.exists():
             tmp_file.unlink()
+
+
+def check_redis_down_streak(
+    export_status: Dict[str, Any],
+    state_dir: Path
+) -> int:
+    """
+    Check if Redis export has been failing consecutively.
+    
+    Returns:
+        Current failure streak count
+    """
+    marker_path = state_dir / "last_export_status.json"
+    
+    # Check current cycle - any SKIP counts as failure
+    current_failed = (export_status.get("summary") == "SKIP" or 
+                      export_status.get("violations") == "SKIP")
+    
+    # Load previous status
+    prev_streak = 0
+    if marker_path.exists():
+        try:
+            prev_status = json.loads(marker_path.read_text(encoding="utf-8"))
+            prev_failed = (prev_status.get("summary") == "SKIP" or 
+                          prev_status.get("violations") == "SKIP")
+            
+            # Continue streak if previous also failed
+            if prev_failed:
+                prev_streak = prev_status.get("redis_down_streak", 1)
+        except Exception as e:
+            logger.debug(f"Failed to load previous export status: {e}")
+    
+    # Calculate current streak
+    if current_failed:
+        current_streak = prev_streak + 1
+    else:
+        current_streak = 0
+    
+    # Store streak in current status for next cycle
+    export_status["redis_down_streak"] = current_streak
+    
+    return current_streak
+
+
+def send_redis_down_alert(
+    streak: int,
+    env: str,
+    exchange: str,
+    reason: str,
+    alert_channels: List[str],
+    dry_run: bool
+):
+    """Send WARN alert when Redis has been down for N cycles."""
+    text = f"[🟡 WARN] Redis export skipped {streak} cycles in a row\n"
+    text += f"env={env}, exchange={exchange}\n"
+    text += f"last_reason={reason}\n"
+    text += "\nAction: Check Redis connectivity"
+    
+    logger.warning(f"REDIS_DOWN_WARN streak={streak} env={env} exchange={exchange}")
+    
+    for channel in alert_channels:
+        if channel == "telegram":
+            bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+            chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+            if bot_token and chat_id:
+                send_telegram_message(bot_token, chat_id, text, dry_run)
+            else:
+                logger.warning("Telegram config missing (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)")
+        elif channel == "slack":
+            webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
+            if webhook_url:
+                send_slack_webhook(webhook_url, text, dry_run)
+            else:
+                logger.warning("Slack config missing (SLACK_WEBHOOK_URL)")
 
 
 def run_analyzer(
@@ -515,14 +691,17 @@ def send_alerts(
     """
     verdict = summary.get("overall", {}).get("verdict", "OK")
     
-    # Check if should send (min severity + debounce)
+    # Check if should send (min severity + debounce + violations signature)
     if not should_send_alert(
         verdict,
         alert_min_severity,
         redis_client,
         alert_key,
         alert_debounce_min,
-        dry_run
+        dry_run,
+        env,
+        exchange,
+        violations
     ):
         return False
     
@@ -544,8 +723,8 @@ def send_alerts(
             else:
                 logger.warning("Slack config missing (SLACK_WEBHOOK_URL)")
     
-    # Record that alert was sent
-    record_alert_sent(verdict, redis_client, alert_key, alert_debounce_min, dry_run)
+    # Record that alert was sent (with violations signature)
+    record_alert_sent(verdict, redis_client, alert_key, alert_debounce_min, dry_run, violations)
     return True
 
 
@@ -661,7 +840,21 @@ def run_single_cycle(args) -> Dict[str, Any]:
         f"violations={export_status['violations']} reason={export_status['reason']}"
     )
     
-    # Write export status marker
+    # Check Redis down streak and send WARN if needed
+    streak = check_redis_down_streak(export_status, state_dir)
+    redis_down_max = getattr(args, 'redis_down_max', 3)
+    
+    if streak >= redis_down_max and args.alert:
+        send_redis_down_alert(
+            streak,
+            args.env,
+            args.exchange,
+            export_status.get('reason', 'unknown'),
+            args.alert,
+            args.dry_run
+        )
+    
+    # Write export status marker (with streak)
     write_export_status(export_status, state_dir)
     
     # Step 4: Send alerts with debounce
@@ -729,6 +922,7 @@ def main():
     parser.add_argument("--alert-debounce-min", type=int, default=180, help="Alert debounce window in minutes (default: 180, 0=disabled)")
     parser.add_argument("--alert-key", default="soak:alerts:debounce", help="Redis key for alert debounce state")
     parser.add_argument("--heartbeat-key", default="", help="Redis key for runner heartbeat (empty=disabled)")
+    parser.add_argument("--redis-down-max", type=int, default=3, help="Max Redis down cycles before WARN alert (default: 3)")
     parser.add_argument("--dry-run", action="store_true", help="Dry run (no Redis/alerts)")
     
     args = parser.parse_args()

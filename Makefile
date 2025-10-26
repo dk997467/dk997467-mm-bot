@@ -221,7 +221,59 @@ soak-alert-selftest:
 	  --heartbeat-key "$${ENV:-dev}:$${EXCHANGE:-bybit}:soak:runner:selftest_heartbeat" \
 	  --verbose || echo "[WARN] Self-test completed with warnings"
 
-.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry soak-alert-selftest
+soak-qol-smoke:
+	@echo "=== QoL Smoke Test (Debounce & Signature) ==="
+	@echo "Step 1: Generate fake CRIT (variant 1)"
+	python -m tools.soak.generate_fake_summary --crit --out reports/analysis --variant 1
+	@echo ""
+	@echo "Step 2: First run (should alert)"
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "reports/analysis/FAKE_*.json" \
+	  --min-windows 1 --max-iterations 1 \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 600 --stream --stream-maxlen 1000 \
+	  --alert telegram --alert slack \
+	  --alert-policy "$${ALERT_POLICY:-dev=WARN,prod=CRIT}" \
+	  --alert-debounce-min 180 \
+	  --redis-down-max 3 \
+	  --heartbeat-key "$${ENV:-dev}:$${EXCHANGE:-bybit}:soak:runner:heartbeat" \
+	  --verbose
+	@echo ""
+	@echo "Step 3: Second run (should DEBOUNCE - same violations)"
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "reports/analysis/FAKE_*.json" \
+	  --min-windows 1 --max-iterations 1 \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 600 --stream --stream-maxlen 1000 \
+	  --alert telegram --alert slack \
+	  --alert-policy "$${ALERT_POLICY:-dev=WARN,prod=CRIT}" \
+	  --alert-debounce-min 180 \
+	  --redis-down-max 3 \
+	  --heartbeat-key "$${ENV:-dev}:$${EXCHANGE:-bybit}:soak:runner:heartbeat" \
+	  --verbose
+
+soak-qol-smoke-new-viol:
+	@echo "=== QoL Smoke Test (New Violations Signature) ==="
+	@echo "Step 1: Generate different CRIT (variant 2 - new signature)"
+	python -m tools.soak.generate_fake_summary --crit --out reports/analysis --variant 2
+	@echo ""
+	@echo "Step 2: Run again (should BYPASS debounce - signature_changed=true)"
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "reports/analysis/FAKE_*.json" \
+	  --min-windows 1 --max-iterations 1 \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 600 --stream --stream-maxlen 1000 \
+	  --alert telegram --alert slack \
+	  --alert-policy "$${ALERT_POLICY:-dev=WARN,prod=CRIT}" \
+	  --alert-debounce-min 180 \
+	  --redis-down-max 3 \
+	  --heartbeat-key "$${ENV:-dev}:$${EXCHANGE:-bybit}:soak:runner:heartbeat" \
+	  --verbose
+
+.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry soak-alert-selftest soak-qol-smoke soak-qol-smoke-new-viol
 
 shadow-run:
 	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --source mock

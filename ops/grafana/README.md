@@ -6,6 +6,7 @@
 
 Мониторинг Continuous Soak Runner:
 - **Heartbeat Age**: Время с последнего heartbeat (минуты)
+- **Debounce Remaining (min)**: Минуты до конца debounce окна (Prometheus Gauge)
 - **Alert Debounce Status**: Логи debounce событий (ALERT_DEBOUNCED, ALERT_BYPASS_DEBOUNCE)
 - **Export Status**: Redis export статусы (OK/SKIP)
 - **Continuous Metrics**: Cycle metrics (verdict, windows, duration)
@@ -246,10 +247,54 @@ grep "EXPORT_STATUS" soak_runner.log
 
 ---
 
+## 🚨 Prometheus Alert Rules
+
+**Файл:** `ops/alerts/soak_runner_rules.yml`
+
+### Доступные алерты:
+
+**1. SoakRunnerHeartbeatMissing** (severity: warning)
+- Триггер: Heartbeat не обновлялся >10 минут
+- Действие: Проверить process runner, логи, Redis connectivity
+
+**2. SoakRunnerDebounceStuck** (severity: warning)
+- Триггер: Debounce gauge не меняется 6+ часов (застрял)
+- Действие: Проверить логи runner, возможно перезапуск
+
+**3. SoakRunnerDebounceHigh** (severity: info)
+- Триггер: Debounce >120 минут (persistent CRIT)
+- Действие: Review recent CRIT alerts
+
+### Установка Alert Rules:
+
+**Prometheus (file-based):**
+```yaml
+# prometheus.yml
+rule_files:
+  - "ops/alerts/soak_runner_rules.yml"
+```
+
+**Prometheus Operator (CRD):**
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: soak-runner-rules
+spec:
+  groups: <paste from ops/alerts/soak_runner_rules.yml>
+```
+
+**Loki (alternative log-based):**
+- См. комментарии в конце `soak_runner_rules.yml`
+- Использовать для сред без Redis exporter
+
+---
+
 ## 📚 Дополнительные ресурсы
 
 - **Redis Exporter**: https://github.com/oliver006/redis_exporter
 - **Loki**: https://grafana.com/docs/loki/latest/
 - **Promtail**: https://grafana.com/docs/loki/latest/clients/promtail/
+- **Prometheus Alerting**: https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/
 
 **Questions?** See `SOAK_ANALYZER_GUIDE.md` for runner details.
