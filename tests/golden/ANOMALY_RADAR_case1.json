@@ -1,3 +1,1 @@
-{"anomalies":[{"bucket":"00:30","kind":"EDGE","mad":0.100000,"med":3.000000,"value":-1.000000},{"bucket":"01:00","kind":"TAKER","mad":0.100000,"med":12.200000,"value":30.000000}],"bucket_minutes":15,"runtime":{"utc":"1970-01-01T00:00:00Z","version":"0.1.0"}}
-
-
+﻿{"anomalies":[{"bucket":"00:30","kind":"EDGE","mad":0.100000,"med":3.000000,"value":-1.000000},{"bucket":"01:00","kind":"TAKER","mad":0.100000,"med":12.200000,"value":30.000000}],"bucket_minutes":15,"runtime":{"utc":"1970-01-01T00:00:00Z","version":"0.1.0"}}

@@ -19,6 +19,7 @@ def _write_jsonl_atomic(path: str, lines: list[str]) -> None:
         lines: List of JSON line strings (without newlines)
     """
     p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="ascii")
     tmp.replace(p)
