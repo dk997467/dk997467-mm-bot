@@ -1,83 +1,113 @@
+#!/usr/bin/env python3
+"""Edge CLI: Audit edge from trades and quotes."""
 import argparse
-import os
+import json
 import sys
-from typing import Any, Dict
+from pathlib import Path
 
-from tools.edge_audit import build_report, write_json_atomic
-
-
-def _write_text_atomic(path: str, content: str) -> None:
-    dirname = os.path.dirname(path)
-    if dirname:
-        os.makedirs(dirname, exist_ok=True)
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='ascii', newline='') as f:
-        f.write(content)
-        if not content.endswith('\n'):
-            f.write('\n')
-        f.flush()
-        os.fsync(f.fileno())
-    if os.path.exists(path):
-        os.replace(tmp, path)
-    else:
-        os.rename(tmp, path)
+from tools.edge_audit import _index_quotes, _agg_symbols
 
 
-def _render_md(rep: Dict[str, Any]) -> str:
-    lines = []
-    lines.append('EDGE REPORT\n')
-    lines.append('\n')
-    lines.append('| symbol | gross_bps | fees_eff_bps | adverse_bps | slippage_bps | inventory_bps | net_bps | fills | turnover_usd |\n')
-    lines.append('|--------|-----------|--------------|-------------|---------------|----------------|---------|-------|---------------|\n')
-    for sym in sorted(rep.get('symbols', {}).keys()):
-        s = rep['symbols'][sym]
-        lines.append('| ' + sym + ' | ' + '%.6f' % s['gross_bps'] + ' | ' + '%.6f' % s['fees_eff_bps'] + ' | ' + '%.6f' % s['adverse_bps'] + ' | ' + '%.6f' % s['slippage_bps'] + ' | ' + '%.6f' % s['inventory_bps'] + ' | ' + '%.6f' % s['net_bps'] + ' | ' + str(int(s['fills'])) + ' | ' + '%.6f' % s['turnover_usd'] + ' |\n')
-    t = rep.get('total', {})
-    lines.append('| TOTAL | ' + '%.6f' % t.get('gross_bps', 0.0) + ' | ' + '%.6f' % t.get('fees_eff_bps', 0.0) + ' | ' + '%.6f' % t.get('adverse_bps', 0.0) + ' | ' + '%.6f' % t.get('slippage_bps', 0.0) + ' | ' + '%.6f' % t.get('inventory_bps', 0.0) + ' | ' + '%.6f' % t.get('net_bps', 0.0) + ' | ' + str(int(t.get('fills', 0.0))) + ' | ' + '%.6f' % t.get('turnover_usd', 0.0) + ' |\n')
-    return ''.join(lines)
-
-
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--trades', required=True)
-    ap.add_argument('--quotes', required=True)
-    ap.add_argument('--out', required=True)
-    args = ap.parse_args(argv)
-
-    rep = build_report(args.trades, args.quotes)
-    # Prefer deterministic artifact writer with CRLF+3
-    try:
-        from src.common.jsonio import dump_json_artifact  # type: ignore
-        dump_json_artifact(args.out, rep)
-    except Exception:
-        write_json_atomic(args.out, rep)
-        # Manual CRLF+3 normalization
-        try:
-            txt = open(args.out, 'r', encoding='ascii').read()
-            txt = txt.replace('\r\n', '\n').replace('\r', '\n')
-            txt = txt.rstrip('\n') + '\r\n\r\n\r\n'
-            open(args.out, 'wb').write(txt.encode('ascii'))
-        except Exception:
-            pass
-    md_path = os.path.splitext(args.out)[0] + '.md'
-    md = _render_md(rep)
-    _write_text_atomic(md_path, md)
-    # Manual CRLF+3 normalization for MD
-    try:
-        txt = open(md_path, 'r', encoding='ascii').read()
-        txt = txt.replace('\r\n', '\n').replace('\r', '\n')
-        txt = txt.rstrip('\n') + '\r\n\r\n\r\n'
-        open(md_path, 'wb').write(txt.encode('ascii'))
-    except Exception:
-        pass
-
-    size = os.path.getsize(args.out)
-    print('wrote', args.out, 'size', size)
-    print('wrote', md_path, 'size', os.path.getsize(md_path))
+def main(argv=None):
+    p = argparse.ArgumentParser()
+    p.add_argument("--trades", required=True)
+    p.add_argument("--quotes", required=True)
+    p.add_argument("--out", required=True)
+    args = p.parse_args(argv)
+    
+    # Load trades
+    trades = []
+    with open(args.trades, 'r', encoding='utf-8') as f:
+        for line in f:
+            if line.strip():
+                trades.append(json.loads(line))
+    
+    # Load quotes
+    quotes = []
+    with open(args.quotes, 'r', encoding='utf-8') as f:
+        for line in f:
+            if line.strip():
+                quotes.append(json.loads(line))
+    
+    # Index quotes
+    qidx = _index_quotes(quotes)
+    
+    # Aggregate by symbol
+    symbols_data = _agg_symbols(trades, qidx)
+    
+    # Build report (match golden format: runtime, symbols, total)
+    from datetime import datetime, timezone
+    
+    report = {
+        "runtime": {
+            "utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "version": "0.1.0"
+        },
+        "symbols": symbols_data,
+        "total": _calc_totals(symbols_data)
+    }
+    
+    # Write output
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    with open(args.out, 'w', encoding='utf-8') as f:
+        json.dump(report, f, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        f.write('\n')
+    
     return 0
 
 
-if __name__ == '__main__':
-    raise SystemExit(main())
+def _calc_totals(symbols_data):
+    """Calculate totals across all symbols (must match golden format exactly)."""
+    if not symbols_data:
+        return {
+            "adverse_bps": 0.0,
+            "fees_eff_bps": 0.0,
+            "fills": 0.0,
+            "gross_bps": 0.0,
+            "inventory_bps": 0.0,
+            "net_bps": 0.0,
+            "slippage_bps": 0.0,
+            "turnover_usd": 0.0
+        }
+    
+    # Average across symbols weighted by turnover
+    total_turnover = sum(d.get("turnover_usd", 0.0) for d in symbols_data.values())
+    
+    if total_turnover == 0:
+        return {
+            "adverse_bps": 0.0,
+            "fees_eff_bps": 0.0,
+            "fills": 0.0,
+            "gross_bps": 0.0,
+            "inventory_bps": 0.0,
+            "net_bps": 0.0,
+            "slippage_bps": 0.0,
+            "turnover_usd": 0.0
+        }
+    
+    totals = {}
+    for key in ["gross_bps", "fees_eff_bps", "adverse_bps", "slippage_bps", "inventory_bps", "net_bps"]:
+        weighted_sum = sum(
+            d.get(key, 0.0) * d.get("turnover_usd", 0.0)
+            for d in symbols_data.values()
+        )
+        totals[key] = weighted_sum / total_turnover if total_turnover > 0 else 0.0
+    
+    totals["fills"] = sum(d.get("fills", 0.0) for d in symbols_data.values())
+    totals["turnover_usd"] = total_turnover
+    
+    # Match golden format order
+    return {
+        "adverse_bps": totals.get("adverse_bps", 0.0),
+        "fees_eff_bps": totals.get("fees_eff_bps", 0.0),
+        "fills": totals.get("fills", 0.0),
+        "gross_bps": totals.get("gross_bps", 0.0),
+        "inventory_bps": totals.get("inventory_bps", 0.0),
+        "net_bps": totals.get("net_bps", 0.0),
+        "slippage_bps": totals.get("slippage_bps", 0.0),
+        "turnover_usd": totals.get("turnover_usd", 0.0)
+    }
 
 
+if __name__ == "__main__":
+    sys.exit(main())

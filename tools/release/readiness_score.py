@@ -101,7 +101,53 @@ def _section_scores(reports: List[Dict[str, Any]]) -> Tuple[Dict[str, float], fl
 
 
 if __name__ == "__main__":
-    # Smoke test
+    import argparse
+    import json
+    import sys
+    
+    parser = argparse.ArgumentParser(description="Release Readiness Score")
+    parser.add_argument("--json", action="store_true", default=True, help="Output as JSON (default)")
+    parser.add_argument("--smoke", action="store_true", help="Run smoke test")
+    args = parser.parse_args()
+    
+    if args.smoke:
+        # Smoke test mode (outputs to stderr to avoid polluting stdout)
+        test_reports = [
+            {
+                "edge_net_bps": 2.8,
+                "order_age_p95_ms": 320.0,
+                "taker_share_pct": 12.0,
+                "reg_guard": {"reason": "NONE"},
+                "drift": {"reason": "NONE"},
+                "chaos_result": "OK",
+                "bug_bash": "OK"
+            },
+            {
+                "edge_net_bps": 2.7,
+                "order_age_p95_ms": 330.0,
+                "taker_share_pct": 12.5,
+                "reg_guard": {"reason": "NONE"},
+                "drift": {"reason": "NONE"},
+                "chaos_result": "OK",
+                "bug_bash": "OK"
+            }
+        ]
+        
+        sections, total = _section_scores(test_reports)
+        
+        sys.stderr.write("Section Scores:\n")
+        for section, score in sections.items():
+            sys.stderr.write(f"  {section}: {score:.1f}\n")
+        
+        sys.stderr.write(f"\nTotal Score: {total:.1f}\n")
+        
+        assert 70.0 <= total <= 100.0, f"Total score {total} outside expected range"
+        assert set(sections.keys()) == {"edge", "latency", "taker", "guards", "chaos", "tests"}
+        
+        sys.stderr.write("\n[OK] Smoke test passed\n")
+        sys.exit(0)
+    
+    # Default mode: JSON output
     test_reports = [
         {
             "edge_net_bps": 2.8,
@@ -111,27 +157,17 @@ if __name__ == "__main__":
             "drift": {"reason": "NONE"},
             "chaos_result": "OK",
             "bug_bash": "OK"
-        },
-        {
-            "edge_net_bps": 2.7,
-            "order_age_p95_ms": 330.0,
-            "taker_share_pct": 12.5,
-            "reg_guard": {"reason": "NONE"},
-            "drift": {"reason": "NONE"},
-            "chaos_result": "OK",
-            "bug_bash": "OK"
         }
     ]
     
     sections, total = _section_scores(test_reports)
     
-    print("Section Scores:")
-    for section, score in sections.items():
-        print(f"  {section}: {score:.1f}")
+    result = {
+        "sections": sections,
+        "total": total,
+        "status": "OK"
+    }
     
-    print(f"\nTotal Score: {total:.1f}")
-    
-    assert 70.0 <= total <= 100.0, f"Total score {total} outside expected range"
-    assert set(sections.keys()) == {"edge", "latency", "taker", "guards", "chaos", "tests"}
-    
-    print("\n[OK] Smoke test passed")
+    # Print ONLY JSON to stdout (no prefixes, no [OK] markers)
+    print(json.dumps(result, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
+    sys.exit(0)

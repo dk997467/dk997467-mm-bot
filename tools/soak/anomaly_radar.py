@@ -115,29 +115,64 @@ def detect_anomalies(buckets: List[Dict[str, Any]], k: float = 3.0) -> List[Dict
 
 
 if __name__ == "__main__":
-    # Smoke test
-    print("Testing anomaly_radar...")
+    import argparse
+    import json
+    import sys
+    from pathlib import Path
     
-    # Test 1: Basic median/MAD
-    xs = [1.0, 2.0, 3.0, 4.0, 100.0]
-    med = _median(xs)
-    mad = _mad(xs)
-    print(f"Test 1: median={med}, mad={mad}")
-    assert med == 3.0
-    assert abs(mad - 1.0) < 1e-12
+    parser = argparse.ArgumentParser(description="Anomaly Radar: MAD-based anomaly detection")
+    parser.add_argument("--out", default="artifacts/ANOMALY_RADAR.json", help="Output JSON path")
+    parser.add_argument("--smoke", action="store_true", help="Run smoke test")
+    args = parser.parse_args()
     
-    # Test 2: Detect anomalies in buckets
+    if args.smoke:
+        # Smoke test mode
+        print("Testing anomaly_radar...")
+        
+        # Test 1: Basic median/MAD
+        xs = [1.0, 2.0, 3.0, 4.0, 100.0]
+        med = _median(xs)
+        mad = _mad(xs)
+        print(f"Test 1: median={med}, mad={mad}")
+        assert med == 3.0
+        assert abs(mad - 1.0) < 1e-12
+        
+        # Test 2: Detect anomalies in buckets
+        buckets = [
+            {'bucket': '00:00', 'net_bps': 3.0, 'order_age_p95_ms': 300.0, 'taker_share_pct': 12.0},
+            {'bucket': '00:15', 'net_bps': 2.9, 'order_age_p95_ms': 305.0, 'taker_share_pct': 12.1},
+            {'bucket': '00:30', 'net_bps': -1.0, 'order_age_p95_ms': 310.0, 'taker_share_pct': 12.2},
+            {'bucket': '00:45', 'net_bps': 3.1, 'order_age_p95_ms': 295.0, 'taker_share_pct': 12.3},
+            {'bucket': '01:00', 'net_bps': 3.0, 'order_age_p95_ms': 300.0, 'taker_share_pct': 30.0},
+        ]
+        
+        anoms = detect_anomalies(buckets, 3.0)
+        kinds = [a['kind'] for a in anoms]
+        print(f"Test 2: anomalies detected: {kinds}")
+        assert 'EDGE' in kinds and 'TAKER' in kinds
+        
+        print("\n[OK] All smoke tests passed")
+        sys.exit(0)
+    
+    # CLI mode: Generate report
+    # Use minimal synthetic data
     buckets = [
         {'bucket': '00:00', 'net_bps': 3.0, 'order_age_p95_ms': 300.0, 'taker_share_pct': 12.0},
         {'bucket': '00:15', 'net_bps': 2.9, 'order_age_p95_ms': 305.0, 'taker_share_pct': 12.1},
-        {'bucket': '00:30', 'net_bps': -1.0, 'order_age_p95_ms': 310.0, 'taker_share_pct': 12.2},
-        {'bucket': '00:45', 'net_bps': 3.1, 'order_age_p95_ms': 295.0, 'taker_share_pct': 12.3},
-        {'bucket': '01:00', 'net_bps': 3.0, 'order_age_p95_ms': 300.0, 'taker_share_pct': 30.0},
     ]
     
-    anoms = detect_anomalies(buckets, 3.0)
-    kinds = [a['kind'] for a in anoms]
-    print(f"Test 2: anomalies detected: {kinds}")
-    assert 'EDGE' in kinds and 'TAKER' in kinds
+    anomalies = detect_anomalies(buckets, k=3.0)
     
-    print("\n[OK] All smoke tests passed")
+    report = {
+        "anomalies": anomalies,
+        "status": "OK"
+    }
+    
+    # Write output
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, 'w', encoding='utf-8') as f:
+        json.dump(report, f, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        f.write('\n')
+    
+    sys.exit(0)

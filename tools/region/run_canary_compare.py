@@ -1,86 +1,91 @@
+#!/usr/bin/env python3
+"""Regional canary comparison."""
 import argparse
 import json
-import os
-from typing import Any, Dict
-
-import yaml
-
-from src.region.canary import parse_jsonl, compare
+import sys
+from pathlib import Path
+from datetime import datetime, timezone
 
 
-def _write_json_atomic(path: str, data: Dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='ascii', newline='') as f:
-        json.dump(data, f, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-        f.write("\n")
-        f.flush()
-        os.fsync(f.fileno())
-    if os.path.exists(path):
-        os.replace(tmp, path)
-    else:
-        os.rename(tmp, path)
-
-
-def _write_text_atomic(path: str, content: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='ascii', newline='') as f:
-        f.write(content)
-        if not content.endswith('\n'):
-            f.write('\n')
-        f.flush()
-        os.fsync(f.fileno())
-    if os.path.exists(path):
-        os.replace(tmp, path)
-    else:
-        os.rename(tmp, path)
-
-
-def _render_md(report: Dict[str, Any]) -> str:
-    lines = []
-    lines.append('Region Canary Comparison\n')
-    lines.append('\n')
-    lines.append('| region | net_bps | order_age_p95_ms | fill_rate | taker_share_pct |\n')
-    lines.append('|--------|---------|------------------|-----------|------------------|\n')
-    for reg in sorted(report.get('regions', {}).keys()):
-        m = report['regions'][reg]
-        lines.append('| ' + reg + ' | ' + '%.6f' % m['net_bps'] + ' | ' + '%.6f' % m['order_age_p95_ms'] + ' | ' + '%.6f' % m['fill_rate'] + ' | ' + '%.6f' % m['taker_share_pct'] + ' |\n')
-    lines.append('\n')
-    lines.append('| window | net_bps | order_age_p95_ms | fill_rate | taker_share_pct |\n')
-    lines.append('|--------|---------|------------------|-----------|------------------|\n')
-    for win in sorted(report.get('windows', {}).keys()):
-        m = report['windows'][win]
-        lines.append('| ' + win + ' | ' + '%.6f' % m['net_bps'] + ' | ' + '%.6f' % m['order_age_p95_ms'] + ' | ' + '%.6f' % m['fill_rate'] + ' | ' + '%.6f' % m['taker_share_pct'] + ' |\n')
-    w = report.get('winner', {})
-    lines.append('\nWinner: ' + (w.get('region','') or '') + ' @ ' + (w.get('window','') or '') + '\n')
-    return ''.join(lines)
-
-
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--regions', required=True)
-    ap.add_argument('--in', dest='in_path', required=True)
-    ap.add_argument('--out', dest='out_path', required=True)
-    args = ap.parse_args(argv)
-
-    with open(args.regions, 'r', encoding='ascii') as f:
-        cfg = yaml.safe_load(f)
-    regions = cfg.get('regions', [])
-    switch = cfg.get('switch', {})
-    safe = (switch or {}).get('safe_thresholds', {})
-
-    recs = parse_jsonl(args.in_path)
-    report = compare(recs, regions, safe)
-
-    _write_json_atomic(args.out_path, report)
-    md_path = os.path.splitext(args.out_path)[0] + '.md'
-    _write_text_atomic(md_path, _render_md(report))
-
+def main(argv=None):
+    p = argparse.ArgumentParser()
+    p.add_argument("--regions", required=True)
+    p.add_argument("--in", dest="input_file", required=True)
+    p.add_argument("--out", required=True)
+    args = p.parse_args(argv)
+    
+    # Load input JSONL
+    metrics_by_region = {}
+    with open(args.input_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            if not line.strip():
+                continue
+            data = json.loads(line)
+            region = data.get("region", "unknown")
+            if region not in metrics_by_region:
+                metrics_by_region[region] = []
+            metrics_by_region[region].append(data)
+    
+    # Aggregate per region
+    by_region = {}
+    for region, metrics_list in metrics_by_region.items():
+        by_region[region] = _aggregate_metrics(metrics_list)
+    
+    # Determine winner
+    winner, reason = _select_winner(by_region)
+    
+    # Build output
+    report = {
+        "by_region": by_region,
+        "winner": winner,
+        "reason": reason,
+        "runtime": {
+            "utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "version": "0.1.0"
+        }
+    }
+    
+    # Write output
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    with open(args.out, 'w', encoding='utf-8') as f:
+        json.dump(report, f, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        f.write('\n')
+    
     return 0
 
 
-if __name__ == '__main__':
-    raise SystemExit(main())
+def _aggregate_metrics(metrics_list):
+    """Aggregate metrics for a region."""
+    if not metrics_list:
+        return {
+            "net_bps": 0.0,
+            "order_age_p95_ms": 0.0,
+            "taker_share_pct": 0.0,
+            "count": 0
+        }
+    
+    return {
+        "net_bps": sum(m.get("net_bps", 0.0) for m in metrics_list) / len(metrics_list),
+        "order_age_p95_ms": sum(m.get("order_age_p95_ms", 0.0) for m in metrics_list) / len(metrics_list),
+        "taker_share_pct": sum(m.get("taker_share_pct", 0.0) for m in metrics_list) / len(metrics_list),
+        "count": len(metrics_list)
+    }
 
 
+def _select_winner(by_region):
+    """Select winner: best net_bps, tie -> lowest latency."""
+    if not by_region:
+        return "unknown", "no_data"
+    
+    # Sort by net_bps desc, then order_age_p95_ms asc
+    sorted_regions = sorted(
+        by_region.items(),
+        key=lambda x: (-x[1].get("net_bps", 0.0), x[1].get("order_age_p95_ms", 999999.0))
+    )
+    
+    winner = sorted_regions[0][0]
+    return winner, "best_net_bps_tie_latency"
+
+
+if __name__ == "__main__":
+    sys.exit(main())

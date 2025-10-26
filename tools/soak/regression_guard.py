@@ -51,25 +51,35 @@ def check(today: Dict[str, Any], history: List[Dict[str, Any]], threshold: float
     baseline = {
         "edge_net_bps": _avg("edge_net_bps"),
         "order_age_p95_ms": _avg("order_age_p95_ms"),
-        "taker_share_pct": _avg("taker_share_pct")
+        "taker_share_pct": _avg("taker_share_pct"),
+        "fill_rate": _avg("fill_rate")
     }
     
     # Compare today to baseline
     today_edge = float(today.get("edge_net_bps", 0.0))
     today_lat = float(today.get("order_age_p95_ms", 0.0))
     today_taker = float(today.get("taker_share_pct", 0.0))
+    today_fill_rate = float(today.get("fill_rate", 0.0))
     
     base_edge = baseline["edge_net_bps"]
     base_lat = baseline["order_age_p95_ms"]
     base_taker = baseline["taker_share_pct"]
+    base_fill_rate = baseline["fill_rate"]
     
     details = {
         "today": {
             "edge_net_bps": today_edge,
             "order_age_p95_ms": today_lat,
-            "taker_share_pct": today_taker
+            "taker_share_pct": today_taker,
+            "fill_rate": today_fill_rate
         },
-        "baseline": baseline
+        "baseline": baseline,
+        "current": {
+            "edge_net_bps": today_edge,
+            "order_age_p95_ms": today_lat,
+            "taker_share_pct": today_taker,
+            "fill_rate": today_fill_rate
+        }
     }
     
     # Check for regressions (higher is better for edge, lower is better for latency/taker)

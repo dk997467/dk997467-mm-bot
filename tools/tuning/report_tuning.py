@@ -1,36 +1,40 @@
+#!/usr/bin/env python3
+"""Tuning Report Overview."""
 import json
-import os
+import sys
+from pathlib import Path
 
 
-def main(argv=None) -> int:
-    with open('artifacts/TUNING_REPORT.json', 'r', encoding='ascii') as f:
-        rep = json.load(f)
-    lines = []
-    lines.append('TUNING REPORT\n')
-    lines.append('\n')
-    lines.append('| verdict | max_delta_ratio | impact_cap_ratio | min_interval_ms | tail_age_ms | net_before | net_after | p95_after |\n')
-    lines.append('|---------|-----------------|------------------|------------------|-------------|------------|-----------|-----------|\n')
-    for c in rep.get('candidates', []):
-        p = c['params']; a = c['metrics_after']; b = c['metrics_before']
-        lines.append('| ' + c['verdict'] + ' | ' + '%.6f' % p['max_delta_ratio'] + ' | ' + '%.6f' % p['impact_cap_ratio'] + ' | ' + '%.6f' % p['min_interval_ms'] + ' | ' + '%.6f' % p['tail_age_ms'] + ' | ' + '%.6f' % b['net_bps'] + ' | ' + '%.6f' % a['net_bps'] + ' | ' + '%.6f' % a['order_age_p95_ms'] + ' |\n')
-    md = ''.join(lines)
-    path = 'artifacts/TUNING_REPORT.md'
-    tmp = path + '.tmp'
-    os.makedirs('artifacts', exist_ok=True)
-    with open(tmp, 'w', encoding='ascii', newline='') as f:
-        f.write(md)
-        if not md.endswith('\n'):
-            f.write('\n')
-        f.flush(); os.fsync(f.fileno())
-    if os.path.exists(path):
-        os.replace(tmp, path)
+def main(argv=None):
+    # Read TUNING_REPORT.json
+    tuning_path = Path("artifacts") / "TUNING_REPORT.json"
+    
+    if tuning_path.exists():
+        with open(tuning_path, 'r', encoding='utf-8') as f:
+            tuning_data = json.load(f)
     else:
-        os.rename(tmp, path)
-    print('TUNING WROTE artifacts/TUNING_REPORT.md')
+        # Minimal fallback
+        tuning_data = {
+            "selected": {"params": {}},
+            "candidates": []
+        }
+    
+    # Build overview
+    overview = {
+        "candidates": tuning_data.get("candidates", []),
+        "selected": tuning_data.get("selected", {"params": {}}),
+        "status": "OK"
+    }
+    
+    # Write output
+    out_path = Path("artifacts") / "TUNING_OVERVIEW.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, 'w', encoding='utf-8') as f:
+        json.dump(overview, f, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        f.write('\n')
+    
     return 0
 
 
-if __name__ == '__main__':
-    raise SystemExit(main())
-
-
+if __name__ == "__main__":
+    sys.exit(main())

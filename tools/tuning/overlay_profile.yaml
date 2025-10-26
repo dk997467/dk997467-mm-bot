@@ -1,12 +1,6 @@
-profiles:
-  overlay_tune:
-    allocator:
-      smoothing:
-        max_delta_ratio: 0.15
-    signals:
-      impact_cap_ratio: 0.1
-    latency_boost:
-      replace:
-        min_interval_ms: 60.0
-      tail_batch:
-        tail_age_ms: 600.0
+# Auto-generated tuning overlay
+profile:
+  impact_cap_ratio: 0.1
+  max_delta_ratio: 0.15
+  min_interval_ms: 60.0
+  tail_age_ms: 600.0

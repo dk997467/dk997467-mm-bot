@@ -79,11 +79,35 @@ def minimize(path_or_text: str) -> tuple[list[str], int]:
 
 
 if __name__ == "__main__":
-    # Simple smoke test
-    test_input = '{"type":"quote","symbol":"BTCUSDT"}\n{"type":"trade"}\n{"type":"guard","reason":"DRIFT"}\n'
-    lines, steps = minimize(test_input)
-    print(f"Input lines: {len(test_input.splitlines())}")
-    print(f"Output lines: {len(lines)}, steps removed: {steps}")
-    assert isinstance(lines, list), f"Expected list, got {type(lines)}"
-    assert len(lines) <= 3, f"Expected at most 3 lines, got {len(lines)}"
-    print("[OK] Smoke test passed")
+    import argparse
+    import sys
+    
+    parser = argparse.ArgumentParser(description="Repro Minimizer: Simplify input for debugging")
+    parser.add_argument("--in", dest="input_file", help="Input JSONL file")
+    parser.add_argument("--out", help="Output JSONL file")
+    parser.add_argument("--smoke", action="store_true", help="Run smoke test")
+    args = parser.parse_args()
+    
+    if args.smoke:
+        # Smoke test mode
+        test_input = '{"type":"quote","symbol":"BTCUSDT"}\n{"type":"trade"}\n{"type":"guard","reason":"DRIFT"}\n'
+        lines, steps = minimize(test_input)
+        print(f"Input lines: {len(test_input.splitlines())}")
+        print(f"Output lines: {len(lines)}, steps removed: {steps}")
+        assert isinstance(lines, list), f"Expected list, got {type(lines)}"
+        assert len(lines) <= 3, f"Expected at most 3 lines, got {len(lines)}"
+        print("[OK] Smoke test passed")
+        sys.exit(0)
+    
+    # CLI mode
+    if not args.input_file or not args.out:
+        print("Usage: python -m tools.debug.repro_minimizer --in <input.jsonl> --out <output.jsonl>")
+        sys.exit(1)
+    
+    # Minimize input
+    lines, steps = minimize(args.input_file)
+    
+    # Write output
+    _write_jsonl_atomic(args.out, lines)
+    
+    sys.exit(0)

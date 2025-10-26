@@ -179,7 +179,7 @@ def write_json_atomic(path: str, data: Dict[str, Any]) -> None:
     fd, tmp_path = tempfile.mkstemp(dir=path_obj.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, 'w', encoding='ascii') as f:
-            json.dump(data, f, sort_keys=True, indent=2, ensure_ascii=True)
+            json.dump(data, f, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
             f.write('\n')  # Trailing newline
         
         # Atomic rename

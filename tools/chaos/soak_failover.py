@@ -98,3 +98,26 @@ class FakeKVLock:
         """Context manager exit."""
         self.release()
         return False
+
+
+if __name__ == "__main__":
+    import sys
+    
+    # Check for --smoke flag
+    if "--smoke" in sys.argv:
+        # Run smoke test
+        lock = FakeKVLock(ttl_ms=1000)
+        
+        # Test acquire/renew/release cycle
+        acquired = lock.try_acquire("worker1", 0)
+        renewed = lock.renew("worker1", 500)
+        lock.release()
+        
+        # Output log to stdout (must end with \n)
+        log_msg = f"smoke_test: acquire={acquired} renew={renewed} elections={lock.leader_elections_total}\n"
+        sys.stdout.write(log_msg)
+        sys.exit(0)
+    
+    # Default behavior: print usage
+    print("Usage: python -m tools.chaos.soak_failover --smoke")
+    sys.exit(1)
