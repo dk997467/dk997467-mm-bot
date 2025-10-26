@@ -1,1 +1,1 @@
-timestamp,symbol,edge_bps,spread_bps
+symbol,gross_bps,fees_bps,adverse_bps,slippage_bps,inventory_bps,net_bps
