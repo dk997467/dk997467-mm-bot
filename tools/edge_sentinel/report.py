@@ -47,12 +47,36 @@ def main(argv=None):
         "advice": result.get("advice", [{"action": "HOLD"}])
     }
     
-    # Write output (note: filename is EDGE_SENTINEL.json, not EDGE_SENTINEL_REPORT.json)
+    # Write JSON output
     out_path = Path("artifacts") / "EDGE_SENTINEL.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, 'w', encoding='utf-8') as f:
+    with open(out_path, 'w', encoding='utf-8', newline='') as f:
         json.dump(report, f, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         f.write('\n')
+    
+    # Write MD output
+    md_path = Path("artifacts") / "EDGE_SENTINEL.md"
+    with open(md_path, 'w', encoding='utf-8', newline='') as f:
+        f.write("# Edge Sentinel Report\n\n")
+        f.write(f"**Summary:** {len(report.get('summary', {}).get('symbols', []))} symbols analyzed\n\n")
+        f.write(f"**Advice:** {report.get('advice', 'N/A')}\n\n")
+        
+        # Top symbols table
+        top_data = report.get('top', {})
+        if isinstance(top_data, dict):
+            top_list = top_data.get('top_symbols_by_net_drop', [])
+        else:
+            top_list = top_data if isinstance(top_data, list) else []
+        
+        if top_list:
+            f.write("## Top Symbols\n\n")
+            f.write("| Symbol | Score |\n")
+            f.write("|--------|-------|\n")
+            for item in top_list[:5]:
+                symbol = item.get('symbol', 'N/A')
+                score = item.get('score', 0.0)
+                f.write(f"| {symbol} | {score:.2f} |\n")
+            f.write("\n")
     
     return 0
 

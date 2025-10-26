@@ -39,6 +39,7 @@ def main(argv=None):
         f.write("# Tuning Report\n\n")
         f.write(f"- selected: {overview.get('selected', {}).get('params', {})}\n")
         f.write(f"- metrics: (see JSON for details)\n")
+        f.write("\n")  # Ensure trailing newline
     
     return 0
 
