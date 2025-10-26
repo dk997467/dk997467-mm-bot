@@ -80,7 +80,7 @@ def scenario_empty_nonoverlap(
     mape_threshold: float,
     median_delta_bps: float,
     report_dir: Path
-) -> Tuple[str, bool]:
+) -> Tuple[str, bool, Dict]:
     """
     Scenario 1: Non-overlapping symbols.
     
@@ -146,7 +146,17 @@ def scenario_empty_nonoverlap(
             result += f"- Fail count: {summary_json.get('meta', {}).get('fail_count', 0)}\n"
             result += f"- Warn count: {summary_json.get('meta', {}).get('warn_count', 0)}\n\n"
         
-        return result, passed
+        # Extract reasons from summary
+        reasons = summary_json.get('overall', {}).get('reasons', [])
+        
+        scenario_data = {
+            "expected": "WARN",
+            "actual": verdict,
+            "reasons": reasons,
+            "exit_code": exit_code
+        }
+        
+        return result, passed, scenario_data
 
 
 def scenario_maxage_filter(
@@ -155,7 +165,7 @@ def scenario_maxage_filter(
     mape_threshold: float,
     median_delta_bps: float,
     report_dir: Path
-) -> Tuple[str, bool]:
+) -> Tuple[str, bool, Dict]:
     """
     Scenario 2: Old windows filtered by max-age.
     
@@ -217,7 +227,17 @@ def scenario_maxage_filter(
         result += f"**Explanation:** Old windows (age > {max_age_min} min) should be filtered out. "
         result += f"This results in insufficient data, which correctly causes exit 1 or WARN.\n\n"
         
-        return result, passed
+        # Extract reasons from summary (if available)
+        reasons = summary_json.get('overall', {}).get('reasons', []) if summary_json else ["insufficient_windows"]
+        
+        scenario_data = {
+            "expected": "WARN",
+            "actual": verdict if verdict != 'UNKNOWN' else 'INSUFFICIENT_WINDOWS',
+            "reasons": reasons,
+            "exit_code": exit_code
+        }
+        
+        return result, passed, scenario_data
 
 
 def scenario_formatting_table(
@@ -226,7 +246,7 @@ def scenario_formatting_table(
     mape_threshold: float,
     median_delta_bps: float,
     report_dir: Path
-) -> Tuple[str, bool]:
+) -> Tuple[str, bool, Dict]:
     """
     Scenario 3: Many symbols for formatting check.
     
@@ -327,7 +347,17 @@ def scenario_formatting_table(
                 result += "\n".join(lines[:5])
                 result += "\n```\n\n"
         
-        return result, passed
+        # Check if table was truncated (for notes)
+        notes = "table_ok" if table_ok else "table_truncated"
+        
+        scenario_data = {
+            "expected": "OK",
+            "actual": "OK" if passed else "ATTENTION",
+            "notes": notes,
+            "exit_code": exit_code
+        }
+        
+        return result, passed, scenario_data
 
 
 def main() -> int:
@@ -365,8 +395,9 @@ def main() -> int:
     # Run scenarios
     results = []
     all_passed = True
+    scenarios_data = {}
     
-    result1, passed1 = scenario_empty_nonoverlap(
+    result1, passed1, data1 = scenario_empty_nonoverlap(
         args.min_windows,
         args.max_age_min,
         args.mape_threshold,
@@ -375,8 +406,9 @@ def main() -> int:
     )
     results.append(result1)
     all_passed = all_passed and passed1
+    scenarios_data["empty_nonoverlap"] = data1
     
-    result2, passed2 = scenario_maxage_filter(
+    result2, passed2, data2 = scenario_maxage_filter(
         args.min_windows,
         args.max_age_min,
         args.mape_threshold,
@@ -385,8 +417,9 @@ def main() -> int:
     )
     results.append(result2)
     all_passed = all_passed and passed2
+    scenarios_data["max_age"] = data2
     
-    result3, passed3 = scenario_formatting_table(
+    result3, passed3, data3 = scenario_formatting_table(
         args.min_windows,
         args.max_age_min,
         args.mape_threshold,
@@ -395,6 +428,7 @@ def main() -> int:
     )
     results.append(result3)
     all_passed = all_passed and passed3
+    scenarios_data["formatting"] = data3
     
     # Generate summary report
     report_lines = [
@@ -444,6 +478,17 @@ def main() -> int:
     report_path = args.report_dir / "ACCURACY_SANITY.md"
     report_path.write_text("\n".join(report_lines), encoding="utf-8")
     logger.info(f"Sanity report written to {report_path}")
+    
+    # Generate machine-readable summary
+    sanity_summary = {
+        "sanity_verdict": "PASS" if all_passed else "ATTENTION",
+        "scenarios": scenarios_data,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat() + "Z"
+    }
+    
+    summary_path = args.report_dir / "ACCURACY_SANITY_SUMMARY.json"
+    summary_path.write_text(json.dumps(sanity_summary, indent=2), encoding="utf-8")
+    logger.info(f"Sanity summary written to {summary_path}")
     
     logger.info("")
     logger.info("=" * 60)

@@ -273,7 +273,7 @@ soak-qol-smoke-new-viol:
 	  --heartbeat-key "$${ENV:-dev}:$${EXCHANGE:-bybit}:soak:runner:heartbeat" \
 	  --verbose
 
-.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry soak-alert-selftest soak-qol-smoke soak-qol-smoke-new-viol accuracy-compare accuracy-ci accuracy-sanity accuracy-sanity-strict
+.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry soak-alert-selftest soak-qol-smoke soak-qol-smoke-new-viol accuracy-compare accuracy-ci accuracy-sanity accuracy-sanity-strict accuracy-sanity-mini accuracy-report-compact
 
 shadow-run:
 	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --source mock
@@ -338,7 +338,7 @@ dryrun:
 dryrun-validate:
 	python -m tools.dryrun.run_dryrun --symbols BTCUSDT ETHUSDT --iterations 12 --duration 60
 
-.PHONY: accuracy-compare accuracy-ci accuracy-sanity accuracy-sanity-strict
+.PHONY: accuracy-compare accuracy-ci accuracy-sanity accuracy-sanity-strict accuracy-sanity-mini accuracy-report-compact
 
 accuracy-compare:
 	@echo "=== Accuracy Gate: Shadow ↔ Dry-Run Comparison ==="
@@ -415,6 +415,32 @@ accuracy-sanity-strict:
 	  --median-delta-bps 1.0 \
 	  --report-dir reports/analysis \
 	  --strict \
+	  --verbose
+
+accuracy-sanity-mini:
+	@echo "=== Accuracy Gate: Sanity Check (MINI - soft thresholds) ==="
+	MIN_WINDOWS=12 MAX_AGE_MIN=45 MAPE_THRESHOLD=0.20 MEDIAN_DELTA_BPS=2.0 \
+	python -m tools.accuracy.sanity_check \
+	  --shadow-glob "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+	  --dryrun-glob "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+	  --min-windows 12 \
+	  --max-age-min 45 \
+	  --mape-threshold 0.20 \
+	  --median-delta-bps 2.0 \
+	  --report-dir reports/analysis \
+	  --verbose
+
+accuracy-report-compact:
+	@echo "=== Accuracy Gate: Comparison (compact PR table) ==="
+	MAX_SYMBOLS_IN_PR=10 python -m tools.accuracy.compare_shadow_dryrun \
+	  --shadow "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+	  --dryrun "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+	  --symbols $${SYMBOLS:-BTCUSDT,ETHUSDT} \
+	  --min-windows $${MIN_WINDOWS:-24} \
+	  --max-age-min $${MAX_AGE_MIN:-90} \
+	  --mape-threshold $${MAPE_THRESHOLD:-0.15} \
+	  --median-delta-threshold-bps $${MEDIAN_DELTA_THRESHOLD_BPS:-1.5} \
+	  --out-dir reports/analysis \
 	  --verbose
 
 .PHONY: pre-freeze pre-freeze-alt pre-freeze-fast

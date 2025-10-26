@@ -14,7 +14,7 @@ import logging
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -23,17 +23,22 @@ logger = logging.getLogger(__name__)
 KPIS = ["edge_bps", "maker_taker_ratio", "p95_latency_ms", "risk_ratio"]
 
 
-def parse_iter_files(glob_pattern: str, max_age_min: Optional[int] = None) -> List[Dict]:
-    """Parse ITER_SUMMARY_*.json files from glob pattern."""
+def parse_iter_files(glob_pattern: str, max_age_min: Optional[int] = None) -> Tuple[List[Dict], int]:
+    """
+    Parse ITER_SUMMARY_*.json files from glob pattern.
+    
+    Returns: (iters, filtered_count)
+    """
     files = sorted(glob.glob(glob_pattern))
     if not files:
         logger.warning(f"No files matched pattern: {glob_pattern}")
-        return []
+        return [], 0
     
     logger.info(f"Found {len(files)} files for pattern: {glob_pattern}")
     
     now = datetime.now(timezone.utc)
     iters = []
+    filtered_count = 0
     
     for fpath in files:
         try:
@@ -49,6 +54,7 @@ def parse_iter_files(glob_pattern: str, max_age_min: Optional[int] = None) -> Li
                         age_min = (now - ts).total_seconds() / 60
                         if age_min > max_age_min:
                             logger.debug(f"Skipping {fpath}: too old ({age_min:.0f} min)")
+                            filtered_count += 1
                             continue
                     except (ValueError, AttributeError):
                         pass
@@ -57,17 +63,25 @@ def parse_iter_files(glob_pattern: str, max_age_min: Optional[int] = None) -> Li
         except Exception as e:
             logger.warning(f"Failed to parse {fpath}: {e}")
     
-    logger.info(f"Loaded {len(iters)} valid iterations (max_age_min={max_age_min})")
-    return iters
+    logger.info(f"Loaded {len(iters)} valid iterations (filtered: {filtered_count}, max_age_min={max_age_min})")
+    return iters, filtered_count
 
 
-def extract_kpi_by_symbol(iters: List[Dict], symbols: List[str]) -> Dict[str, Dict[str, List[float]]]:
+def extract_kpi_by_symbol(
+    iters: List[Dict],
+    symbols: List[str],
+    skip_kpi: Optional[Set[str]] = None
+) -> Dict[str, Dict[str, List[float]]]:
     """
     Extract KPI values by symbol across all iterations.
     
     Returns: {symbol: {kpi: [values]}}
     """
-    result = {sym: {kpi: [] for kpi in KPIS} for sym in symbols}
+    if skip_kpi is None:
+        skip_kpi = set()
+    
+    active_kpis = [kpi for kpi in KPIS if kpi not in skip_kpi]
+    result = {sym: {kpi: [] for kpi in active_kpis} for sym in symbols}
     
     for iteration in iters:
         for sym in symbols:
@@ -75,7 +89,7 @@ def extract_kpi_by_symbol(iters: List[Dict], symbols: List[str]) -> Dict[str, Di
             if not sym_data:
                 continue
             
-            for kpi in KPIS:
+            for kpi in active_kpis:
                 value = sym_data.get(kpi)
                 if value is not None and isinstance(value, (int, float)):
                     result[sym][kpi].append(float(value))
@@ -136,25 +150,49 @@ def compare_kpis(
     dryrun_data: Dict[str, Dict[str, List[float]]],
     mape_threshold: float,
     median_delta_threshold_bps: float
-) -> Tuple[Dict, str]:
+) -> Tuple[Dict, str, List[str]]:
     """
     Compare Shadow vs Dry-Run KPIs.
     
-    Returns: (results_dict, verdict: "PASS"/"WARN"/"FAIL")
+    Returns: (results_dict, verdict: "PASS"/"WARN"/"FAIL", overall_reasons: List[str])
     """
     results = {}
+    per_symbol_stats = {}
     has_fail = False
     has_warn = False
+    overall_reasons = []
     
     all_symbols = set(shadow_data.keys()) | set(dryrun_data.keys())
     
     for sym in sorted(all_symbols):
         sym_results = {}
+        sym_reasons = []
         shadow_sym = shadow_data.get(sym, {})
         dryrun_sym = dryrun_data.get(sym, {})
         
-        for kpi in KPIS:
-            shadow_vals = shadow_sym.get(kpi, [])
+        # Compute overlap windows per symbol (use first KPI as proxy)
+        shadow_windows = 0
+        dry_windows = 0
+        overlap_windows = 0
+        
+        if shadow_sym:
+            first_kpi = list(shadow_sym.keys())[0] if shadow_sym else None
+            if first_kpi:
+                shadow_windows = len(shadow_sym[first_kpi])
+        
+        if dryrun_sym:
+            first_kpi = list(dryrun_sym.keys())[0] if dryrun_sym else None
+            if first_kpi:
+                dry_windows = len(dryrun_sym[first_kpi])
+        
+        overlap_windows = min(shadow_windows, dry_windows) if (shadow_windows > 0 and dry_windows > 0) else 0
+        
+        if overlap_windows == 0:
+            sym_reasons.append("no_overlap")
+            if "no_overlap" not in overall_reasons:
+                overall_reasons.append("no_overlap")
+        
+        for kpi, shadow_vals in shadow_sym.items():
             dryrun_vals = dryrun_sym.get(kpi, [])
             
             mape = compute_mape(shadow_vals, dryrun_vals)
@@ -162,12 +200,11 @@ def compare_kpis(
             
             # Determine status
             kpi_status = "OK"
-            if mape is not None and mape > mape_threshold:
+            if mape is not None and mape > mape_threshold * 100:
                 kpi_status = "FAIL"
                 has_fail = True
             elif median_delta is not None and median_delta > median_delta_threshold_bps:
                 if kpi in ["edge_bps", "maker_taker_ratio"]:
-                    # For edge and maker_taker, delta is in bps or ratio
                     kpi_status = "WARN"
                     has_warn = True
             
@@ -180,6 +217,12 @@ def compare_kpis(
             }
         
         results[sym] = sym_results
+        per_symbol_stats[sym] = {
+            "overlap_windows": overlap_windows,
+            "shadow_windows": shadow_windows,
+            "dry_windows": dry_windows,
+            "reasons": sym_reasons
+        }
     
     # Overall verdict
     if has_fail:
@@ -189,7 +232,7 @@ def compare_kpis(
     else:
         verdict = "PASS"
     
-    return results, verdict
+    return results, verdict, overall_reasons, per_symbol_stats
 
 
 def generate_markdown_report(
@@ -197,6 +240,7 @@ def generate_markdown_report(
     verdict: str,
     mape_threshold: float,
     median_delta_threshold_bps: float,
+    per_symbol_stats: Dict,
     out_path: Path
 ) -> None:
     """Generate ACCURACY_REPORT.md."""
@@ -216,7 +260,17 @@ def generate_markdown_report(
     ]
     
     for sym, kpis in sorted(results.items()):
+        stats = per_symbol_stats.get(sym, {})
+        overlap = stats.get("overlap_windows", 0)
+        shadow_w = stats.get("shadow_windows", 0)
+        dry_w = stats.get("dry_windows", 0)
+        reasons = stats.get("reasons", [])
+        
         lines.append(f"### {sym}")
+        lines.append("")
+        lines.append(f"**Overlap:** {overlap}/{max(shadow_w, dry_w)} windows (Shadow: {shadow_w}, Dry-run: {dry_w})")
+        if reasons:
+            lines.append(f"**Reasons:** {', '.join(reasons)}")
         lines.append("")
         lines.append("| KPI | MAPE (%) | Median Δ | Shadow N | Dryrun N | Status |")
         lines.append("|-----|----------|----------|----------|----------|--------|")
@@ -249,6 +303,7 @@ def generate_markdown_report(
         "",
         "- **MAPE:** Mean Absolute Percentage Error - measures relative accuracy",
         "- **Median Δ:** Median absolute difference - measures absolute deviation",
+        "- **Overlap:** Number of matching windows between Shadow and Dry-run",
         "- **✅ OK:** All thresholds met",
         "- **🟡 WARN:** Soft threshold violated (informational)",
         "- **🔴 FAIL:** Critical threshold violated (blocks PR)",
@@ -265,6 +320,16 @@ def generate_json_summary(
     verdict: str,
     mape_threshold: float,
     median_delta_threshold_bps: float,
+    per_symbol_stats: Dict,
+    overall_reasons: List[str],
+    symbols: List[str],
+    min_windows: int,
+    max_age_min: int,
+    filtered_count_shadow: int,
+    filtered_count_dry: int,
+    only_symbols: Optional[List[str]],
+    skip_symbols: Optional[List[str]],
+    skip_kpi: Optional[Set[str]],
     out_path: Path
 ) -> None:
     """Generate ACCURACY_SUMMARY.json."""
@@ -276,6 +341,11 @@ def generate_json_summary(
             "median_delta_bps": median_delta_threshold_bps
         },
         "symbols": results,
+        "per_symbol": per_symbol_stats,
+        "overall": {
+            "verdict": verdict,
+            "reasons": overall_reasons
+        },
         "meta": {
             "symbols_count": len(results),
             "fail_count": sum(
@@ -287,9 +357,26 @@ def generate_json_summary(
                 1 for sym_kpis in results.values()
                 for kpi_data in sym_kpis.values()
                 if kpi_data["status"] == "WARN"
-            )
+            ),
+            "min_windows": min_windows,
+            "max_age_min": max_age_min,
+            "symbols": symbols,
+            "time_utc": datetime.now(timezone.utc).isoformat() + "Z",
+            "filtered_by_max_age": {
+                "shadow": filtered_count_shadow,
+                "dryrun": filtered_count_dry
+            },
+            "filters": {
+                "only_symbols": only_symbols if only_symbols else [],
+                "skip_symbols": skip_symbols if skip_symbols else [],
+                "skip_kpi": list(skip_kpi) if skip_kpi else []
+            }
         }
     }
+    
+    # Add filtered_by_max_age to overall reasons if any filtered
+    if (filtered_count_shadow > 0 or filtered_count_dry > 0) and "filtered_by_max_age" not in overall_reasons:
+        summary["overall"]["reasons"].append("filtered_by_max_age")
     
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -314,6 +401,18 @@ def main() -> int:
         "--symbols",
         default="BTCUSDT,ETHUSDT",
         help="Comma-separated symbols to compare (default: BTCUSDT,ETHUSDT)"
+    )
+    parser.add_argument(
+        "--only-symbols",
+        help="Only compare these symbols (comma-separated)"
+    )
+    parser.add_argument(
+        "--skip-symbols",
+        help="Skip these symbols (comma-separated)"
+    )
+    parser.add_argument(
+        "--skip-kpi",
+        help="Skip these KPIs (comma-separated)"
     )
     parser.add_argument(
         "--min-windows",
@@ -358,6 +457,25 @@ def main() -> int:
     
     # Parse symbols
     symbols = [s.strip() for s in args.symbols.split(",")]
+    
+    # Parse filters
+    only_symbols = None
+    if args.only_symbols:
+        only_symbols = [s.strip() for s in args.only_symbols.split(",")]
+        symbols = only_symbols
+        logger.info(f"Filter: only-symbols={', '.join(only_symbols)}")
+    
+    skip_symbols_list = None
+    if args.skip_symbols:
+        skip_symbols_list = [s.strip() for s in args.skip_symbols.split(",")]
+        symbols = [s for s in symbols if s not in skip_symbols_list]
+        logger.info(f"Filter: skip-symbols={', '.join(skip_symbols_list)}")
+    
+    skip_kpi = None
+    if args.skip_kpi:
+        skip_kpi = set(s.strip() for s in args.skip_kpi.split(","))
+        logger.info(f"Filter: skip-kpi={', '.join(skip_kpi)}")
+    
     logger.info(f"Symbols: {', '.join(symbols)}")
     logger.info(f"Min windows: {args.min_windows}")
     logger.info(f"Max age: {args.max_age_min} minutes")
@@ -367,10 +485,10 @@ def main() -> int:
     
     # Load data
     logger.info("Loading Shadow data...")
-    shadow_iters = parse_iter_files(args.shadow, args.max_age_min)
+    shadow_iters, filtered_count_shadow = parse_iter_files(args.shadow, args.max_age_min)
     
     logger.info("Loading Dry-Run data...")
-    dryrun_iters = parse_iter_files(args.dryrun, args.max_age_min)
+    dryrun_iters, filtered_count_dry = parse_iter_files(args.dryrun, args.max_age_min)
     
     if len(shadow_iters) < args.min_windows:
         logger.error(
@@ -386,12 +504,12 @@ def main() -> int:
     
     # Extract KPIs
     logger.info("Extracting KPIs by symbol...")
-    shadow_data = extract_kpi_by_symbol(shadow_iters, symbols)
-    dryrun_data = extract_kpi_by_symbol(dryrun_iters, symbols)
+    shadow_data = extract_kpi_by_symbol(shadow_iters, symbols, skip_kpi)
+    dryrun_data = extract_kpi_by_symbol(dryrun_iters, symbols, skip_kpi)
     
     # Compare
     logger.info("Computing MAPE and median delta...")
-    results, verdict = compare_kpis(
+    results, verdict, overall_reasons, per_symbol_stats = compare_kpis(
         shadow_data,
         dryrun_data,
         args.mape_threshold,
@@ -400,6 +518,8 @@ def main() -> int:
     
     logger.info("")
     logger.info(f"Verdict: {verdict}")
+    if overall_reasons:
+        logger.info(f"Reasons: {', '.join(overall_reasons)}")
     logger.info("")
     
     # Generate reports
@@ -407,10 +527,14 @@ def main() -> int:
     json_path = args.out_dir / "ACCURACY_SUMMARY.json"
     
     generate_markdown_report(
-        results, verdict, args.mape_threshold, args.median_delta_threshold_bps, md_path
+        results, verdict, args.mape_threshold, args.median_delta_threshold_bps, 
+        per_symbol_stats, md_path
     )
     generate_json_summary(
-        results, verdict, args.mape_threshold, args.median_delta_threshold_bps, json_path
+        results, verdict, args.mape_threshold, args.median_delta_threshold_bps,
+        per_symbol_stats, overall_reasons, symbols, args.min_windows, args.max_age_min,
+        filtered_count_shadow, filtered_count_dry,
+        only_symbols, skip_symbols_list, skip_kpi, json_path
     )
     
     logger.info("=" * 60)
@@ -428,4 +552,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

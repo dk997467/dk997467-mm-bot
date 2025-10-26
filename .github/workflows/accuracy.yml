@@ -40,6 +40,7 @@ jobs:
       BYBIT_API_KEY: "test_api_key_for_ci_only"
       BYBIT_API_SECRET: "test_api_secret_for_ci_only"
       STORAGE_PG_PASSWORD: "test_pg_password_for_ci_only"
+      MAX_SYMBOLS_IN_PR: "10"  # Truncate PR tables to top N symbols
     
     steps:
       - name: Checkout code
@@ -275,7 +276,20 @@ jobs:
               const verdict = verdictMatch ? verdictMatch[1].trim() : 'UNKNOWN';
               const badge = verdict.includes('PASS') ? '✅' : '⚠️';
               
+              // Extract TL;DR from sanity report
+              const scenario1 = sanityReport.match(/Scenario 1.*?Status:\*\*\s*(.*?)\n/s);
+              const scenario2 = sanityReport.match(/Scenario 2.*?Status:\*\*\s*(.*?)\n/s);
+              const scenario3 = sanityReport.match(/Scenario 3.*?Status:\*\*\s*(.*?)\n/s);
+              
+              const s1Status = scenario1 ? scenario1[1].trim().replace(/[✅❌]/g, '').trim() : 'UNKNOWN';
+              const s2Status = scenario2 ? scenario2[1].trim().replace(/[✅❌]/g, '').trim() : 'UNKNOWN';
+              const s3Status = scenario3 ? scenario3[1].trim().replace(/[✅❌]/g, '').trim() : 'UNKNOWN';
+              
+              const tldr = `Sanity: ${verdict} | Empty/Non-overlap=${s1Status} | Max-Age=${s2Status} | Formatting=${s3Status} (top-10 shown)`;
+              
               comment = `### ${badge} Accuracy Gate: Sanity Check
+              
+              **TL;DR:** ${tldr}
               
               **Mode:** Edge Cases + Formatting Validation
               
@@ -286,7 +300,7 @@ jobs:
               2. Max-Age filtering → Expected: Exit 1 or WARN (insufficient windows)
               3. Formatting (many symbols) → Expected: PASS (table renders OK)
               
-              **Full Report:** See artifacts for \`ACCURACY_SANITY.md\`
+              **Full Report:** See artifacts for \`ACCURACY_SANITY.md\` and \`ACCURACY_SANITY_SUMMARY.json\`
               
               **Artifacts:** [📦 Download](${artifactsPage})
               
@@ -306,18 +320,32 @@ jobs:
               const badge = verdict === 'PASS' ? '✅' : (verdict === 'WARN' ? '🟡' : '🔴');
               const thresholds = summary.thresholds || {};
               
-              // Build symbol table
+              // Build symbol table (with truncation)
+              const maxSymbols = parseInt(process.env.MAX_SYMBOLS_IN_PR || '10');
+              const allSymbols = Object.keys(summary.symbols || {}).sort();
+              const symbolsToShow = allSymbols.slice(0, maxSymbols);
+              const hiddenCount = Math.max(0, allSymbols.length - maxSymbols);
+              
               let table = `| Symbol | KPI | MAPE (%) | Median Δ | Status |\n|--------|-----|----------|----------|--------|\n`;
               
-              for (const [sym, kpis] of Object.entries(summary.symbols || {})) {
+              for (const sym of symbolsToShow) {
+                const kpis = summary.symbols[sym];
                 for (const [kpi, metrics] of Object.entries(kpis)) {
                   const mape = metrics.mape_pct ?? 'n/a';
                   const delta = metrics.median_delta ?? 'n/a';
                   const status = metrics.status || 'OK';
                   const statusBadge = status === 'OK' ? '✅' : (status === 'WARN' ? '🟡' : '🔴');
                   
-                  table += `| ${sym} | ${kpi} | ${mape} | ${delta} | ${statusBadge} ${status} |\n`;
+                  // Truncate values to prevent line wrap
+                  const mapeStr = typeof mape === 'number' ? mape.toFixed(2) : 'n/a';
+                  const deltaStr = typeof delta === 'number' ? delta.toFixed(4) : 'n/a';
+                  
+                  table += `| ${sym} | ${kpi} | ${mapeStr} | ${deltaStr} | ${statusBadge} ${status} |\n`;
                 }
+              }
+              
+              if (hiddenCount > 0) {
+                table += `| ... | ... | ... | ... | _...and ${hiddenCount} more_ |\n`;
               }
               
               comment = `### ${badge} Accuracy Gate: ${verdict}

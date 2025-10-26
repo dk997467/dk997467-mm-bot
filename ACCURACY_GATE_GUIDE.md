@@ -646,6 +646,216 @@ gh workflow run accuracy.yml -f sanity_mode=true
 
 ---
 
+## Polish & Compact Output
+
+### Reasons and Diagnostics
+
+**What are reasons?**
+
+Reasons are diagnostic codes that explain why a comparison might have failed or produced unexpected results.
+
+**Available reasons:**
+
+| Reason | Meaning | When appears |
+|--------|---------|-------------|
+| `no_overlap` | No overlapping data between Shadow and Dry-run | Symbol exists in one mode but not the other |
+| `filtered_by_max_age` | Some windows were filtered due to age | Data older than `max-age-min` was excluded |
+| `insufficient_windows` | Not enough windows for comparison | After filtering, window count < `min-windows` |
+
+**Where to find reasons:**
+
+1. **Overall reasons:** `ACCURACY_SUMMARY.json` → `overall.reasons[]`
+2. **Per-symbol reasons:** `ACCURACY_SUMMARY.json` → `per_symbol[SYMBOL].reasons[]`
+3. **Sanity reasons:** `ACCURACY_SANITY_SUMMARY.json` → `scenarios[SCENARIO].reasons[]`
+
+**Example:**
+
+```json
+{
+  "overall": {
+    "verdict": "WARN",
+    "reasons": ["no_overlap", "filtered_by_max_age"]
+  },
+  "per_symbol": {
+    "BTCUSDT": {
+      "overlap_windows": 0,
+      "shadow_windows": 24,
+      "dry_windows": 0,
+      "reasons": ["no_overlap"]
+    }
+  }
+}
+```
+
+### Overlap Windows
+
+**What is overlap_windows?**
+
+The number of matching windows between Shadow and Dry-Run for a given symbol.
+
+**Formula:**
+```
+overlap_windows = min(shadow_windows, dry_windows)
+```
+
+**Interpretation:**
+- **overlap = 0** → No data to compare (expect WARN)
+- **overlap < min_windows** → Insufficient data (comparison may fail)
+- **overlap ≥ min_windows** → Sufficient data for reliable comparison
+
+**Where to find:**
+- `ACCURACY_SUMMARY.json` → `per_symbol[SYMBOL].overlap_windows`
+- `ACCURACY_REPORT.md` → Per-symbol section (e.g., "Overlap: 24/24 windows")
+
+### Table Truncation (MAX_SYMBOLS_IN_PR)
+
+**Problem:** PR comments with many symbols (>10) can become unreadable and exceed GitHub's comment length limits.
+
+**Solution:** Truncate tables to top-N symbols.
+
+**Usage:**
+
+```bash
+# In CI (set via environment)
+MAX_SYMBOLS_IN_PR=10 make accuracy-compare
+
+# Or use the shortcut
+make accuracy-report-compact
+```
+
+**How it works:**
+1. Sort symbols alphabetically
+2. Show only first `MAX_SYMBOLS_IN_PR` symbols (default: 10)
+3. Add row: `| ... | ... | ... | ... | _...and X more_ |`
+
+**Example output:**
+
+| Symbol | KPI | MAPE (%) | Median Δ | Status |
+|--------|-----|----------|----------|--------|
+| ADAUSDT | edge_bps | 2.15 | 0.0012 | ✅ OK |
+| BTCUSDT | edge_bps | 1.85 | 0.0008 | ✅ OK |
+| ... | ... | ... | ... | _...and 8 more_ |
+
+### Symbol and KPI Filters
+
+**Purpose:** Focus comparison on specific symbols or exclude problematic KPIs.
+
+**Available filters:**
+
+| Filter | Purpose | Example |
+|--------|---------|---------|
+| `--only-symbols` | Compare only these symbols | `--only-symbols "BTCUSDT,ETHUSDT"` |
+| `--skip-symbols` | Exclude these symbols | `--skip-symbols "SOLUSDT,BNBUSDT"` |
+| `--skip-kpi` | Exclude specific KPIs | `--skip-kpi "maker_taker_ratio"` |
+
+**Examples:**
+
+**Focus on major pairs:**
+```bash
+python -m tools.accuracy.compare_shadow_dryrun \
+  --shadow "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+  --dryrun "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+  --only-symbols "BTCUSDT,ETHUSDT" \
+  --out-dir reports/analysis
+```
+
+**Skip volatile symbol:**
+```bash
+python -m tools.accuracy.compare_shadow_dryrun \
+  --shadow "..." \
+  --dryrun "..." \
+  --symbols "BTCUSDT,ETHUSDT,SOLUSDT" \
+  --skip-symbols "SOLUSDT" \
+  --out-dir reports/analysis
+```
+
+**Ignore flaky KPI:**
+```bash
+python -m tools.accuracy.compare_shadow_dryrun \
+  --shadow "..." \
+  --dryrun "..." \
+  --skip-kpi "p95_latency_ms" \
+  --out-dir reports/analysis
+```
+
+**Filters are reflected in meta:**
+
+```json
+{
+  "meta": {
+    "filters": {
+      "only_symbols": ["BTCUSDT", "ETHUSDT"],
+      "skip_symbols": [],
+      "skip_kpi": []
+    }
+  }
+}
+```
+
+### Machine-Readable Files
+
+**ACCURACY_SUMMARY.json** (Comparison results):
+- Path: `reports/analysis/ACCURACY_SUMMARY.json`
+- Contains: verdict, thresholds, per-symbol KPIs, per_symbol stats, overall reasons, meta
+- Use for: Automated parsing, CI gates, downstream analysis
+
+**ACCURACY_SANITY_SUMMARY.json** (Sanity check results):
+- Path: `reports/analysis/ACCURACY_SANITY_SUMMARY.json`
+- Contains: sanity_verdict, scenarios (with expected/actual/reasons)
+- Use for: Validating edge case handling, automated sanity checks
+
+**Example parsing:**
+
+```python
+import json
+
+# Load comparison summary
+with open("reports/analysis/ACCURACY_SUMMARY.json") as f:
+    summary = json.load(f)
+
+# Check verdict
+if summary["verdict"] == "FAIL":
+    print("❌ Accuracy Gate FAILED")
+    print(f"Reasons: {summary['overall']['reasons']}")
+    
+    # Check per-symbol details
+    for sym, stats in summary["per_symbol"].items():
+        if stats["overlap_windows"] == 0:
+            print(f"⚠️ {sym}: No overlap (reasons: {stats['reasons']})")
+```
+
+### Quick Commands
+
+**Mini sanity check (soft thresholds, fast):**
+```bash
+make accuracy-sanity-mini
+```
+
+**Compact PR table (top-10 symbols):**
+```bash
+make accuracy-report-compact
+```
+
+**Filter to specific symbols:**
+```bash
+python -m tools.accuracy.compare_shadow_dryrun \
+  --shadow "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+  --dryrun "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+  --only-symbols "BTCUSDT,ETHUSDT" \
+  --out-dir reports/analysis
+```
+
+**Skip problematic KPI:**
+```bash
+python -m tools.accuracy.compare_shadow_dryrun \
+  --shadow "..." \
+  --dryrun "..." \
+  --skip-kpi "p95_latency_ms" \
+  --out-dir reports/analysis
+```
+
+---
+
 ## Changelog
 
 ### v1.0.0 (2025-10-26)
