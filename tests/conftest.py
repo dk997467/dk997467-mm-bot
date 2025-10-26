@@ -11,6 +11,16 @@ IMPORTANT: Prometheus registry is auto-cleared before each test by conftest.py
 at project root. This prevents memory leaks from metric accumulation.
 """
 
+# --- BEGIN: Ensure repo root in sys.path ---
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+root_str = str(ROOT)
+if sys.path[:1] != [root_str]:
+    sys.path[:] = [root_str] + [p for p in sys.path if p != root_str]
+# --- END: Ensure repo root in sys.path ---
+
 import asyncio
 import pytest
 import time

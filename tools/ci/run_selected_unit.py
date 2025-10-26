@@ -20,10 +20,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Сменим рабочую директорию, чтобы pytest видел tests/ и tools/
 os.chdir(REPO_ROOT)
 
-# Гарантируем, что корень в sys.path и PYTHONPATH
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-os.environ["PYTHONPATH"] = str(REPO_ROOT)
+# ЖЁСТКО: корень всегда на позиции 0
+repo_str = str(REPO_ROOT)
+if sys.path[:1] != [repo_str]:
+    sys.path[:] = [repo_str] + [p for p in sys.path if p != repo_str]
+
+# Продублируем в окружение (для любых подпроцессов pytest)
+prev = os.environ.get("PYTHONPATH", "")
+os.environ["PYTHONPATH"] = repo_str if not prev else (repo_str + os.pathsep + prev)
 
 print("[unit-runner] cwd =", os.getcwd())
 print("[unit-runner] repo_root =", REPO_ROOT)
