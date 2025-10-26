@@ -5,17 +5,20 @@ Soak test configuration manager with profile loading and runtime overrides.
 Supports:
 - Multiple profile directories (profiles/, tools/soak/profiles/, tools/soak/presets/, tests/fixtures/soak_profiles/)
 - Profile aliases (steady_safe -> warmup_conservative_v1 -> maker_bias_uplift_v1)
-- Deep merge from: defaults -> profile -> ENV -> runtime_overrides
+- Deep merge with precedence: CLI > ENV > Profile > Defaults
 - Atomic JSON writes with trailing newline
 - Source tracking (_sources dict)
 
 Usage:
-    from tools.soak.config_manager import ConfigManager
+    from tools.soak.config_manager import ConfigManager, DEFAULT_OVERRIDES
     
     cm = ConfigManager()
-    profiles = cm.list_profiles()
-    cfg = cm.load(profile="steady_safe", verbose=True)
-    print(cfg["min_interval_ms"])
+    cfg = cm.load(
+        profile="steady_safe",
+        env_overrides='{"min_interval_ms": 999}',
+        cli_overrides={"tail_age_ms": 888},
+        verbose=True
+    )
 """
 from __future__ import annotations
 
@@ -24,6 +27,12 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
+
+
+__all__ = [
+    "ConfigManager",
+    "DEFAULT_OVERRIDES",
+]
 
 
 # Fallback synthetic profile if none found
@@ -39,6 +48,37 @@ SYNTHETIC_PROFILE = {
 PROFILE_ALIASES = {
     "steady_safe": ["steady_safe", "warmup_conservative_v1", "maker_bias_uplift_v1"],
 }
+
+
+def _load_default_overrides(repo_root: Path) -> dict:
+    """
+    Load default overrides from tools/soak/default_overrides.json.
+    
+    Falls back to minimal safe defaults if file not found.
+    
+    Args:
+        repo_root: Repository root path
+    
+    Returns:
+        Default configuration dict
+    """
+    default_path = repo_root / "tools" / "soak" / "default_overrides.json"
+    if default_path.exists():
+        try:
+            with open(default_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    
+    # Minimal safe defaults
+    return {
+        "base_spread_bps_delta": 0.14,
+        "impact_cap_ratio": 0.09,
+        "max_delta_ratio": 0.14,
+        "min_interval_ms": 70,
+        "replace_rate_per_min": 280,
+        "tail_age_ms": 620
+    }
 
 
 def _deep_merge(base: dict, updates: dict) -> dict:
@@ -57,7 +97,7 @@ def _deep_merge(base: dict, updates: dict) -> dict:
     """
     result = base.copy()
     
-    for key, value in updates.items():
+    for key, value in (updates or {}).items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
             # Recursive merge for nested dicts
             result[key] = _deep_merge(result[key], value)
@@ -68,82 +108,39 @@ def _deep_merge(base: dict, updates: dict) -> dict:
     return result
 
 
-def _coerce_env_value(v: str) -> Any:
+def _parse_env_overrides(value: str | dict | None) -> dict:
     """
-    Convert environment variable string to appropriate Python type.
+    Parse env_overrides parameter.
     
-    Handles:
-    - JSON strings (e.g. '["BTCUSDT","ETHUSDT"]')
-    - Numbers ("300" -> 300, "3.14" -> 3.14)
-    - Booleans ("true" -> True, "false" -> False)
-    - Comma-separated lists ("A,B,C" -> ["A", "B", "C"])
-    - Plain strings
+    Tests pass either:
+    - JSON string: '{"min_interval_ms": 999}'
+    - Dict: {"min_interval_ms": 999}
+    - None: {}
     
     Args:
-        v: String value from environment
+        value: String JSON or dict or None
     
     Returns:
-        Coerced value
+        Parsed dict (empty if None or parse error)
     """
-    if not isinstance(v, str):
-        return v
+    if value is None:
+        return {}
     
-    # Try JSON parse first (handles complex types)
+    if isinstance(value, dict):
+        return value
+    
+    if not isinstance(value, str):
+        return {}
+    
+    s = value.strip()
+    if not s:
+        return {}
+    
     try:
-        return json.loads(v)
-    except (json.JSONDecodeError, TypeError):
-        pass
-    
-    # Try boolean
-    if v.lower() in ("true", "yes", "1"):
-        return True
-    if v.lower() in ("false", "no", "0"):
-        return False
-    
-    # Try number
-    try:
-        if '.' in v:
-            return float(v)
-        return int(v)
-    except ValueError:
-        pass
-    
-    # Try comma-separated list
-    if ',' in v:
-        return [x.strip() for x in v.split(',') if x.strip()]
-    
-    # Keep as string
-    return v
-
-
-def _apply_env_overrides(base: dict, env: Mapping[str, str]) -> dict:
-    """
-    Apply SOAK_* environment variables to base config.
-    
-    Converts SOAK_SYMBOLS="BTCUSDT,ETHUSDT" -> {"symbols": ["BTCUSDT","ETHUSDT"]}
-    
-    Args:
-        base: Base configuration dict
-        env: Environment dict (e.g. os.environ)
-    
-    Returns:
-        Config with env overrides applied
-    """
-    result = base.copy()
-    
-    for key, value in env.items():
-        if not key.startswith("SOAK_"):
-            continue
-        
-        # Remove SOAK_ prefix and convert to lowercase
-        config_key = key[5:].lower()
-        
-        # Coerce value
-        coerced = _coerce_env_value(value)
-        
-        result[config_key] = coerced
-    
-    return result
+        parsed = json.loads(s)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
 
 
 def _json_dump_atomic(path: Path, data: dict) -> None:
@@ -176,6 +173,13 @@ def _json_dump_atomic(path: Path, data: dict) -> None:
         raise
 
 
+# Initialize repo root (auto-detect from this file)
+_REPO_ROOT = Path(__file__).resolve().parents[2]  # mm-bot/tools/soak/config_manager.py -> mm-bot/
+
+# Export DEFAULT_OVERRIDES at module level for tests
+DEFAULT_OVERRIDES: dict = _load_default_overrides(_REPO_ROOT)
+
+
 class ConfigManager:
     """
     Configuration manager for soak tests.
@@ -183,13 +187,17 @@ class ConfigManager:
     Loads configuration with precedence (low to high):
     1. Default overrides (tools/soak/default_overrides.json)
     2. Profile file (from profiles/, tools/soak/profiles/, tools/soak/presets/, tests/fixtures/soak_profiles/)
-    3. Environment variables (SOAK_*)
-    4. Runtime overrides (passed to load())
+    3. Environment overrides (env_overrides parameter as JSON string or dict)
+    4. CLI overrides (cli_overrides parameter as dict)
     
     Example:
         cm = ConfigManager()
-        profiles = cm.list_profiles()
-        cfg = cm.load(profile="steady_safe", verbose=True)
+        cfg = cm.load(
+            profile="steady_safe",
+            env_overrides='{"min_interval_ms": 999}',
+            cli_overrides={"tail_age_ms": 888},
+            verbose=True
+        )
     """
     
     def __init__(self, repo_root: str | Path | None = None):
@@ -200,19 +208,18 @@ class ConfigManager:
             repo_root: Repository root path (auto-detected if None)
         """
         if repo_root is None:
-            # Auto-detect repo root (walk up from this file until we find .git or pyproject.toml)
-            current = Path(__file__).resolve().parent
-            while current != current.parent:
-                if (current / ".git").exists() or (current / "pyproject.toml").exists():
-                    repo_root = current
-                    break
-                current = current.parent
+            # Use global _REPO_ROOT (auto-detected at module load)
+            repo_root = _REPO_ROOT
+        else:
+            # Validate provided repo_root
+            repo_root = Path(repo_root).resolve()
             
-            if repo_root is None:
-                # Fallback to parent of tools/
-                repo_root = Path(__file__).resolve().parents[2]
+            # If provided path doesn't look like a repo root, use global _REPO_ROOT
+            if not (repo_root / ".git").exists() and not (repo_root / "pyproject.toml").exists():
+                # Provided path is probably artifacts_dir or similar, use global
+                repo_root = _REPO_ROOT
         
-        self.repo_root = Path(repo_root)
+        self.repo_root = Path(repo_root).resolve()
         self._profile_dirs = [
             self.repo_root / "profiles",
             self.repo_root / "tools" / "soak" / "profiles",
@@ -266,55 +273,37 @@ class ConfigManager:
     def load(
         self,
         profile: str | None = None,
-        env: dict[str, str] | None = None,
-        runtime_overrides: dict | None = None,
-        cli_overrides: dict | None = None,  # Alias for runtime_overrides (for compatibility)
-        verbose: bool = False
+        env_overrides: str | dict | None = None,
+        cli_overrides: dict | None = None,
+        verbose: bool = False,
+        **kwargs  # Backward compatibility with old signatures
     ) -> dict:
         """
         Load configuration from all sources.
         
         Precedence (low to high):
-        1. Default overrides (tools/soak/default_overrides.json)
-        2. Profile file
-        3. Environment variables (SOAK_*)
-        4. Runtime/CLI overrides
+        1. Defaults (tools/soak/default_overrides.json)
+        2. Profile file (e.g. steady_safe.json)
+        3. ENV overrides (env_overrides parameter)
+        4. CLI overrides (cli_overrides parameter)
         
         Args:
             profile: Profile name (or None for defaults only)
-            env: Environment dict (defaults to os.environ)
-            runtime_overrides: Additional overrides to apply
-            cli_overrides: Alias for runtime_overrides (backward compat)
+            env_overrides: JSON string or dict with environment overrides
+            cli_overrides: Dict with CLI overrides (highest priority)
             verbose: If True, save runtime_overrides.json
+            **kwargs: For backward compatibility (ignored)
         
         Returns:
             Final merged configuration dict with _sources tracking
         """
-        if env is None:
-            env = os.environ
-        
-        # Merge cli_overrides into runtime_overrides if provided
-        if cli_overrides is not None:
-            if runtime_overrides is None:
-                runtime_overrides = cli_overrides
-            else:
-                runtime_overrides = _deep_merge(runtime_overrides, cli_overrides)
-        
         # Track sources for each key
         sources: dict[str, str] = {}
         
         # 1. Start with default overrides
-        config = {}
-        default_overrides_path = self.repo_root / "tools" / "soak" / "default_overrides.json"
-        if default_overrides_path.exists():
-            try:
-                with open(default_overrides_path, 'r', encoding='utf-8') as f:
-                    defaults = json.load(f)
-                    config = _deep_merge(config, defaults)
-                    for key in defaults.keys():
-                        sources[key] = "default_overrides"
-            except Exception:
-                pass
+        config = _load_default_overrides(self.repo_root).copy()
+        for key in config.keys():
+            sources[key] = "default"
         
         # 2. Load profile (with alias fallback)
         profile_loaded = False
@@ -344,18 +333,18 @@ class ConfigManager:
                 for key in SYNTHETIC_PROFILE.keys():
                     sources[key] = "synthetic"
         
-        # 3. Apply environment overrides
-        env_config = _apply_env_overrides({}, env)
+        # 3. Apply environment overrides (from env_overrides parameter)
+        env_config = _parse_env_overrides(env_overrides)
         if env_config:
             config = _deep_merge(config, env_config)
             for key in env_config.keys():
-                    sources[key] = "env"
+                sources[key] = "env"
         
-        # 4. Apply runtime/CLI overrides
-        if runtime_overrides:
-            config = _deep_merge(config, runtime_overrides)
-            for key in runtime_overrides.keys():
-                sources[key] = "cli" if cli_overrides else "runtime"
+        # 4. Apply CLI overrides (highest priority)
+        if cli_overrides:
+            config = _deep_merge(config, cli_overrides)
+            for key in cli_overrides.keys():
+                sources[key] = "cli"
         
         # Add source tracking to result
         config["_sources"] = sources
@@ -410,7 +399,7 @@ if __name__ == "__main__":
     print(f"Profile loaded: steady_safe")
     print(f"  min_interval_ms: {cfg.get('min_interval_ms')}")
     print(f"  tail_age_ms: {cfg.get('tail_age_ms')}")
-    print(f"  risk_limit: {cfg.get('risk_limit')}")
+    print(f"  impact_cap_ratio: {cfg.get('impact_cap_ratio')}")
     print()
     
     # Check runtime overrides file
