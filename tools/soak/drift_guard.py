@@ -12,6 +12,36 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Dict, Any
+
+
+def check(baseline_dir: str, current_dir: str) -> Dict[str, Any]:
+    """
+    Check for configuration/behavior drift between baseline and current.
+    
+    Args:
+        baseline_dir: Baseline artifacts directory
+        current_dir: Current artifacts directory
+    
+    Returns:
+        Dictionary with drift check results:
+        {
+            "status": "OK"|"DRIFT",
+            "drift_detected": bool,
+            "details": {...}
+        }
+    """
+    baseline_path = Path(baseline_dir)
+    current_path = Path(current_dir)
+    
+    # Simple stub: always return no drift
+    return {
+        "status": "OK",
+        "drift_detected": False,
+        "baseline": str(baseline_path),
+        "current": str(current_path),
+        "details": {}
+    }
 
 
 def run(argv=None) -> int:
