@@ -268,7 +268,7 @@ def main():
     
     if client is None:
         print("[WARN] Redis unavailable, skipping export (graceful fallback)")
-        return 0  # Soft failure
+        return 1  # Graceful skip - not critical but signal that export didn't happen
     
     # Export hash per symbol
     print(f"[INFO] Exporting violations hash (env={args.env}, exchange={args.exchange})")

@@ -944,6 +944,7 @@ Verdict=CRIT, но алёрты не приходят.
 
 ```
 [INFO] CONTINUOUS_METRICS verdict=CRIT windows=48 symbols=3 crit=2 warn=1 ok=0 duration_ms=1234
+[INFO] EXPORT_STATUS summary=OK violations=OK reason=
 ```
 
 **Формат:**
@@ -952,8 +953,160 @@ Verdict=CRIT, но алёрты не приходят.
 - `symbols`: Количество символов
 - `crit/warn/ok`: Counts по уровням
 - `duration_ms`: Время цикла (мс)
+- `EXPORT_STATUS`: summary/violations status (OK/SKIP), reason
 
 Эти метрики можно парсить (e.g., для Prometheus/Grafana).
+
+### Alert Policy (Fine-Tuned)
+
+#### Минимальная серьёзность (`--alert-min-severity`)
+
+Фильтр по уровню:
+- `--alert-min-severity OK`: алёрты для всех уровней (OK, WARN, CRIT)
+- `--alert-min-severity WARN`: только WARN и CRIT
+- `--alert-min-severity CRIT`: только CRIT (default)
+
+**Пример:**
+```bash
+--alert-min-severity WARN  # Алёрты при WARN или CRIT
+```
+
+#### Debounce Window (`--alert-debounce-min`)
+
+Предотвращает спам при повторяющихся уровнях:
+- **Default**: 180 минут (3 часа)
+- **Логика**: 
+  - Одинаковый уровень (CRIT→CRIT) → дебаунс применяется
+  - Усиление уровня (WARN→CRIT) → дебаунс игнорируется (отправка сразу)
+  - Ослабление (CRIT→WARN) → дебаунс применяется
+
+**Состояние хранится в Redis:**
+```json
+{
+  "last_level": "CRIT",
+  "last_sent_utc": "2025-10-26T12:00:00Z"
+}
+```
+
+**Отключение debounce:**
+```bash
+--alert-debounce-min 0
+```
+
+**Пример сценария:**
+1. 12:00 - CRIT → алёрт отправлен
+2. 12:30 - CRIT → алёрт пропущен (debounce < 180 min)
+3. 15:30 - CRIT → алёрт отправлен (debounce > 180 min)
+4. 16:00 - WARN→CRIT → алёрт отправлен сразу (усиление)
+
+#### Redis Key для Debounce
+
+**Default:** `soak:alerts:debounce`
+
+**С префиксом env/exchange:**
+```
+{env}:{exchange}:soak:alerts:debounce
+```
+
+**Пример:** `prod:bybit:soak:alerts:debounce`
+
+### Graceful Redis Degrade
+
+При недоступности Redis:
+- **НЕ падает цикл** - продолжает работу
+- **Логирование WARN**: `redis unavailable, skip export`
+- **Локальный маркер**: `artifacts/state/last_export_status.json`
+
+**Формат маркера:**
+```json
+{
+  "ts": "2025-10-26T12:34:56Z",
+  "summary": "SKIP",
+  "violations": "OK",
+  "reason": "redis_unavailable"
+}
+```
+
+**Интерпретация:**
+- `summary: OK` - экспорт summary выполнен
+- `violations: SKIP` - экспорт violations пропущен
+- `reason: redis_unavailable` - причина
+
+**Проверка статуса:**
+```bash
+cat artifacts/state/last_export_status.json
+```
+
+**Мониторинг:**
+```bash
+# Проверка последнего успешного экспорта
+jq '.ts,.reason' artifacts/state/last_export_status.json
+```
+
+### Runner Heartbeat
+
+Runner пишет heartbeat в Redis после каждого успешного цикла.
+
+**Параметры:**
+```bash
+--heartbeat-key "soak:runner:heartbeat"  # Base key (будет добавлен префикс env:exchange:)
+```
+
+**Полный ключ в Redis:**
+```
+{env}:{exchange}:soak:runner:heartbeat
+```
+
+**Пример:** `prod:bybit:soak:runner:heartbeat`
+
+**TTL:** `2 * interval_min * 60` (минимум 1 час)
+
+**Проверка heartbeat:**
+```bash
+# Redis CLI
+redis-cli GET prod:bybit:soak:runner:heartbeat
+
+# Output: "2025-10-26T12:34:56Z"
+```
+
+**Dashboard пример (PromQL):**
+```promql
+# Время с последнего heartbeat (секунды)
+time() - redis_heartbeat_timestamp{env="prod", exchange="bybit"}
+
+# Алерт: heartbeat отсутствует >10 минут
+(time() - redis_heartbeat_timestamp) > 600
+```
+
+**Grafana panel:**
+- **Query**: `redis_heartbeat_timestamp{env="$env", exchange="$exchange"}`
+- **Transform**: Time since (now - value)
+- **Threshold**: WARN > 5m, CRIT > 10m
+
+### Updated CLI Examples
+
+**Full production run with all features:**
+```bash
+python -m tools.soak.continuous_runner \
+  --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+  --min-windows 24 \
+  --interval-min 60 \
+  --max-iterations 0 \
+  --env prod --exchange bybit \
+  --redis-url rediss://user:pass@prod-redis:6379/0 \
+  --ttl 3600 \
+  --stream --stream-maxlen 10000 \
+  --alert telegram --alert slack \
+  --alert-min-severity CRIT \
+  --alert-debounce-min 180 \
+  --heartbeat-key "soak:runner:heartbeat" \
+  --verbose
+```
+
+**Quick dry-run test (with debounce simulation):**
+```bash
+make soak-alert-dry
+```
 
 ---
 

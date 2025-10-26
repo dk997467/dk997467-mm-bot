@@ -23,7 +23,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import logging
@@ -35,6 +35,18 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+# Conditional Redis import
+try:
+    import redis
+    from redis.exceptions import ConnectionError as RedisConnectionError, TimeoutError as RedisTimeoutError
+    REDIS_AVAILABLE = True
+except ImportError:
+    redis = None
+    RedisConnectionError = Exception
+    RedisTimeoutError = Exception
+    REDIS_AVAILABLE = False
+    logger.warning("Redis library not available, some features will be disabled")
 
 
 class FileLock:
@@ -108,6 +120,145 @@ def compute_file_hash(file_path: Path) -> str:
     return sha.hexdigest()
 
 
+def get_redis_client(redis_url: str) -> Optional[Any]:
+    """Get Redis client with graceful fallback."""
+    if not REDIS_AVAILABLE:
+        return None
+    
+    try:
+        client = redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=5)
+        client.ping()
+        return client
+    except Exception as e:
+        logger.warning(f"Redis unavailable: {e}")
+        return None
+
+
+def verdict_to_level(verdict: str) -> int:
+    """Map verdict to numeric level for comparison."""
+    levels = {"OK": 0, "WARN": 1, "CRIT": 2}
+    return levels.get(verdict.upper(), 0)
+
+
+def should_send_alert(
+    verdict: str,
+    min_severity: str,
+    redis_client: Optional[Any],
+    alert_key: str,
+    debounce_min: int,
+    dry_run: bool
+) -> bool:
+    """
+    Check if alert should be sent based on severity and debounce.
+    
+    Returns:
+        True if should send, False to skip
+    """
+    current_level = verdict_to_level(verdict)
+    min_level = verdict_to_level(min_severity)
+    
+    # Check minimum severity
+    if current_level < min_level:
+        logger.info(f"Alert skipped: {verdict} below min severity {min_severity}")
+        return False
+    
+    # Debounce disabled or Redis unavailable
+    if debounce_min <= 0 or not redis_client:
+        return True
+    
+    try:
+        # Check last alert state
+        last_alert_json = redis_client.get(alert_key)
+        if not last_alert_json:
+            # First alert
+            return True
+        
+        last_alert = json.loads(last_alert_json)
+        last_level = verdict_to_level(last_alert.get("last_level", "OK"))
+        last_sent_str = last_alert.get("last_sent_utc", "")
+        
+        if not last_sent_str:
+            return True
+        
+        last_sent = datetime.fromisoformat(last_sent_str.replace('Z', '+00:00'))
+        now = datetime.now(timezone.utc)
+        elapsed_min = (now - last_sent).total_seconds() / 60
+        
+        # Severity increased - bypass debounce
+        if current_level > last_level:
+            logger.info(f"Alert: severity increased ({last_alert.get('last_level')} -> {verdict})")
+            return True
+        
+        # Same or lower severity - check debounce
+        if elapsed_min < debounce_min:
+            logger.info(f"Alert skipped: debounce window ({elapsed_min:.0f}/{debounce_min} min)")
+            return False
+        
+        return True
+    except Exception as e:
+        logger.warning(f"Debounce check failed: {e}")
+        return True  # Fail open
+
+
+def record_alert_sent(
+    verdict: str,
+    redis_client: Optional[Any],
+    alert_key: str,
+    debounce_min: int,
+    dry_run: bool
+):
+    """Record that an alert was sent (for debounce)."""
+    if dry_run or not redis_client:
+        logger.info(f"[DRY-RUN] Would record alert: {verdict}")
+        return
+    
+    try:
+        now = datetime.now(timezone.utc)
+        alert_data = {
+            "last_level": verdict,
+            "last_sent_utc": now.strftime('%Y-%m-%dT%H:%M:%SZ')
+        }
+        redis_client.setex(alert_key, debounce_min * 60, json.dumps(alert_data))
+        logger.info(f"Recorded alert: {verdict} at {alert_data['last_sent_utc']}")
+    except Exception as e:
+        logger.warning(f"Failed to record alert: {e}")
+
+
+def write_heartbeat(
+    redis_client: Optional[Any],
+    heartbeat_key: str,
+    interval_min: int
+):
+    """Write heartbeat to Redis with TTL."""
+    if not redis_client:
+        logger.warning("Heartbeat skipped: Redis unavailable")
+        return
+    
+    try:
+        now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        ttl = max(interval_min * 2 * 60, 3600)  # At least 1 hour
+        redis_client.setex(heartbeat_key, ttl, now)
+        logger.info(f"Heartbeat written: {heartbeat_key} = {now} (TTL={ttl}s)")
+    except Exception as e:
+        logger.warning(f"Heartbeat write failed: {e}")
+
+
+def write_export_status(status: Dict[str, Any], state_dir: Path):
+    """Write export status marker (atomic)."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    status_file = state_dir / "last_export_status.json"
+    tmp_file = state_dir / f"last_export_status.json.tmp.{os.getpid()}"
+    
+    try:
+        tmp_file.write_text(json.dumps(status, indent=2))
+        tmp_file.replace(status_file)
+        logger.info(f"Export status written: {status}")
+    except Exception as e:
+        logger.warning(f"Failed to write export status: {e}")
+        if tmp_file.exists():
+            tmp_file.unlink()
+
+
 def run_analyzer(
     iter_glob: str,
     min_windows: int,
@@ -152,15 +303,19 @@ def export_summary_to_redis(
     ttl: int,
     dry_run: bool
 ) -> bool:
-    """Export SOAK_SUMMARY.json to Redis (placeholder for now)."""
+    """Export SOAK_SUMMARY.json to Redis with graceful fallback."""
     if dry_run:
         logger.info("[DRY-RUN] Would export summary to Redis")
         return True
     
     logger.info("Exporting summary to Redis...")
-    # TODO: Implement actual Redis export for summary
-    # For now, assume success
-    return True
+    
+    try:
+        from tools.soak.export_summary_to_redis import export_summary
+        return export_summary(summary_path, env, exchange, redis_url, ttl)
+    except Exception as e:
+        logger.warning(f"Summary export failed: {e}")
+        return False
 
 
 def export_violations_to_redis(
@@ -300,9 +455,31 @@ def send_alerts(
     env: str,
     exchange: str,
     alert_channels: List[str],
+    redis_client: Optional[Any],
+    alert_min_severity: str,
+    alert_debounce_min: int,
+    alert_key: str,
     dry_run: bool
-):
-    """Send alerts to configured channels."""
+) -> bool:
+    """
+    Send alerts to configured channels with debounce.
+    
+    Returns:
+        True if alert was sent, False if skipped
+    """
+    verdict = summary.get("overall", {}).get("verdict", "OK")
+    
+    # Check if should send (min severity + debounce)
+    if not should_send_alert(
+        verdict,
+        alert_min_severity,
+        redis_client,
+        alert_key,
+        alert_debounce_min,
+        dry_run
+    ):
+        return False
+    
     text = build_alert_text(summary, violations, env, exchange)
     
     for channel in alert_channels:
@@ -320,6 +497,10 @@ def send_alerts(
                 send_slack_webhook(webhook_url, text, dry_run)
             else:
                 logger.warning("Slack config missing (SLACK_WEBHOOK_URL)")
+    
+    # Record that alert was sent
+    record_alert_sent(verdict, redis_client, alert_key, alert_debounce_min, dry_run)
+    return True
 
 
 def run_single_cycle(args) -> Dict[str, Any]:
@@ -329,6 +510,10 @@ def run_single_cycle(args) -> Dict[str, Any]:
     out_dir = Path(args.out_dir)
     summary_path = out_dir / "SOAK_SUMMARY.json"
     violations_path = out_dir / "VIOLATIONS.json"
+    state_dir = Path("artifacts/state")
+    
+    # Get Redis client (for debounce + heartbeat)
+    redis_client = get_redis_client(args.redis_url) if not args.dry_run else None
     
     # Check if summary changed (idempotency)
     prev_hash = compute_file_hash(summary_path)
@@ -372,34 +557,72 @@ def run_single_cycle(args) -> Dict[str, Any]:
     warn_count = summary.get("overall", {}).get("warn_count", 0)
     ok_count = summary.get("overall", {}).get("ok_count", 0)
     
+    # Track export status
+    export_status = {
+        "ts": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        "summary": "SKIP",
+        "violations": "SKIP",
+        "reason": ""
+    }
+    
     # Step 2: Export summary to Redis
-    if not args.dry_run:
-        export_summary_to_redis(
-            summary_path,
-            args.env,
-            args.exchange,
-            args.redis_url,
-            args.ttl,
-            args.dry_run
-        )
+    summary_ok = export_summary_to_redis(
+        summary_path,
+        args.env,
+        args.exchange,
+        args.redis_url,
+        args.ttl,
+        args.dry_run
+    )
+    export_status["summary"] = "OK" if summary_ok else "SKIP"
+    if not summary_ok:
+        export_status["reason"] = "redis_unavailable"
     
     # Step 3: Export violations to Redis
-    if not args.dry_run:
-        export_violations_to_redis(
-            summary_path,
-            violations_path,
+    violations_ok = export_violations_to_redis(
+        summary_path,
+        violations_path,
+        args.env,
+        args.exchange,
+        args.redis_url,
+        args.ttl,
+        args.stream,
+        args.stream_maxlen,
+        args.dry_run
+    )
+    export_status["violations"] = "OK" if violations_ok else "SKIP"
+    if not violations_ok and not export_status["reason"]:
+        export_status["reason"] = "redis_unavailable"
+    
+    # Log export status
+    logger.info(
+        f"EXPORT_STATUS summary={export_status['summary']} "
+        f"violations={export_status['violations']} reason={export_status['reason']}"
+    )
+    
+    # Write export status marker
+    write_export_status(export_status, state_dir)
+    
+    # Step 4: Send alerts with debounce
+    if args.alert:
+        alert_key = f"{args.env}:{args.exchange}:{args.alert_key}"
+        send_alerts(
+            summary,
+            violations,
             args.env,
             args.exchange,
-            args.redis_url,
-            args.ttl,
-            args.stream,
-            args.stream_maxlen,
+            args.alert,
+            redis_client,
+            args.alert_min_severity,
+            args.alert_debounce_min,
+            alert_key,
             args.dry_run
         )
     
-    # Step 4: Send alerts if CRIT
-    if verdict == "CRIT" and args.alert:
-        send_alerts(summary, violations, args.env, args.exchange, args.alert, args.dry_run)
+    # Step 5: Write heartbeat
+    if hasattr(args, 'heartbeat_key') and args.heartbeat_key:
+        heartbeat_key = f"{args.env}:{args.exchange}:{args.heartbeat_key}"
+        write_heartbeat(redis_client, heartbeat_key, args.interval_min)
     
     duration_ms = (time.time() - start_time) * 1000
     
@@ -440,6 +663,10 @@ def main():
     
     parser.add_argument("--lock-file", default="/tmp/soak_continuous.lock", help="Lock file path")
     parser.add_argument("--alert", action="append", choices=["telegram", "slack"], help="Alert channels")
+    parser.add_argument("--alert-min-severity", default="CRIT", choices=["OK", "WARN", "CRIT"], help="Minimum severity for alerts (default: CRIT)")
+    parser.add_argument("--alert-debounce-min", type=int, default=180, help="Alert debounce window in minutes (default: 180, 0=disabled)")
+    parser.add_argument("--alert-key", default="soak:alerts:debounce", help="Redis key for alert debounce state")
+    parser.add_argument("--heartbeat-key", default="", help="Redis key for runner heartbeat (empty=disabled)")
     parser.add_argument("--dry-run", action="store_true", help="Dry run (no Redis/alerts)")
     
     args = parser.parse_args()

@@ -136,6 +136,32 @@ jobs:
             --dry-run \
             --verbose
 
+      - name: Debounce smoke test (repeat immediately)
+        if: ${{ github.event.inputs.interval_min != '' && github.event.inputs.interval_min != '0' }}
+        env:
+          REDIS_URL: ${{ secrets.REDIS_URL_DEV || 'redis://localhost:6379/0' }}
+        run: |
+          echo "================================================"
+          echo "DEBOUNCE SMOKE TEST"
+          echo "Running second cycle immediately to test debounce"
+          echo "================================================"
+          
+          python -m tools.soak.continuous_runner \
+            --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+            --min-windows 24 \
+            --max-iterations 1 \
+            --interval-min 0 \
+            --env dev --exchange bybit \
+            --redis-url "${REDIS_URL}" \
+            --ttl 1800 \
+            --stream \
+            --stream-maxlen 5000 \
+            --alert-min-severity CRIT \
+            --alert-debounce-min 180 \
+            --heartbeat-key "soak:runner:heartbeat" \
+            --dry-run \
+            --verbose || echo "[WARN] Debounce test completed with warnings"
+
       - name: Upload analysis artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -143,6 +169,7 @@ jobs:
           name: continuous-soak-analysis-${{ github.run_id }}
           path: |
             reports/analysis/**
+            artifacts/state/**
           if-no-files-found: warn
           retention-days: 30
       

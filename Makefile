@@ -187,7 +187,19 @@ soak-continuous:
 	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
 	  --ttl 3600 --stream --stream-maxlen 5000 --verbose
 
-.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous
+soak-alert-dry:
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+	  --min-windows 24 --max-iterations 1 \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 1800 --stream --stream-maxlen 5000 \
+	  --alert telegram --alert slack \
+	  --alert-min-severity CRIT --alert-debounce-min 180 \
+	  --heartbeat-key "soak:runner:heartbeat" \
+	  --dry-run --verbose
+
+.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry
 
 shadow-run:
 	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --source mock
