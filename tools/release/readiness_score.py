@@ -170,14 +170,22 @@ if __name__ == "__main__":
     else:
         utc_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     
+    # Determine verdict based on score
+    if total >= 0.9:
+        verdict = "READY"
+    elif total >= 0.7:
+        verdict = "HOLD"
+    else:
+        verdict = "BLOCK"
+    
     result = {
         "runtime": {
             "utc": utc_iso,
             "version": "0.1.0"
         },
+        "score": total,
         "sections": sections,
-        "total": total,
-        "status": "OK"
+        "verdict": verdict
     }
     
     # Print ONLY JSON to stdout (no prefixes, no [OK] markers)
