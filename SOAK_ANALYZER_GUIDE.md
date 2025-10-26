@@ -687,6 +687,276 @@ METRICS_CONFIG = {
 
 ---
 
+## 🔄 Continuous Mode (Step 6)
+
+### Overview
+
+Continuous Mode автоматизирует полный цикл:
+1. **Анализ** → запуск `analyze_post_soak`
+2. **Export Summary** → выгрузка `SOAK_SUMMARY.json` в Redis
+3. **Export Violations** → выгрузка нарушений (hash + stream) в Redis
+4. **Alerts** → уведомления при CRIT/WARN
+
+### Диаграмма потока
+
+```
+┌──────────────────┐
+│ ITER_SUMMARY_*.  │
+│     json         │
+└────────┬─────────┘
+         │
+         ▼
+┌────────────────────────┐
+│ analyze_post_soak      │
+│ (trends, violations)   │
+└────────┬───────────────┘
+         │
+         ├──► POST_SOAK_ANALYSIS.md
+         ├──► RECOMMENDATIONS.md
+         ├──► VIOLATIONS.json
+         └──► SOAK_SUMMARY.json
+              │
+              ├──► Redis: summary hash
+              │    (env:exchange:soak:summary)
+              │
+              ├──► Redis: violations hash
+              │    (env:exchange:soak:violations:{symbol})
+              │
+              ├──► Redis: violations stream
+              │    (env:exchange:soak:violations:stream:{symbol})
+              │
+              └──► Alerts (Telegram/Slack)
+                   if verdict == CRIT
+```
+
+### Quick Start
+
+**Одиночный цикл (для отладки):**
+
+```bash
+make soak-once
+```
+
+**Непрерывный режим (production):**
+
+```bash
+make soak-continuous
+```
+
+**Кастомные параметры:**
+
+```bash
+python -m tools.soak.continuous_runner \
+  --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+  --min-windows 24 \
+  --interval-min 60 \
+  --max-iterations 0 \
+  --env prod --exchange bybit \
+  --redis-url rediss://prod-redis:6379/0 \
+  --ttl 3600 \
+  --stream --stream-maxlen 10000 \
+  --alert telegram --alert slack \
+  --verbose
+```
+
+### Параметры CLI
+
+| Параметр | Описание | Default |
+|----------|----------|---------|
+| `--iter-glob` | Glob pattern для ITER_SUMMARY файлов | (required) |
+| `--min-windows` | Минимальное кол-во окон для анализа | 24 |
+| `--interval-min` | Пауза между циклами (минуты) | 60 |
+| `--max-iterations` | Макс. итераций (0=бесконечно) | 0 |
+| `--exit-on-crit` | Выход при CRIT нарушениях | False |
+| `--env` | Окружение (dev/staging/prod) | dev |
+| `--exchange` | Биржа | bybit |
+| `--redis-url` | Redis connection URL | redis://localhost:6379/0 |
+| `--ttl` | TTL для Redis ключей (сек) | 3600 |
+| `--stream` | Экспорт stream нарушений | False |
+| `--stream-maxlen` | Лимит stream (retention) | 5000 |
+| `--lock-file` | Путь к lock файлу | /tmp/soak_continuous.lock |
+| `--alert` | Alert каналы (telegram, slack) | [] |
+| `--dry-run` | Dry-run (без Redis/alerts) | False |
+| `--verbose` | Verbose logging | False |
+
+### Секреты и ENV
+
+Создайте `.env` файл (или экспортируйте переменные):
+
+```bash
+# Redis
+REDIS_URL=rediss://prod-redis.example.com:6379/0
+
+# Environment
+ENV=prod
+EXCHANGE=bybit
+
+# Telegram (optional)
+TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
+TELEGRAM_CHAT_ID=-1001234567890
+
+# Slack (optional)
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXX
+```
+
+**Приоритет:** CLI > ENV > defaults
+
+### Файловый Lock
+
+- Lock файл создается с PID процесса
+- Защищает от параллельных запусков
+- Auto-cleanup для stale locks (>6h)
+- При падении: можно вручную удалить lock файл
+
+```bash
+# Проверка lock
+ls -la /tmp/soak_continuous.lock
+
+# Удаление вручную (если зависла)
+rm /tmp/soak_continuous.lock
+```
+
+### Идемпотентность
+
+Если `SOAK_SUMMARY.json` не изменился (одинаковый SHA256 hash), экспорт и алерты пропускаются:
+
+```
+[INFO] Summary unchanged, skip export
+```
+
+Это экономит ресурсы Redis и предотвращает дублирование алертов.
+
+### Алерты
+
+**Формат сообщения:**
+
+```
+[🔴 CRIT] Soak summary (env=prod, exch=bybit)
+windows=48 symbols=3 crit=2 warn=1
+
+Top violations:
+- BTCUSDT: edge_bps < 2.5 at window #47 (2.1)
+- ETHUSDT: risk_ratio >= 0.40 at window #45 (0.41)
+
+Артефакты: POST_SOAK_ANALYSIS.md, RECOMMENDATIONS.md
+```
+
+**Условия отправки:**
+
+- `verdict == "CRIT"` → отправка
+- `verdict == "WARN"` или `"OK"` → без алертов
+- `--dry-run` → печать текста, без отправки
+
+**Каналы:**
+
+- `--alert telegram`: Требует `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+- `--alert slack`: Требует `SLACK_WEBHOOK_URL`
+
+### CI Integration
+
+Workflow `.github/workflows/continuous-soak.yml` запускается:
+- **По расписанию**: каждый час (`0 * * * *`)
+- **Вручную**: `workflow_dispatch` с параметрами
+
+**Пример:**
+
+```yaml
+- name: Run Continuous Soak (single cycle for CI)
+  env:
+    REDIS_URL: ${{ secrets.REDIS_URL_DEV }}
+    TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  run: |
+    python -m tools.soak.continuous_runner \
+      --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+      --min-windows 24 \
+      --max-iterations 1 \
+      --env dev \
+      --redis-url "${{ secrets.REDIS_URL_DEV }}" \
+      --dry-run \
+      --verbose
+```
+
+### Troubleshooting Playbook
+
+#### 1. Lock файл застрял (stale)
+
+**Симптом:**
+```
+[ERROR] Failed to acquire lock, exiting
+```
+
+**Решение:**
+```bash
+# Проверить возраст lock
+ls -la /tmp/soak_continuous.lock
+
+# Если >6h и процесс не работает - удалить
+rm /tmp/soak_continuous.lock
+```
+
+#### 2. Redis недоступен
+
+**Симптом:**
+```
+[WARN] Could not connect to Redis at redis://...
+```
+
+**Решение:**
+- Проверить `REDIS_URL` в `.env`
+- Проверить firewall/сеть
+- Использовать `--dry-run` для локальной отладки
+
+#### 3. CRIT алёрты каждый час (alert fatigue)
+
+**Симптом:**
+Telegram/Slack спам при стабильном CRIT.
+
+**Решение:**
+- Идемпотентность должна предотвращать (проверить hash summary)
+- Добавить rate-limiting в alerting logic (TODO)
+- Временно: увеличить `--interval-min` до 120-180
+
+#### 4. Анализатор падает с exit 1
+
+**Симптом:**
+```
+[WARN] Analyzer returned 1
+```
+
+**Решение:**
+- Проверить `reports/analysis/` на наличие артефактов
+- Запустить `analyze_post_soak` вручную с `--verbose`
+- Проверить `--min-windows` (может быть недостаточно данных)
+
+#### 5. Нет алертов при CRIT
+
+**Симптом:**
+Verdict=CRIT, но алёрты не приходят.
+
+**Решение:**
+- Проверить ENV: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `SLACK_WEBHOOK_URL`
+- Убедиться что `--alert telegram` или `--alert slack` указан
+- Проверить `--dry-run` (если включен - алёрты только печатаются)
+
+### Metrics Output
+
+Каждый цикл логирует метрики:
+
+```
+[INFO] CONTINUOUS_METRICS verdict=CRIT windows=48 symbols=3 crit=2 warn=1 ok=0 duration_ms=1234
+```
+
+**Формат:**
+- `verdict`: OK, WARN, CRIT, UNCHANGED, FAIL
+- `windows`: Количество окон
+- `symbols`: Количество символов
+- `crit/warn/ok`: Counts по уровням
+- `duration_ms`: Время цикла (мс)
+
+Эти метрики можно парсить (e.g., для Prometheus/Grafana).
+
+---
+
 **Questions? Contact:** [dima@example.com](mailto:dima@example.com)
 
 **CI Status:** ![CI](https://github.com/user/mm-bot/workflows/CI/badge.svg)

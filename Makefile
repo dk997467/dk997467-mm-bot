@@ -171,7 +171,23 @@ soak-violations-redis:
 	  --violations reports/analysis/VIOLATIONS.json \
 	  --env dev --exchange bybit --redis-url redis://localhost:6379/0 --ttl 3600
 
-.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis
+soak-once:
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+	  --min-windows 24 --max-iterations 1 --interval-min 0 \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 3600 --stream --stream-maxlen 5000 --exit-on-crit --verbose
+
+soak-continuous:
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+	  --min-windows 24 --interval-min 60 --max-iterations 0 \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 3600 --stream --stream-maxlen 5000 --verbose
+
+.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous
 
 shadow-run:
 	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --source mock
