@@ -17,12 +17,11 @@ from typing import Dict, Optional, Set
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from tenacity import (
+from tools.common.retry_compat import (
     retry,
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
-    before_sleep_log,
 )
 
 from tools.live.exchange_client import (
@@ -190,7 +189,6 @@ class OrderRouter:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=0.1, min=0.1, max=2.0),
         retry=retry_if_exception_type((TimeoutError, ConnectionError)),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )
     def _place_with_retry(
@@ -290,7 +288,6 @@ class OrderRouter:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=0.1, min=0.1, max=2.0),
         retry=retry_if_exception_type((TimeoutError, ConnectionError)),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )
     def _cancel_with_retry(

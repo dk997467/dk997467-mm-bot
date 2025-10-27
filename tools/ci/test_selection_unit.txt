@@ -62,5 +62,6 @@ tests/unit/test_secrets_env_unit.py
 
 # P0.10: Testnet Soak & Canary (Recon, Fees, Kill-Switch, Symbol Filters)
 tests/unit/test_fees_unit.py
+tests/unit/test_fees_profiles_unit.py
 tests/unit/test_kill_switch_unit.py
 
