@@ -165,7 +165,9 @@ if __name__ == "__main__":
     # Add runtime (deterministic for tests)
     import os
     from datetime import datetime, timezone
-    if os.environ.get('MM_FREEZE_UTC') == '1':
+    if os.environ.get('CI_FAKE_UTC'):
+        utc_iso = os.environ.get('CI_FAKE_UTC')
+    elif os.environ.get('MM_FREEZE_UTC') == '1':
         utc_iso = "1970-01-01T00:00:00Z"
     else:
         utc_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
