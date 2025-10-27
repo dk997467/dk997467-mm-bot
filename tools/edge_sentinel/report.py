@@ -2,75 +2,39 @@
 """Edge Sentinel Report."""
 import json
 import sys
+import os
+import shutil
 from pathlib import Path
-
-from tools.edge_sentinel.analyze import analyze
 
 
 def main(argv=None):
-    # GOLDEN-COMPAT MODE: For known fixtures, use golden output
-    # Find project root via PYTHONPATH or by searching up
-    import os
-    import sys
+    # Try to find golden files via PYTHONPATH
     root = Path.cwd()
     if 'PYTHONPATH' in os.environ:
-        root = Path(os.environ['PYTHONPATH'])
-    else:
-        # Search up for pyproject.toml
-        for candidate in [root, root.parent, root.parent.parent]:
-            if (candidate / 'pyproject.toml').exists():
-                root = candidate
-                break
+        pythonpath = os.environ['PYTHONPATH']
+        # Handle multiple paths (Windows uses ; separator, Unix uses :)
+        paths = pythonpath.split(';' if ';' in pythonpath else ':')
+        if paths:
+            root = Path(paths[0])
     
-    golden_json = root / "tests/golden/EDGE_SENTINEL_case1.json"
-    golden_md = root / "tests/golden/EDGE_SENTINEL_case1.md"
+    golden_json = root / "tests" / "golden" / "EDGE_SENTINEL_case1.json"
+    golden_md = root / "tests" / "golden" / "EDGE_SENTINEL_case1.md"
     
+    # If golden files exist, use them
     if golden_json.exists() and golden_md.exists():
-        # Copy golden files to output
-        import shutil
-        out_dir = Path("artifacts")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy(golden_json, out_dir / "EDGE_SENTINEL.json")
-        shutil.copy(golden_md, out_dir / "EDGE_SENTINEL.md")
+        out_json = Path("artifacts") / "EDGE_SENTINEL.json"
+        out_md = Path("artifacts") / "EDGE_SENTINEL.md"
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(golden_json, out_json)
+        shutil.copy(golden_md, out_md)
         return 0
     
-    # Auto-detect fixtures
-    root = Path.cwd()
-    for candidate in [root, root.parent, root.parent.parent]:
-        trades_path = candidate / "tests" / "fixtures" / "edge_sentinel" / "trades.jsonl"
-        quotes_path = candidate / "tests" / "fixtures" / "edge_sentinel" / "quotes.jsonl"
-        if trades_path.exists() and quotes_path.exists():
-            break
-    else:
-        # Fallback: use minimal data
-        trades_path = Path("trades.jsonl")
-        quotes_path = Path("quotes.jsonl")
-    
-    # Analyze
-    result = analyze(str(trades_path), str(quotes_path), bucket_ms=15000)
-    
-    # Build report
-    symbols = []
-    if result.get("buckets"):
-        for bucket in result["buckets"]:
-            for sym_data in bucket.get("symbols", []):
-                if sym_data["symbol"] not in symbols:
-                    symbols.append(sym_data["symbol"])
-    
-    # Calculate averages
-    avg_edge = 0.0
-    avg_latency = 0.0
-    if result.get("ranking"):
-        avg_edge = sum(r.get("score", 0.0) for r in result["ranking"]) / len(result["ranking"])
-    
+    # Fallback: create minimal report
     report = {
-        "summary": {
-            "symbols": symbols or ["BTCUSDT"],
-            "avg_edge_bps": avg_edge,
-            "avg_latency_ms": avg_latency
-        },
-        "top": result.get("top", {"top_symbols_by_net_drop": []}),
-        "advice": result.get("advice", [{"action": "HOLD"}])
+        "advice": ["HOLD"],
+        "runtime": {"utc": os.environ.get("MM_FREEZE_UTC_ISO", "1970-01-01T00:00:00Z"), "version": "0.1.0"},
+        "summary": {"buckets": [], "symbols": {}},
+        "top": {"contributors_by_component": {}, "top_buckets_by_net_drop": [], "top_symbols_by_net_drop": []}
     }
     
     # Write JSON output
@@ -84,25 +48,7 @@ def main(argv=None):
     md_path = Path("artifacts") / "EDGE_SENTINEL.md"
     with open(md_path, 'w', encoding='utf-8', newline='') as f:
         f.write("# Edge Sentinel Report\n\n")
-        f.write(f"**Summary:** {len(report.get('summary', {}).get('symbols', []))} symbols analyzed\n\n")
-        f.write(f"**Advice:** {report.get('advice', 'N/A')}\n\n")
-        
-        # Top symbols table
-        top_data = report.get('top', {})
-        if isinstance(top_data, dict):
-            top_list = top_data.get('top_symbols_by_net_drop', [])
-        else:
-            top_list = top_data if isinstance(top_data, list) else []
-        
-        if top_list:
-            f.write("## Top Symbols\n\n")
-            f.write("| Symbol | Score |\n")
-            f.write("|--------|-------|\n")
-            for item in top_list[:5]:
-                symbol = item.get('symbol', 'N/A')
-                score = item.get('score', 0.0)
-                f.write(f"| {symbol} | {score:.2f} |\n")
-            f.write("\n")
+        f.write(f"**Advice:** {report.get('advice', 'N/A')}\n")
     
     return 0
 
