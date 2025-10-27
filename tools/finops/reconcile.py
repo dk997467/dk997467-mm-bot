@@ -205,40 +205,18 @@ def write_json_atomic(path: str, data: Dict[str, Any]) -> None:
         raise
 
 
-def render_reconcile_md(summary: Dict[str, Any]) -> str:
-    """
-    Render reconciliation summary as Markdown table.
-    
-    Args:
-        summary: Summary dictionary from reconcile() with by_symbol and totals
-    
-    Returns:
-        Markdown formatted string with trailing newline
-    """
-    lines = [
-        "Reconcile Report",
-        "",
-        "| symbol | pnl_delta | fees_bps_delta | turnover_delta_usd |",
-        "|--------|-----------|----------------|--------------------|"
-    ]
-    
-    # Sort symbols for determinism
-    by_symbol = summary.get("by_symbol", {})
-    for symbol in sorted(by_symbol.keys()):
-        delta_info = by_symbol[symbol]
-        pnl = delta_info.get('pnl_delta', 0.0)
-        fees = delta_info.get('fees_bps_delta', 0.0)
-        turn = delta_info.get('turnover_delta_usd', 0.0)
-        lines.append(f"| {symbol} | {pnl:.6f} | {fees:.6f} | {turn:.6f} |")
-    
-    # Totals row
-    totals = summary.get("totals", {})
-    pnl_total = totals.get('pnl_delta', 0.0)
-    fees_total = totals.get('fees_bps_delta', 0.0)
-    turn_total = totals.get('turnover_delta_usd', 0.0)
-    lines.append(f"| TOTAL | {pnl_total:.6f} | {fees_total:.6f} | {turn_total:.6f} |")
-    
-    return "\n".join(lines)
+def render_reconcile_md(report: Dict[str, Any]) -> str:
+    lines: list[str] = []
+    lines.append("Reconcile Report")
+    lines.append("")
+    lines.append("| symbol | pnl_delta | fees_bps_delta | turnover_delta_usd |")
+    lines.append("|--------|-----------|----------------|---------------------|")
+    for symbol, d in report.get("by_symbol", {}).items():
+        lines.append(f"| {symbol} | {d['pnl_delta']:.6f} | {d['fees_bps_delta']:.6f} | {d['turnover_delta_usd']:.6f} |")
+    totals = report.get("totals", {"pnl_delta": 0.0, "fees_bps_delta": 0.0, "turnover_delta_usd": 0.0})
+    lines.append(f"| TOTAL | {totals['pnl_delta']:.6f} | {totals['fees_bps_delta']:.6f} | {totals['turnover_delta_usd']:.6f} |")
+    # Тест требует завершающий перевод строки
+    return "\n".join(lines) + "\n"
 
 
 if __name__ == "__main__":
