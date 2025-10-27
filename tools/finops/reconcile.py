@@ -206,16 +206,35 @@ def write_json_atomic(path: str, data: Dict[str, Any]) -> None:
 
 
 def render_reconcile_md(report: Dict[str, Any]) -> str:
+    """Render a deterministic Markdown table for FinOps reconcile.
+
+    - Fixed header
+    - Symbols listed in sorted order (lexicographic)
+    - Exactly 6 decimals for all numeric fields
+    - Final newline at the end of the document
+    """
     lines: list[str] = []
     lines.append("Reconcile Report")
     lines.append("")
     lines.append("| symbol | pnl_delta | fees_bps_delta | turnover_delta_usd |")
-    lines.append("|--------|-----------|----------------|---------------------|")
-    for symbol, d in report.get("by_symbol", {}).items():
-        lines.append(f"| {symbol} | {d['pnl_delta']:.6f} | {d['fees_bps_delta']:.6f} | {d['turnover_delta_usd']:.6f} |")
-    totals = report.get("totals", {"pnl_delta": 0.0, "fees_bps_delta": 0.0, "turnover_delta_usd": 0.0})
-    lines.append(f"| TOTAL | {totals['pnl_delta']:.6f} | {totals['fees_bps_delta']:.6f} | {totals['turnover_delta_usd']:.6f} |")
-    # Тест требует завершающий перевод строки
+    lines.append("|--------|-----------|----------------|--------------------|")
+
+    by_symbol: Dict[str, Dict[str, float]] = report.get("by_symbol", {}) or {}
+    for symbol in sorted(by_symbol.keys()):
+        d = by_symbol[symbol]
+        lines.append(
+            f"| {symbol} | {d.get('pnl_delta', 0.0):.6f} | "
+            f"{d.get('fees_bps_delta', 0.0):.6f} | "
+            f"{d.get('turnover_delta_usd', 0.0):.6f} |"
+        )
+
+    totals = report.get("totals", {}) or {}
+    lines.append(
+        f"| TOTAL | {totals.get('pnl_delta', 0.0):.6f} | "
+        f"{totals.get('fees_bps_delta', 0.0):.6f} | "
+        f"{totals.get('turnover_delta_usd', 0.0):.6f} |"
+    )
+    # ВАЖНО: завершающий перевод строки нужен для e2e
     return "\n".join(lines) + "\n"
 
 
