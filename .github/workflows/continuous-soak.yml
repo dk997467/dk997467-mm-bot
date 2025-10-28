@@ -128,7 +128,7 @@ jobs:
           REDIS_URL: 'redis://localhost:6379/0'
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '' }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || '' }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL || '' }}
+          SLACK_WEBHOOK_URL: ''
         run: |
           python -m tools.soak.continuous_runner \
             --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \

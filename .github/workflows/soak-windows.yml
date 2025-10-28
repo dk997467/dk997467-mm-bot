@@ -870,7 +870,7 @@ jobs:
 
       - name: Build PR summary (short)
         id: pr-summary
-        if: ${{ env.SOAK_ITERATIONS != '' && github.event_name == 'pull_request' && github.event.pull_request.number }}
+        if: ${{ env.SOAK_ITERATIONS != '' && github.event_name == 'pull_request' }}
         shell: pwsh
         env:
           PYTHON_EXE: python
@@ -884,7 +884,7 @@ jobs:
           Get-Content pr_summary.md
 
       - name: Comment readiness summary to PR
-        if: ${{ env.SOAK_ITERATIONS != '' && github.event_name == 'pull_request' && github.event.pull_request.number }}
+        if: ${{ env.SOAK_ITERATIONS != '' && github.event_name == 'pull_request' }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
