@@ -12,6 +12,15 @@ import time
 from typing import Any, Callable
 
 
+class _SetEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles sets by converting them to sorted lists."""
+    
+    def default(self, o):
+        if isinstance(o, set):
+            return sorted(list(o))  # Convert set to sorted list for determinism
+        return super().default(o)
+
+
 class RedisKV:
     """
     Redis-compatible key-value store.
@@ -55,7 +64,7 @@ class RedisKV:
 
     def _serialize(self, value: Any) -> str:
         """Serialize value to JSON with deterministic formatting."""
-        return json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), cls=_SetEncoder) + "\n"
 
     def _deserialize(self, data: str) -> Any:
         """Deserialize JSON string to value."""
@@ -219,7 +228,8 @@ class RedisKV:
             return set()
         data = self._deserialize(self._kv[key])
         if isinstance(data, list):
-            return set(data)
+            # Each element is a serialized value, deserialize them
+            return {self._deserialize(item) for item in data}
         return set()
 
     def srem(self, key: str, value: Any) -> bool:

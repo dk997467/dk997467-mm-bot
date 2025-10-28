@@ -112,8 +112,11 @@ def retry(
             delay_s = delay_ms / 1000.0
             if deterministic_clock is None:
                 time.sleep(delay_s)
-            # Note: In tests with deterministic_clock, we don't actually sleep
-            # The test harness will advance the clock manually
+            else:
+                # If deterministic_clock has an 'advance' method (like FakeClock),
+                # advance it to simulate time passing
+                if hasattr(deterministic_clock, 'advance'):
+                    deterministic_clock.advance(delay_s)  # type: ignore[attr-defined]
     
     # All attempts failed, raise last exception
     if last_exception is not None:
@@ -197,6 +200,11 @@ def retry_with_log(
             delay_s = delay_ms / 1000.0
             if deterministic_clock is None:
                 time.sleep(delay_s)
+            else:
+                # If deterministic_clock has an 'advance' method (like FakeClock),
+                # advance it to simulate time passing
+                if hasattr(deterministic_clock, 'advance'):
+                    deterministic_clock.advance(delay_s)  # type: ignore[attr-defined]
     
     if last_exception is not None:
         raise last_exception

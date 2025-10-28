@@ -54,9 +54,15 @@ def _mask_sensitive_recursive(data: Any) -> Any:
     if isinstance(data, dict):
         return {
             k: (
-                _mask_value(v)
-                if any(sens in k.lower() for sens in SENSITIVE_FIELDS)
-                else _mask_sensitive_recursive(v)
+                # If key is sensitive and value is a collection, recurse into it
+                # If key is sensitive and value is primitive, mask it
+                _mask_sensitive_recursive(v)
+                if (any(sens in k.lower() for sens in SENSITIVE_FIELDS) and isinstance(v, (dict, list, tuple)))
+                else (
+                    _mask_value(v)
+                    if any(sens in k.lower() for sens in SENSITIVE_FIELDS)
+                    else _mask_sensitive_recursive(v)
+                )
             )
             for k, v in data.items()
         }
