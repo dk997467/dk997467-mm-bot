@@ -50,12 +50,13 @@ jobs:
       
       - name: Upload shadow test results
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: shadow-test-results
+          name: shadow-test-results-${{ github.run_id }}
           path: |
             .pytest_cache/
             *.log
+          if-no-files-found: warn
 
   smoke-testnet-sim:
     name: Testnet Simulation (Dry-Run)
@@ -143,14 +144,15 @@ jobs:
       
       - name: Upload testnet smoke artifacts
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: testnet-smoke-artifacts
+          name: testnet-smoke-artifacts-${{ github.run_id }}
           path: |
             TESTNET_SMOKE_REPORT.json
             TESTNET_SMOKE_LOGS.txt
             METRICS_SNAPSHOT.txt
           retention-days: 30
+          compression-level: 6
 
   smoke-validation:
     name: Smoke Test Validation
@@ -160,9 +162,10 @@ jobs:
     
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
-          name: testnet-smoke-artifacts
+          name: testnet-smoke-artifacts-${{ github.run_id }}
+          merge-multiple: true
       
       - name: Validate smoke test results
         run: |
