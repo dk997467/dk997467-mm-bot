@@ -40,18 +40,15 @@ tests/e2e/test_release_bundle_e2e.py
 tests/e2e/test_make_ready_dry.py
 tests/e2e/test_quick_cmds_dry.py
 
-# P0.8: State & Concurrency (Integration & E2E)
-tests/integration/test_exec_with_state_and_freeze.py
-tests/integration/test_idempotent_retries.py
+# P0.8: State & Concurrency (E2E only)
 tests/e2e/test_exec_shadow_e2e.py
-
-# P0.9: Observability (Integration & E2E)
-tests/integration/test_exec_obs_integration.py
 
 # P0.3: Live-prep (Shadow with Maker-Only, Testnet Sim)
 tests/e2e/test_scenario_liveprep_shadow.py
 
-# P0.10: Testnet Soak & Canary (Recon, Kill-Switch, Symbol Filters, Fees)
-tests/integration/test_exec_recon_integration.py
+# P0.5: Bybit Exchange Shadow E2E
+tests/e2e/test_exec_bybit_shadow_e2e.py
+
+# P0.10: Testnet Soak & Canary (Recon, Kill-Switch, Symbol Filters, Fees - E2E only)
 tests/e2e/test_freeze_under_load_recon_e2e.py
 

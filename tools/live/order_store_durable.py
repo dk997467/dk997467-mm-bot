@@ -45,9 +45,10 @@ class DurableOrderStore:
 
     def __init__(
         self,
-        redis: RedisKV,
-        snapshot_dir: str | Path = "artifacts/state",
+        redis: RedisKV | None = None,
+        snapshot_dir: str | Path | None = None,
         clock: Callable[[], float] | None = None,
+        **kwargs: Any,
     ) -> None:
         """
         Initialize durable order store.
@@ -56,7 +57,22 @@ class DurableOrderStore:
             redis: RedisKV instance for storage
             snapshot_dir: Directory for disk snapshots
             clock: Optional injectable clock for deterministic testing
+            **kwargs: Additional kwargs for backward compatibility (redis_client, state_dir)
         """
+        # Backward-compatible aliases
+        if redis is None and "redis_client" in kwargs:
+            redis = kwargs.pop("redis_client")
+        
+        # Accept legacy 'state_dir' spelling
+        if snapshot_dir is None and "state_dir" in kwargs:
+            snapshot_dir = kwargs.pop("state_dir")
+        
+        # Defaults
+        if redis is None:
+            raise ValueError("redis or redis_client must be provided")
+        if snapshot_dir is None:
+            snapshot_dir = "artifacts/state"
+        
         self.redis = redis
         self.snapshot_dir = Path(snapshot_dir)
         self._clock = clock
