@@ -64,10 +64,8 @@ def load_windows(iter_glob: str,
                 symbol = data["summary"]["symbol"]
                 window_data = data["summary"]
             else:
-                print(
-                    f"[WARN] No symbol found in {
-                        Path(file_path).name}, skipping")
-            continue
+                print(f"[WARN] No symbol found in {Path(file_path).name}, skipping")
+                continue
         
             # Apply symbol filter
             if symbols_filter and symbol not in symbols_filter:
