@@ -20,6 +20,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
+      - name: Lint - forbid artifact v3
+        run: |
+          set -euo pipefail
+          if git grep -nE 'actions/(upload|download)-artifact\s*[@:]\s*v3(\b|[^0-9])' .github | tee /dev/stderr; then
+            echo "Found deprecated artifact actions v3 — must use @v4" >&2
+            exit 1
+          fi
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
