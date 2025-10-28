@@ -245,6 +245,7 @@ def main():
         python -m tools.soak.kpi_gate --weekly <path>     # Weekly rollup
         python -m tools.soak.kpi_gate --iter <path>       # Iteration summary
         python -m tools.soak.kpi_gate --test              # Self-test
+        python -m tools.soak.kpi_gate --debug             # Debug mode (show search paths)
     
     Exit codes:
         0 = PASS
@@ -257,6 +258,13 @@ def main():
     # Parse arguments
     mode = None  # "weekly", "iter", "test", or auto-detect
     target_path = None
+    iter_glob_pattern = None  # For --iter glob mode
+    debug = False  # Debug flag
+    
+    # Check for --debug flag (can be anywhere)
+    if "--debug" in sys.argv:
+        debug = True
+        sys.argv = [arg for arg in sys.argv if arg != "--debug"]
     
     if len(sys.argv) == 1:
         # Auto-detect mode
@@ -268,7 +276,15 @@ def main():
         target_path = Path(sys.argv[2]) if len(sys.argv) > 2 else None
     elif sys.argv[1] == "--iter":
         mode = "iter"
-        target_path = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+        if len(sys.argv) > 2:
+            # Check if it's a glob pattern or a single file
+            arg = sys.argv[2]
+            if "*" in arg or "?" in arg:
+                # Glob pattern
+                iter_glob_pattern = arg
+            else:
+                # Single file
+                target_path = Path(arg)
     else:
         # Positional path
         mode = "auto"
@@ -288,6 +304,85 @@ def main():
         print(f"Result: {result}")
         
         return 0 if result["verdict"] != "FAIL" else 1
+    
+    # --- HARD FALLBACKS (no flags passed): support legacy weekly + iter glob ---
+    # Order of auto-detect when called with no args:
+    #   1) WEEKLY_ROLLUP.json (legacy weekly auto-mode)
+    #   2) ITER_SUMMARY_*.json under SOAK_ARTIFACTS_DIR (iter mode)
+    #   3) ITER_SUMMARY_*.json under common fallbacks
+    if mode == "auto" and target_path is None and iter_glob_pattern is None:
+        import os
+        import glob as glob_module
+        
+        if debug:
+            print(f"[kpi_gate] DEBUG: CWD={os.getcwd()}", file=sys.stderr)
+        
+        # 1) Weekly auto-detect (matches unit test expectation)
+        weekly_candidates = [
+            os.environ.get("SOAK_WEEKLY_FILE", ""),              # explicit override if set
+            os.path.join("artifacts", "WEEKLY_ROLLUP.json"),
+            os.path.join("artifacts", "weekly", "WEEKLY_ROLLUP.json"),
+        ]
+        weekly_candidates = [p for p in weekly_candidates if p]
+        
+        if debug:
+            print(f"[kpi_gate] DEBUG: Weekly candidates: {weekly_candidates}", file=sys.stderr)
+        
+        weekly_found = next((p for p in weekly_candidates if os.path.isfile(p)), None)
+        
+        if weekly_found:
+            target_path = Path(weekly_found)
+            mode = "weekly"
+            print(f"[kpi_gate] Auto-fallback to --weekly '{weekly_found}'", file=sys.stderr)
+        else:
+            # 2) Iter glob in SOAK_ARTIFACTS_DIR
+            soak_dir = os.environ.get("SOAK_ARTIFACTS_DIR", "artifacts/soak/latest")
+            iter_globs = [
+                os.path.join(soak_dir, "ITER_SUMMARY_*.json"),
+                # 3) Common fallbacks
+                os.path.join("artifacts", "soak", "latest", "ITER_SUMMARY_*.json"),
+                os.path.join("artifacts", "ITER_SUMMARY_*.json"),
+            ]
+            
+            if debug:
+                print(f"[kpi_gate] DEBUG: Iter glob candidates: {iter_globs}", file=sys.stderr)
+            
+            matched = []
+            chosen_glob = None
+            for g in iter_globs:
+                m = glob_module.glob(g)
+                if debug:
+                    print(f"[kpi_gate] DEBUG: Glob '{g}' matched {len(m)} files", file=sys.stderr)
+                if m:
+                    matched = m
+                    chosen_glob = g
+                    break
+            
+            if matched and chosen_glob:
+                iter_glob_pattern = chosen_glob
+                mode = "iter"
+                print(f"[kpi_gate] Auto-fallback to --iter '{chosen_glob}' ({len(matched)} files)", file=sys.stderr)
+            else:
+                print("[kpi_gate] No args and no default artifacts found; failing fast.", file=sys.stderr)
+                if debug:
+                    print(f"[kpi_gate] DEBUG: Searched globs: {iter_globs}", file=sys.stderr)
+                print("Usage: python -m tools.soak.kpi_gate [<path>|--weekly <path>|--iter <path>|--test]", file=sys.stderr)
+                print("No KPI file found for auto-detect mode", file=sys.stderr)
+                return 1
+    
+    # Handle iter glob mode
+    if mode == "iter" and iter_glob_pattern:
+        import glob as glob_module
+        matched_files = sorted(glob_module.glob(iter_glob_pattern))
+        
+        if not matched_files:
+            print(f"[kpi_gate] ERROR: No files matched glob pattern: {iter_glob_pattern}", file=sys.stderr)
+            return 1
+        
+        # Use the most recent file
+        matched_files.sort(key=lambda p: Path(p).stat().st_mtime, reverse=True)
+        target_path = Path(matched_files[0])
+        print(f"[kpi_gate] Using most recent from glob: {target_path} ({len(matched_files)} files matched)", file=sys.stderr)
     
     # Auto-detect file if not specified
     if mode == "auto" and target_path is None:

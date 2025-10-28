@@ -1,0 +1,89 @@
+# Grafana/Prometheus alerts for Live Mode
+# Reference: https://grafana.com/docs/grafana/latest/alerting/
+
+groups:
+  - name: live_mode_alerts
+    interval: 60s
+    rules:
+      - alert: LiveStateFrozen
+        expr: live_state{env="prod"} == 0  # 0=FROZEN, 1=COOLDOWN, 2=ACTIVE
+        for: 10m
+        labels:
+          severity: critical
+          component: live_mode
+        annotations:
+          summary: "Live mode is FROZEN for >10 minutes"
+          description: |
+            Live mode state is FROZEN for {{ $labels.env }}/{{ $labels.exchange }}.
+            Check LIVE_DECISION.json for reasons.
+            Current state: {{ $value }}
+      
+      - alert: LiveThrottleLow
+        expr: avg_over_time(live_throttle_factor{env="prod"}[10m]) < 0.4
+        for: 15m
+        labels:
+          severity: warning
+          component: live_mode
+        annotations:
+          summary: "Live throttle factor < 0.4 for >15 minutes"
+          description: |
+            Average throttle factor is {{ $value | humanizePercentage }} over last 10min.
+            Environment: {{ $labels.env }}
+            Exchange: {{ $labels.exchange }}
+      
+      - alert: LiveSymbolFrozen
+        expr: live_symbol_throttle{env="prod"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: live_mode
+        annotations:
+          summary: "Symbol {{ $labels.symbol }} is frozen"
+          description: |
+            Symbol {{ $labels.symbol }} has throttle=0 (frozen) for >5min.
+            Environment: {{ $labels.env }}
+            Exchange: {{ $labels.exchange }}
+      
+      - alert: LiveKPIViolation
+        expr: increase(live_violations_total{env="prod",severity="crit"}[5m]) > 0
+        labels:
+          severity: critical
+          component: live_mode
+        annotations:
+          summary: "Live mode CRIT violations detected"
+          description: |
+            {{ $value }} CRIT violations in last 5 minutes.
+            Environment: {{ $labels.env }}
+            KPI: {{ $labels.kpi }}
+      
+      - alert: LiveRedisDown
+        expr: live_redis_up{env="prod"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: live_mode
+        annotations:
+          summary: "Live mode Redis connection lost"
+          description: |
+            Cannot connect to Redis for live mode.
+            Environment: {{ $labels.env }}
+            This will block throttle updates.
+
+# Grafana Dashboard panels (example)
+# 
+# Panel 1: Live State (gauge)
+# Query: live_state{env="prod"}
+# Thresholds: 0=FROZEN (red), 1=COOLDOWN (yellow), 2=ACTIVE (green)
+#
+# Panel 2: Throttle Factor (time series)
+# Query: live_throttle_factor{env="prod"}
+# 
+# Panel 3: Per-Symbol Throttle (table)
+# Query: live_symbol_throttle{env="prod"}
+#
+# Panel 4: Violations Count (stat)
+# Query: sum(increase(live_violations_total{env="prod"}[1h]))
+#
+# Panel 5: Anomaly Score (time series)
+# Query: live_anomaly_score{env="prod"}
+

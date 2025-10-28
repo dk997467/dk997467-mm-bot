@@ -1,0 +1,28 @@
+{
+  "BTCUSDT": {
+    "touch_dwell_ms": 25,
+    "min_lot": 0.001,
+    "comment": "Baseline - highly liquid, tight spreads"
+  },
+  "ETHUSDT": {
+    "touch_dwell_ms": 25,
+    "min_lot": 0.01,
+    "comment": "Baseline - high volume, similar to BTC"
+  },
+  "SOLUSDT": {
+    "touch_dwell_ms": 30,
+    "min_lot": 0.1,
+    "comment": "Mid-tier - moderate liquidity"
+  },
+  "AVAXUSDT": {
+    "touch_dwell_ms": 35,
+    "min_lot": 0.5,
+    "comment": "Mid-tier - wider spreads"
+  },
+  "DOGEUSDT": {
+    "touch_dwell_ms": 40,
+    "min_lot": 10.0,
+    "comment": "Low-tier - higher volatility, larger lot sizes"
+  }
+}
+

@@ -38,16 +38,24 @@ SHADOW_THRESHOLDS = {
 }
 
 
-def audit_shadow_artifacts(base_dir: str = "artifacts/shadow/latest") -> dict:
+def audit_shadow_artifacts(base_dir: str = "artifacts/shadow/latest", min_windows: int = 48) -> dict:
     """
     Audit shadow artifacts and generate readiness report.
     
     Similar to audit_artifacts but adapted for shadow mode.
+    
+    Args:
+        base_dir: Path to shadow artifacts directory
+        min_windows: Minimum required iterations (default: 48)
+    
+    Returns:
+        dict with readiness status and KPIs
     """
     base_path = Path(base_dir)
     
     print("=" * 80)
     print(f"SHADOW ARTIFACT AUDIT: {base_dir}")
+    print(f"Min Windows Gate: {min_windows}")
     print("=" * 80)
     print()
     
@@ -60,6 +68,16 @@ def audit_shadow_artifacts(base_dir: str = "artifacts/shadow/latest") -> dict:
         return {"readiness": {"pass": False, "failures": ["No ITER_SUMMARY files found"]}}
     
     print(f"✓ Found {len(iter_files)} iterations")
+    
+    # Min-windows gate
+    if len(iter_files) < min_windows:
+        print(f"❌ FAIL: Not enough windows ({len(iter_files)} < {min_windows})")
+        return {
+            "readiness": {
+                "pass": False,
+                "failures": [f"Insufficient windows: {len(iter_files)} < {min_windows} (required)"]
+            }
+        }
     
     # Schema validation
     print("  Validating schema...")
@@ -231,11 +249,17 @@ def main():
         action="store_true",
         help="Exit with code 1 if readiness is HOLD (default: False)"
     )
+    parser.add_argument(
+        "--min_windows",
+        type=int,
+        default=48,
+        help="Minimum required iterations (default: 48)"
+    )
     
     args = parser.parse_args()
     
     try:
-        result = audit_shadow_artifacts(args.base)
+        result = audit_shadow_artifacts(args.base, min_windows=args.min_windows)
         readiness_pass = result.get("readiness", {}).get("pass", False)
         
         # Determine exit code

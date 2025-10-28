@@ -1,0 +1,16 @@
+# Integration Tests - Medium complexity (Redis, State, Concurrency)
+# These tests use real subsystems but not full E2E flows
+
+# P0.8: State & Concurrency (Integration)
+tests/integration/test_exec_with_state_and_freeze.py
+tests/integration/test_idempotent_retries.py
+
+# P0.9: Observability (Integration)
+tests/integration/test_exec_obs_integration.py
+
+# P0.10: Testnet Soak & Canary (Recon, Kill-Switch)
+tests/integration/test_exec_recon_integration.py
+
+# P0.5: Risk & Exchange Integration
+tests/integration/test_exec_bybit_risk_integration.py
+

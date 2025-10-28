@@ -1,0 +1,225 @@
+name: Testnet Smoke Tests
+
+# P0.11: Manual dispatch workflow for testnet connectivity dry-run
+# NO real credentials or live orders — uses fake/in-memory exchange
+# Validates: shadow tests pass, exec_demo runs with testnet flags, artifacts collected
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: 'Comma-separated symbols to test (default: BTCUSDT)'
+        required: false
+        default: 'BTCUSDT'
+      iterations:
+        description: 'Number of iterations (default: 50)'
+        required: false
+        default: '50'
+      recon_interval:
+        description: 'Reconciliation interval in seconds (default: 60)'
+        required: false
+        default: '60'
+
+jobs:
+  smoke-shadow:
+    name: Shadow Dry-Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run fast shadow unit tests
+        run: |
+          python -m pytest tests/unit -v --maxfail=5
+      
+      - name: Run shadow integration tests
+        run: |
+          python -m pytest tests/integration -v --maxfail=3
+      
+      - name: Upload shadow test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: shadow-test-results
+          path: |
+            .pytest_cache/
+            *.log
+
+  smoke-testnet-sim:
+    name: Testnet Simulation (Dry-Run)
+    runs-on: ubuntu-latest
+    needs: smoke-shadow
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run exec_demo with testnet flags (dry-run, no real creds)
+        run: |
+          python -m tools.live.exec_demo \
+            --shadow \
+            --network \
+            --testnet \
+            --symbols ${{ github.event.inputs.symbols }} \
+            --maker-only \
+            --post-only-offset-bps 1.5 \
+            --warmup-filters \
+            --recon-interval-s ${{ github.event.inputs.recon_interval }} \
+            --iterations ${{ github.event.inputs.iterations }} \
+            --max-inv 1000 \
+            --max-total 5000 \
+            --edge-threshold 2.0 \
+            --obs \
+            --obs-port 8080 \
+            > TESTNET_SMOKE_REPORT.json 2> TESTNET_SMOKE_LOGS.txt
+        env:
+          # NO REAL CREDENTIALS — uses fake/in-memory exchange
+          # If real testnet creds needed in future, use GitHub Secrets
+          EXCHANGE_ENV: testnet
+          MM_LIVE_ENABLE: "0"  # Safety: never enable live mode in CI
+      
+      - name: Validate JSON output
+        run: |
+          echo "Validating final report JSON..."
+          cat TESTNET_SMOKE_REPORT.json | python -m json.tool > /dev/null
+          echo "JSON valid ✓"
+      
+      - name: Check for critical errors in logs
+        run: |
+          echo "Checking logs for critical errors..."
+          if grep -i "error.*critical\|exception\|traceback" TESTNET_SMOKE_LOGS.txt; then
+            echo "⚠️ Critical errors found in logs (see artifacts)"
+            exit 1
+          fi
+          echo "No critical errors ✓"
+      
+      - name: Extract key metrics from report
+        run: |
+          echo "=== Testnet Smoke Summary ==="
+          python -c "
+          import json
+          with open('TESTNET_SMOKE_REPORT.json') as f:
+              r = json.load(f)
+          print('Symbols:', r.get('params', {}).get('symbols', []))
+          print('Iterations:', r.get('summary', {}).get('total_iterations', 0))
+          print('Freeze events:', r.get('summary', {}).get('freeze_events', 0))
+          if 'recon' in r:
+              print('Recon divergences:', r['recon'].get('divergence_count', 0))
+          if 'execution' in r:
+              print('Warmup filters:', r['execution'].get('warmup_filters', False))
+          "
+      
+      - name: Collect /metrics snapshot (if obs enabled)
+        run: |
+          echo "Simulating /metrics snapshot collection..."
+          echo "# Prometheus metrics snapshot (simulated)" > METRICS_SNAPSHOT.txt
+          echo "# In real deployment, this would be: curl http://localhost:8080/metrics" >> METRICS_SNAPSHOT.txt
+          echo "mm_freeze_events_total 0" >> METRICS_SNAPSHOT.txt
+          echo "mm_recon_divergence_total 0" >> METRICS_SNAPSHOT.txt
+          echo "mm_maker_taker_ratio 0.95" >> METRICS_SNAPSHOT.txt
+      
+      - name: Upload testnet smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: testnet-smoke-artifacts
+          path: |
+            TESTNET_SMOKE_REPORT.json
+            TESTNET_SMOKE_LOGS.txt
+            METRICS_SNAPSHOT.txt
+          retention-days: 30
+
+  smoke-validation:
+    name: Smoke Test Validation
+    runs-on: ubuntu-latest
+    needs: smoke-testnet-sim
+    timeout-minutes: 5
+    
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: testnet-smoke-artifacts
+      
+      - name: Validate smoke test results
+        run: |
+          echo "=== Smoke Test Validation ==="
+          
+          # Check JSON report exists
+          if [ ! -f TESTNET_SMOKE_REPORT.json ]; then
+            echo "❌ TESTNET_SMOKE_REPORT.json not found"
+            exit 1
+          fi
+          echo "✅ JSON report exists"
+          
+          # Check logs exist
+          if [ ! -f TESTNET_SMOKE_LOGS.txt ]; then
+            echo "❌ TESTNET_SMOKE_LOGS.txt not found"
+            exit 1
+          fi
+          echo "✅ Logs exist"
+          
+          # Validate JSON structure
+          python3 -c "
+          import json, sys
+          with open('TESTNET_SMOKE_REPORT.json') as f:
+              r = json.load(f)
+          
+          # Check required top-level keys
+          required_keys = ['summary', 'params', 'timestamp_ms']
+          for key in required_keys:
+              if key not in r:
+                  print(f'❌ Missing key: {key}')
+                  sys.exit(1)
+          
+          # Check recon (if present)
+          if 'recon' in r:
+              divergences = r['recon'].get('divergence_count', -1)
+              if divergences > 0:
+                  print(f'⚠️ Recon divergences detected: {divergences}')
+                  # Not failing — just warning for manual review
+          
+          print('✅ JSON structure valid')
+          "
+      
+      - name: Smoke test summary
+        run: |
+          echo ""
+          echo "╔════════════════════════════════════════════════╗"
+          echo "║   Testnet Smoke Tests — PASSED ✅              ║"
+          echo "╚════════════════════════════════════════════════╝"
+          echo ""
+          echo "Artifacts collected:"
+          echo "  - TESTNET_SMOKE_REPORT.json"
+          echo "  - TESTNET_SMOKE_LOGS.txt"
+          echo "  - METRICS_SNAPSHOT.txt"
+          echo ""
+          echo "Next steps:"
+          echo "  1. Review artifacts for any warnings"
+          echo "  2. If clean → proceed to real testnet soak (24-48h)"
+          echo "  3. Follow RUNBOOK_SHADOW.md P0.11 smoke checklist"
+          echo ""
+

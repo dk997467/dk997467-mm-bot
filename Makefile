@@ -151,7 +151,7 @@ soak:
 	@python -c "import os; os.makedirs('artifacts/soak_reports', exist_ok=True)"
 	@python -c "import datetime; d=datetime.date.today().strftime('%%Y-%%m-%%d'); exec(open('temp_soak.py','w').write('print(\"artifacts/soak_reports/'+d+'.json\")'))" && python temp_soak.py > temp_path.txt && set /p OUT_PATH=<temp_path.txt && python -m tools.ops.soak_run --shadow-hours 6 --canary-hours 6 --live-hours 12 --tz Europe/Berlin --out %OUT_PATH% && del temp_path.txt temp_soak.py
 
-.PHONY: soak-audit soak-audit-ci soak-compare
+.PHONY: soak-audit soak-audit-ci soak-compare soak-analyze
 
 soak-audit:
 	python -m tools.soak.audit_artifacts --base artifacts/soak/latest
@@ -162,19 +162,329 @@ soak-audit-ci:
 soak-compare:
 	python -m tools.soak.compare_runs --a artifacts/soak/run_A --b artifacts/soak/latest
 
-.PHONY: shadow-run shadow-audit shadow-ci shadow-archive
+soak-analyze:
+	python -m tools.soak.analyze_post_soak --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" --min-windows 24 --exit-on-crit
+
+soak-violations-redis:
+	python -m tools.soak.export_violations_to_redis \
+	  --summary reports/analysis/SOAK_SUMMARY.json \
+	  --violations reports/analysis/VIOLATIONS.json \
+	  --env dev --exchange bybit --redis-url redis://localhost:6379/0 --ttl 3600
+
+soak-once:
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+	  --min-windows 24 --max-iterations 1 --interval-min 0 \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 3600 --stream --stream-maxlen 5000 --exit-on-crit --verbose
+
+soak-continuous:
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+	  --min-windows 24 --interval-min 60 --max-iterations 0 \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 3600 --stream --stream-maxlen 5000 --verbose
+
+soak-alert-dry:
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+	  --min-windows 24 --max-iterations 1 \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 1800 --stream --stream-maxlen 5000 \
+	  --alert telegram --alert slack \
+	  --alert-min-severity CRIT --alert-debounce-min 180 \
+	  --heartbeat-key "soak:runner:heartbeat" \
+	  --dry-run --verbose
+
+soak-alert-selftest:
+	@echo "=== Generating fake CRIT summary ==="
+	python -m tools.soak.generate_fake_summary --crit --out reports/analysis
+	@echo ""
+	@echo "=== Creating fake ITER files ==="
+	mkdir -p reports/analysis
+	echo '{"window": 1}' > reports/analysis/FAKE_ITER_001.json
+	@echo ""
+	@echo "=== Running self-test (no debounce) ==="
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "reports/analysis/FAKE_*.json" \
+	  --min-windows 1 --max-iterations 1 \
+	  --out-dir reports/analysis \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 600 --stream --stream-maxlen 1000 \
+	  --alert telegram --alert slack \
+	  --alert-policy "$${ALERT_POLICY:-dev=WARN,staging=WARN,prod=CRIT}" \
+	  --alert-debounce-min 0 \
+	  --heartbeat-key "$${ENV:-dev}:$${EXCHANGE:-bybit}:soak:runner:selftest_heartbeat" \
+	  --verbose || echo "[WARN] Self-test completed with warnings"
+
+soak-qol-smoke:
+	@echo "=== QoL Smoke Test (Debounce & Signature) ==="
+	@echo "Step 1: Generate fake CRIT (variant 1)"
+	python -m tools.soak.generate_fake_summary --crit --out reports/analysis --variant 1
+	@echo ""
+	@echo "Step 2: First run (should alert)"
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "reports/analysis/FAKE_*.json" \
+	  --min-windows 1 --max-iterations 1 \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 600 --stream --stream-maxlen 1000 \
+	  --alert telegram --alert slack \
+	  --alert-policy "$${ALERT_POLICY:-dev=WARN,prod=CRIT}" \
+	  --alert-debounce-min 180 \
+	  --redis-down-max 3 \
+	  --heartbeat-key "$${ENV:-dev}:$${EXCHANGE:-bybit}:soak:runner:heartbeat" \
+	  --verbose
+	@echo ""
+	@echo "Step 3: Second run (should DEBOUNCE - same violations)"
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "reports/analysis/FAKE_*.json" \
+	  --min-windows 1 --max-iterations 1 \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 600 --stream --stream-maxlen 1000 \
+	  --alert telegram --alert slack \
+	  --alert-policy "$${ALERT_POLICY:-dev=WARN,prod=CRIT}" \
+	  --alert-debounce-min 180 \
+	  --redis-down-max 3 \
+	  --heartbeat-key "$${ENV:-dev}:$${EXCHANGE:-bybit}:soak:runner:heartbeat" \
+	  --verbose
+
+soak-qol-smoke-new-viol:
+	@echo "=== QoL Smoke Test (New Violations Signature) ==="
+	@echo "Step 1: Generate different CRIT (variant 2 - new signature)"
+	python -m tools.soak.generate_fake_summary --crit --out reports/analysis --variant 2
+	@echo ""
+	@echo "Step 2: Run again (should BYPASS debounce - signature_changed=true)"
+	python -m tools.soak.continuous_runner \
+	  --iter-glob "reports/analysis/FAKE_*.json" \
+	  --min-windows 1 --max-iterations 1 \
+	  --env $${ENV:-dev} --exchange $${EXCHANGE:-bybit} \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --ttl 600 --stream --stream-maxlen 1000 \
+	  --alert telegram --alert slack \
+	  --alert-policy "$${ALERT_POLICY:-dev=WARN,prod=CRIT}" \
+	  --alert-debounce-min 180 \
+	  --redis-down-max 3 \
+	  --heartbeat-key "$${ENV:-dev}:$${EXCHANGE:-bybit}:soak:runner:heartbeat" \
+	  --verbose
+
+.PHONY: shadow-run shadow-audit shadow-ci shadow-report shadow-redis shadow-redis-export shadow-redis-export-prod shadow-redis-export-dry shadow-redis-export-legacy shadow-archive soak-analyze soak-violations-redis soak-once soak-continuous soak-alert-dry soak-alert-selftest soak-qol-smoke soak-qol-smoke-new-viol accuracy-compare accuracy-ci accuracy-sanity accuracy-sanity-strict accuracy-sanity-mini accuracy-report-compact live-run live-gate live-report live-export
 
 shadow-run:
-	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --mock
+	python -m tools.shadow.run_shadow --iterations 6 --duration 60 --source mock
+
+shadow-redis:
+	python -m tools.shadow.run_shadow \
+	  --source redis \
+	  --redis-url redis://localhost:6379 \
+	  --redis-stream lob:ticks \
+	  --redis-group shadow \
+	  --symbols BTCUSDT ETHUSDT \
+	  --profile moderate \
+	  --iterations 48 \
+	  --duration 60 \
+	  --touch_dwell_ms 25 \
+	  --require_volume \
+	  --min_lot 0.001 && \
+	python -m tools.shadow.build_shadow_reports --src artifacts/shadow/latest && \
+	python -m tools.shadow.audit_shadow_artifacts --base artifacts/shadow/latest --min_windows 48
 
 shadow-audit:
-	python -m tools.shadow.audit_shadow_artifacts --base artifacts/shadow/latest
+	python -m tools.shadow.audit_shadow_artifacts --base artifacts/shadow/latest --min_windows 48
 
 shadow-ci:
-	python -m tools.shadow.audit_shadow_artifacts --base artifacts/shadow/latest --fail-on-hold
+	python -m tools.shadow.audit_shadow_artifacts --base artifacts/shadow/latest --min_windows 48 --fail-on-hold
+
+shadow-report:
+	python -m tools.shadow.build_shadow_reports --src artifacts/shadow/latest && \
+	python -m tools.shadow.audit_shadow_artifacts --base artifacts/shadow/latest --min_windows 48
 
 shadow-archive:
 	python -m tools.ops.rotate_shadow_artifacts --max-keep 300
+
+shadow-redis-export:
+	python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url redis://localhost:6379/0 --env dev --exchange bybit --hash-mode --batch-size 50 --ttl 3600 --show-metrics
+
+shadow-redis-export-prod:
+	python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url rediss://prod.redis.com:6380/0 --env prod --exchange bybit --hash-mode --batch-size 100 --ttl 7200 --show-metrics
+
+shadow-redis-export-dry:
+	python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url redis://localhost:6379/0 --env dev --exchange bybit --hash-mode --dry-run --show-metrics
+
+shadow-redis-export-legacy:
+	python -m tools.shadow.export_to_redis --src artifacts/soak/latest --redis-url redis://localhost:6379/0 --env dev --exchange bybit --flat-keys --batch-size 50 --ttl 3600
+
+.PHONY: redis-smoke redis-smoke-prod redis-smoke-flat
+
+redis-smoke:
+	python -m tools.shadow.redis_smoke_check --src artifacts/soak/latest --env dev --exchange bybit --batch-size 100 --sample-keys 10 --redis-url redis://localhost:6379/0
+
+redis-smoke-prod:
+	python -m tools.shadow.redis_smoke_check --src artifacts/soak/latest --env prod --exchange bybit --batch-size 100 --sample-keys 10 --redis-url rediss://user:pass@redis.prod:6379/0
+
+redis-smoke-flat:
+	python -m tools.shadow.redis_smoke_check --src artifacts/soak/latest --env dev --exchange bybit --batch-size 100 --sample-keys 10 --do-flat-backfill --redis-url redis://localhost:6379/0
+
+.PHONY: dryrun dryrun-validate
+
+dryrun:
+	python -m tools.dryrun.run_dryrun --symbols BTCUSDT ETHUSDT --iterations 6 --duration 60
+
+dryrun-validate:
+	python -m tools.dryrun.run_dryrun --symbols BTCUSDT ETHUSDT --iterations 12 --duration 60
+
+.PHONY: accuracy-compare accuracy-ci accuracy-sanity accuracy-sanity-strict accuracy-sanity-mini accuracy-report-compact
+
+accuracy-compare:
+	@echo "=== Accuracy Gate: Shadow ↔ Dry-Run Comparison ==="
+	python -m tools.accuracy.compare_shadow_dryrun \
+	  --shadow "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+	  --dryrun "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+	  --symbols $${SYMBOLS:-BTCUSDT,ETHUSDT} \
+	  --min-windows $${MIN_WINDOWS:-24} \
+	  --max-age-min $${MAX_AGE_MIN:-90} \
+	  --mape-threshold $${MAPE_THRESHOLD:-0.15} \
+	  --median-delta-threshold-bps $${MEDIAN_DELTA_THRESHOLD_BPS:-1.5} \
+	  --out-dir reports/analysis \
+	  --verbose
+
+accuracy-ci:
+	@echo "=== Accuracy Gate: CI Mode (strict) ==="
+	python -m tools.accuracy.compare_shadow_dryrun \
+	  --shadow "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+	  --dryrun "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+	  --symbols BTCUSDT,ETHUSDT \
+	  --min-windows 24 \
+	  --max-age-min 90 \
+	  --mape-threshold 0.15 \
+	  --median-delta-threshold-bps 1.5 \
+	  --out-dir reports/analysis \
+	  --verbose
+	@echo ""
+	@if [ -f reports/analysis/ACCURACY_SUMMARY.json ]; then \
+		VERDICT=$$(jq -r '.verdict' reports/analysis/ACCURACY_SUMMARY.json); \
+		echo "Verdict: $$VERDICT"; \
+		if [ "$$VERDICT" = "FAIL" ]; then \
+			echo "❌ Accuracy Gate FAILED - blocking PR"; \
+			exit 1; \
+		elif [ "$$VERDICT" = "WARN" ]; then \
+			echo "🟡 Accuracy Gate WARN - informational"; \
+			exit 0; \
+		else \
+			echo "✅ Accuracy Gate PASSED"; \
+			exit 0; \
+		fi; \
+	else \
+		echo "❌ ACCURACY_SUMMARY.json not found"; \
+		exit 1; \
+	fi
+
+accuracy-sanity:
+	@echo "=== Accuracy Gate: Sanity Check (edge cases + formatting) ==="
+	python -m tools.accuracy.sanity_check \
+	  --shadow-glob "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+	  --dryrun-glob "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+	  --min-windows $${MIN_WINDOWS:-24} \
+	  --max-age-min $${MAX_AGE_MIN:-90} \
+	  --mape-threshold $${MAPE_THRESHOLD:-0.15} \
+	  --median-delta-bps $${MEDIAN_DELTA_BPS:-1.5} \
+	  --report-dir reports/analysis \
+	  --verbose
+	@echo ""
+	@if [ -f reports/analysis/ACCURACY_SANITY.md ]; then \
+		echo "✅ Sanity report generated"; \
+		echo "Review: cat reports/analysis/ACCURACY_SANITY.md"; \
+	else \
+		echo "❌ Sanity report not found"; \
+	fi
+
+accuracy-sanity-strict:
+	@echo "=== Accuracy Gate: Sanity Check (STRICT) ==="
+	MIN_WINDOWS=48 MAX_AGE_MIN=60 MAPE_THRESHOLD=0.12 MEDIAN_DELTA_BPS=1.0 \
+	python -m tools.accuracy.sanity_check \
+	  --shadow-glob "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+	  --dryrun-glob "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+	  --min-windows 48 \
+	  --max-age-min 60 \
+	  --mape-threshold 0.12 \
+	  --median-delta-bps 1.0 \
+	  --report-dir reports/analysis \
+	  --strict \
+	  --verbose
+
+accuracy-sanity-mini:
+	@echo "=== Accuracy Gate: Sanity Check (MINI - soft thresholds) ==="
+	MIN_WINDOWS=12 MAX_AGE_MIN=45 MAPE_THRESHOLD=0.20 MEDIAN_DELTA_BPS=2.0 \
+	python -m tools.accuracy.sanity_check \
+	  --shadow-glob "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+	  --dryrun-glob "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+	  --min-windows 12 \
+	  --max-age-min 45 \
+	  --mape-threshold 0.20 \
+	  --median-delta-bps 2.0 \
+	  --report-dir reports/analysis \
+	  --verbose
+
+accuracy-report-compact:
+	@echo "=== Accuracy Gate: Comparison (compact PR table) ==="
+	MAX_SYMBOLS_IN_PR=10 python -m tools.accuracy.compare_shadow_dryrun \
+	  --shadow "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+	  --dryrun "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+	  --symbols $${SYMBOLS:-BTCUSDT,ETHUSDT} \
+	  --min-windows $${MIN_WINDOWS:-24} \
+	  --max-age-min $${MAX_AGE_MIN:-90} \
+	  --mape-threshold $${MAPE_THRESHOLD:-0.15} \
+	  --median-delta-threshold-bps $${MEDIAN_DELTA_THRESHOLD_BPS:-1.5} \
+	  --out-dir reports/analysis \
+	  --verbose
+
+live-run:
+	@echo "=== Live Mode: Runner (dry-run by default) ==="
+	python -m tools.live.run_live \
+	  --symbols $${SYMBOLS:-BTCUSDT,ETHUSDT} \
+	  --ramp-profile $${RAMP_PROFILE:-A} \
+	  --env $${ENV:-dev} \
+	  --exchange $${EXCHANGE:-bybit} \
+	  --interval-sec $${INTERVAL_SEC:-60} \
+	  --iterations $${ITERATIONS:-1} \
+	  --dry-run \
+	  --verbose
+
+live-gate:
+	@echo "=== Live Mode: CI Gate ==="
+	python -m tools.live.ci_gates.live_gate \
+	  --path artifacts/live/latest \
+	  --min_edge $${MIN_EDGE:-2.5} \
+	  --min_maker_taker $${MIN_MAKER_TAKER:-0.83} \
+	  --max_risk $${MAX_RISK:-0.40} \
+	  --max_latency $${MAX_LATENCY:-350}
+
+live-export:
+	@echo "=== Live Mode: Export to Redis ==="
+	python -m tools.live.export_live_summary \
+	  --src artifacts/live/latest \
+	  --redis-url $${REDIS_URL:-redis://localhost:6379/0} \
+	  --env $${ENV:-dev} \
+	  --exchange $${EXCHANGE:-bybit} \
+	  --ttl $${TTL:-3600} \
+	  --verbose
+
+live-report:
+	@echo "=== Live Mode: Generate reports + export ==="
+	@$(MAKE) live-run
+	@$(MAKE) live-export
+	@echo ""
+	@if [ -f artifacts/live/latest/LIVE_REPORT.md ]; then \
+		echo "✅ Live report generated"; \
+		echo "Review: cat artifacts/live/latest/LIVE_REPORT.md"; \
+	else \
+		echo "❌ Live report not found"; \
+	fi
 
 .PHONY: pre-freeze pre-freeze-alt pre-freeze-fast
 

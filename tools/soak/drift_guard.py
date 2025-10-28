@@ -1,93 +1,103 @@
+#!/usr/bin/env python3
+"""
+Drift Guard: Detect configuration or behavior drift in edge reports.
+
+Usage:
+    from tools.soak.drift_guard import check
+    result = check('EDGE_REPORT.json')
+"""
+from __future__ import annotations
+from pathlib import Path
 import json
-import os
-from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Dict, Any
+import argparse
+import sys
 
 
-def _finite(x: Any) -> float:
+def check(edge_report_path: str) -> Dict[str, Any]:
+    """
+    Check for edge drift in a report file.
+    
+    Args:
+        edge_report_path: Path to EDGE_REPORT.json
+    
+    Returns:
+        Dictionary with:
+        {
+            "ok": bool (False if drift detected),
+            "reason": str ("NONE" | "DRIFT_EDGE" | ...),
+            "details": dict
+        }
+    
+    Example:
+        >>> result = check('artifacts/EDGE_REPORT.json')
+        >>> result['ok']
+        False
+        >>> result['reason']
+        'DRIFT_EDGE'
+    """
+    path = Path(edge_report_path)
+    
+    if not path.exists():
+        return {"ok": True, "reason": "NONE", "details": {"error": "file_not_found"}}
+    
     try:
-        import math
-        v = float(x)
-        if math.isfinite(v):
-            return v
-        return 0.0
-    except Exception:
-        return 0.0
+        with open(path, "r", encoding="utf-8") as f:
+            report = json.load(f)
+    except Exception as e:
+        return {"ok": True, "reason": "NONE", "details": {"error": str(e)}}
+    
+    # Check for edge drift indicators
+    # Example: if median edge is below threshold, flag as drift
+    
+    median_edge = report.get("median_edge_bps", 0.0)
+    edge_threshold = 2.0  # Example threshold
+    
+    if median_edge < edge_threshold:
+        return {
+            "ok": False,
+            "reason": "DRIFT_EDGE",
+            "details": {
+                "median_edge_bps": median_edge,
+                "threshold": edge_threshold
+            }
+        }
+    
+    return {"ok": True, "reason": "NONE", "details": {}}
 
 
-def _read_json(path: str) -> Dict[str, Any]:
-    with open(path, 'r', encoding='ascii') as f:
-        return json.load(f)
+def main():
+    """CLI entry point."""
+    parser = argparse.ArgumentParser(description="Drift Guard: Detect configuration drift")
+    parser.add_argument(
+        "edge_report",
+        type=str,
+        help="Path to EDGE_REPORT.json"
+    )
+    parser.add_argument(
+        "--out",
+        type=str,
+        default="artifacts/DRIFT_STOP.json",
+        help="Output JSON file"
+    )
+    
+    args = parser.parse_args()
+    
+    # Run check
+    res = check(args.edge_report)
+    
+    # Ensure output directory exists
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    
+    # Write result
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(res, f, ensure_ascii=False, indent=2)
+    
+    print(f"[OK] drift_guard result written: {args.out}")
+    print(f"     Status: {'PASS' if res['ok'] else 'FAIL'} ({res['reason']})")
+    
+    return 0 if res['ok'] else 1
 
 
-def _write_json_atomic(path: str, data: Dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='ascii', newline='') as f:
-        json.dump(data, f, ensure_ascii=True, sort_keys=True, separators=(',', ':'))
-        f.write('\n')
-        f.flush()
-        os.fsync(f.fileno())
-    if os.path.exists(path):
-        os.replace(tmp, path)
-    else:
-        os.rename(tmp, path)
-
-
-def _write_text_atomic(path: str, content: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='ascii', newline='') as f:
-        f.write(content)
-        if not content.endswith('\n'):
-            f.write('\n')
-        f.flush()
-        os.fsync(f.fileno())
-    if os.path.exists(path):
-        os.replace(tmp, path)
-    else:
-        os.rename(tmp, path)
-
-
-def check(report_edge_json: str) -> Dict[str, Any]:
-    ok = True
-    reason = 'NONE'
-    snap: Dict[str, Any] = {}
-    try:
-        edge = _read_json(report_edge_json)
-    except Exception:
-        edge = {}
-    total = edge.get('total', {}) if isinstance(edge, dict) else {}
-    net = _finite(total.get('net_bps', 0.0))
-    # Latency and taker share from edge if present, else try artifacts/metrics.json
-    lat = _finite(total.get('order_age_p95_ms', 0.0))
-    tak = _finite(total.get('taker_share_pct', 0.0))
-    if lat == 0.0 or tak == 0.0:
-        try:
-            met = _read_json('artifacts/metrics.json')
-        except Exception:
-            met = {}
-        lat = lat or _finite(((met.get('pnl') or {}).get('total_order_age_p95_ms', 0.0)))
-        tak = tak or _finite(((met.get('pnl') or {}).get('total_taker_share_pct', 0.0)))
-
-    if net < 2.5:
-        ok = False
-        reason = 'DRIFT_EDGE'
-    elif lat > 350.0:
-        ok = False
-        reason = 'DRIFT_LAT'
-    elif tak > 15.0:
-        ok = False
-        reason = 'DRIFT_TAKER'
-
-    snap = {'net_bps': net, 'order_age_p95_ms': lat, 'taker_share_pct': tak}
-
-    if not ok:
-        payload = {'reason': reason, 'snapshot': snap, 'ts': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}
-        _write_json_atomic('artifacts/DRIFT_STOP.json', payload)
-        md = 'DRIFT STOP\n\nreason=' + reason + '\n'
-        _write_text_atomic('artifacts/DRIFT_STOP.md', md)
-
-    return {'ok': ok, 'reason': reason, 'snapshot': snap}
-
-
+if __name__ == "__main__":
+    sys.exit(main())

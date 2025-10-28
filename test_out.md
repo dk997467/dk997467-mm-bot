@@ -1,0 +1,10 @@
+# Repro Minimizer Report
+
+- Original lines: 7
+- Minimized lines: 3
+- Steps removed: 4
+
+## Minimized Output
+
+```jsonl
+{"ts_ms":0,"type":"quote","symbol":"BTCUSDT","bid":100.0,"ask":100.5}{"ts_ms":1000,"type":"trade","symbol":"BTCUSDT","price":100.2,"qty":1}{"ts_ms":2000,"type":"guard","reason":"DRIFT_EDGE"}```

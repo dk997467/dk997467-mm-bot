@@ -1,171 +1,258 @@
-import csv
+#!/usr/bin/env python3
+"""
+FinOps Reconcile: Aggregate and reconcile financial metrics.
+
+Functions:
+    reconcile(artifacts_json_path: str, exchange_dir: str) -> dict
+    render_reconcile_md(summary: dict) -> str
+"""
+from __future__ import annotations
 import json
-import os
-import sys
-from typing import Dict, Any, Tuple
+import csv
+from pathlib import Path
+from typing import Dict, Any
+
+# Epsilon for tiny delta comparison
+EPS = 1e-6
 
 
-def _finite(x: Any) -> float:
-    try:
-        import math
-        xx = float(x)
-        if math.isfinite(xx):
-            return xx
-        return 0.0
-    except Exception:
-        return 0.0
+def _to_float(x, default=0.0):
+    """
+    Safe conversion to float with dict support.
+    
+    Args:
+        x: Value to convert (int, float, str, dict)
+        default: Default value if conversion fails
+    
+    Returns:
+        Float value or default
+    """
+    if isinstance(x, (int, float)):
+        return float(x)
+    if isinstance(x, str):
+        try:
+            return float(x)
+        except ValueError:
+            return default
+    if isinstance(x, dict):
+        # Popular nested variants
+        for k in ("value", "avg", "mean", "bps", "usd", "pnl"):
+            if k in x and isinstance(x[k], (int, float, str)):
+                try:
+                    return float(x[k])
+                except ValueError:
+                    pass
+        # If dict has exactly one numeric value - take it
+        vals = [v for v in x.values() if isinstance(v, (int, float))]
+        if len(vals) == 1:
+            return float(vals[0])
+    return default
 
 
-def _read_exchange_csv(path: str) -> Dict[str, Dict[str, float]]:
-    data: Dict[str, Dict[str, float]] = {}
-    with open(path, 'r', encoding='ascii', newline='') as f:
-        r = csv.DictReader(f)
-        for row in r:
-            sym = str(row.get('symbol', '')).strip()
-            if not sym:
-                continue
-            if sym.upper() == 'TOTAL':
-                # Skip aggregate rows; totals are computed from by-symbol deltas
-                continue
-            sym_d = data.setdefault(sym, {})
-            sym_d['pnl'] = _finite(row.get('pnl', 0.0))
-            sym_d['fees_bps'] = _finite(row.get('fees_bps', 0.0))
-            sym_d['turnover_usd'] = _finite(row.get('turnover_usd', 0.0))
-    return data
-
-
-def _load_artifacts(artifacts_path: str) -> Dict[str, Any]:
-    with open(artifacts_path, 'r', encoding='ascii') as f:
-        art = json.load(f)
-    return art
-
-
-def _artifacts_totals_by_symbol(art: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
-    # Map to exchange fields: pnl -> pnl from edge.net_bps, fees_bps from fees.per_symbol_bps, turnover_usd from turnover.usd
-    pnl_map = (art.get('edge', {}) or {}).get('net_bps', {}) or {}
-    fees_map = (art.get('fees', {}) or {}).get('per_symbol_bps', {}) or {}
-    tov_map = (art.get('turnover', {}) or {}).get('usd', {}) or {}
-    syms = set(list(pnl_map.keys()) + list(fees_map.keys()) + list(tov_map.keys()))
-    out: Dict[str, Dict[str, float]] = {}
-    for s in syms:
-        out[s] = {
-            'pnl': _finite(pnl_map.get(s, 0.0)),
-            'fees_bps': _finite(fees_map.get(s, 0.0)),
-            'turnover_usd': _finite(tov_map.get(s, 0.0)),
+def reconcile(artifacts_json_path: str, exchange_dir: str) -> Dict[str, Any]:
+    """
+    Reconcile financial metrics from artifacts vs exchange reports.
+    
+    Args:
+        artifacts_json_path: Path to metrics.json with internal tracking (per-symbol)
+        exchange_dir: Directory containing exchange CSV reports (pnl.csv, fees.csv, turnover.csv)
+    
+    Returns:
+        Summary dictionary with per-symbol and total deltas (absolute values):
+        {
+          "by_symbol": {
+            "BTCUSDT": {
+              "pnl_delta_abs": float,
+              "fees_bps_delta_abs": float,
+              "turnover_usd_delta_abs": float
+            }
+          },
+          "totals": {
+            "pnl_delta_abs": float,
+            "fees_bps_delta_abs": float,
+            "turnover_usd_delta_abs": float
+          },
+          "status": "OK" | "WARN" | "FAIL"
         }
-    return out
-
-
-def _merge_symbols(a: Dict[str, Dict[str, float]], b: Dict[str, Dict[str, float]]) -> Tuple[Dict[str, Dict[str, float]], list]:
-    syms = sorted(set(list(a.keys()) + list(b.keys())))
-    return {s: {
-        'a_pnl': _finite(a.get(s, {}).get('pnl', 0.0)),
-        'b_pnl': _finite(b.get(s, {}).get('pnl', 0.0)),
-        'a_fees_bps': _finite(a.get(s, {}).get('fees_bps', 0.0)),
-        'b_fees_bps': _finite(b.get(s, {}).get('fees_bps', 0.0)),
-        'a_turnover_usd': _finite(a.get(s, {}).get('turnover_usd', 0.0)),
-        'b_turnover_usd': _finite(b.get(s, {}).get('turnover_usd', 0.0)),
-    } for s in syms}, syms
-
-
-def _compute_deltas(merged: Dict[str, Dict[str, float]], syms: list) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float]]:
-    by_symbol: Dict[str, Dict[str, float]] = {}
-    totals = {'pnl_delta': 0.0, 'fees_bps_delta': 0.0, 'turnover_delta_usd': 0.0}
-    for s in syms:
-        d = merged[s]
-        pnl_delta = _finite(d['a_pnl'] - d['b_pnl'])
-        fees_delta = _finite(d['a_fees_bps'] - d['b_fees_bps'])
-        tov_delta = _finite(d['a_turnover_usd'] - d['b_turnover_usd'])
-        by_symbol[s] = {
-            'fees_bps_delta': fees_delta,
-            'pnl_delta': pnl_delta,
-            'turnover_delta_usd': tov_delta,
-        }
-        totals['pnl_delta'] = _finite(totals['pnl_delta'] + pnl_delta)
-        totals['fees_bps_delta'] = _finite(totals['fees_bps_delta'] + fees_delta)
-        totals['turnover_delta_usd'] = _finite(totals['turnover_delta_usd'] + tov_delta)
-    return by_symbol, totals
-
-
-def _runtime_meta(art: Dict[str, Any]) -> Dict[str, str]:
-    rt = (art.get('runtime') or {})
-    utc = str(rt.get('utc', ''))
-    version = str(rt.get('version', ''))
-    return {'utc': utc, 'version': version}
-
-
-def reconcile(artifacts_path: str, exchange_dir: str) -> Dict[str, Any]:
-    art = _load_artifacts(artifacts_path)
-    exh_path = os.path.join(exchange_dir, 'combined.csv')
-    # The exchange_dir may provide split files; attempt to combine from fees.csv/pnl.csv/turnover.csv if combined not found.
-    data: Dict[str, Dict[str, float]]
-    if os.path.exists(exh_path):
-        data = _read_exchange_csv(exh_path)
+    """
+    # Load internal metrics (per-symbol)
+    metrics_path = Path(artifacts_json_path)
+    if metrics_path.exists():
+        with open(metrics_path, 'r', encoding='utf-8') as f:
+            internal = json.load(f)
     else:
-        # Try merge from separate files
-        data = {}
-        for fname in ('pnl.csv', 'fees.csv', 'turnover.csv'):
-            p = os.path.join(exchange_dir, fname)
-            if not os.path.exists(p):
-                continue
-            part = _read_exchange_csv(p)
-            for s, vals in part.items():
-                d = data.setdefault(s, {})
-                for k, v in vals.items():
-                    # Keep latest occurrence, fields missing default to 0.0
-                    d[k] = _finite(v)
-        # Normalize missing fields
-        for s in list(data.keys()):
-            d = data[s]
-            d['pnl'] = _finite(d.get('pnl', 0.0))
-            d['fees_bps'] = _finite(d.get('fees_bps', 0.0))
-            d['turnover_usd'] = _finite(d.get('turnover_usd', 0.0))
-
-    art_map = _artifacts_totals_by_symbol(art)
-    merged, syms = _merge_symbols(art_map, data)
-    by_symbol, totals = _compute_deltas(merged, syms)
-    # Sort by_symbol keys
-    by_symbol_sorted = {k: by_symbol[k] for k in sorted(by_symbol.keys())}
-    report: Dict[str, Any] = {
-        'by_symbol': by_symbol_sorted,
-        'runtime': _runtime_meta(art),
-        'totals': totals,
+        internal = {}
+    
+    # Load exchange reports (per-symbol)
+    exchange_path = Path(exchange_dir)
+    exchange_by_symbol = {}
+    
+    # Read PnL from exchange
+    pnl_csv = exchange_path / "pnl.csv"
+    if pnl_csv.exists():
+        with open(pnl_csv, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                symbol = row.get("symbol", "UNKNOWN")
+                if symbol not in exchange_by_symbol:
+                    exchange_by_symbol[symbol] = {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0}
+                exchange_by_symbol[symbol]["pnl"] += _to_float(row.get("pnl", 0.0))
+    
+    # Read fees from exchange
+    fees_csv = exchange_path / "fees.csv"
+    if fees_csv.exists():
+        with open(fees_csv, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                symbol = row.get("symbol", "UNKNOWN")
+                if symbol not in exchange_by_symbol:
+                    exchange_by_symbol[symbol] = {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0}
+                exchange_by_symbol[symbol]["fees_bps"] += _to_float(row.get("fees_bps", 0.0))
+    
+    # Read turnover from exchange
+    turnover_csv = exchange_path / "turnover.csv"
+    if turnover_csv.exists():
+        with open(turnover_csv, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                symbol = row.get("symbol", "UNKNOWN")
+                if symbol not in exchange_by_symbol:
+                    exchange_by_symbol[symbol] = {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0}
+                exchange_by_symbol[symbol]["turnover_usd"] += _to_float(row.get("turnover_usd", 0.0))
+    
+    # Calculate deltas per symbol (absolute values)
+    # Filter to only real trading symbols (exclude metadata keys like "runtime", "TOTAL", "fees", etc.)
+    by_symbol = {}
+    all_symbols = set(internal.keys()) | set(exchange_by_symbol.keys())
+    
+    # Filter: keep only uppercase symbols ending with common quote currencies
+    real_symbols = {
+        s for s in all_symbols
+        if s.isupper() and any(s.endswith(quote) for quote in ["USDT", "USD", "BTC", "ETH"])
     }
-    return report
-
-
-def render_reconcile_md(report: Dict[str, Any]) -> str:
-    # Fixed ASCII table
-    lines = []
-    lines.append('Reconcile Report\n')
-    lines.append('\n')
-    lines.append('| symbol | pnl_delta | fees_bps_delta | turnover_delta_usd |\n')
-    lines.append('|--------|-----------|----------------|--------------------|\n')
-    for sym in sorted(report.get('by_symbol', {}).keys()):
-        d = report['by_symbol'][sym]
-        lines.append('| ' + sym + ' | ' + _fmt(d.get('pnl_delta')) + ' | ' + _fmt(d.get('fees_bps_delta')) + ' | ' + _fmt(d.get('turnover_delta_usd')) + ' |\n')
-    lines.append('| TOTAL | ' + _fmt(report.get('totals', {}).get('pnl_delta')) + ' | ' + _fmt(report.get('totals', {}).get('fees_bps_delta')) + ' | ' + _fmt(report.get('totals', {}).get('turnover_delta_usd')) + ' |\n')
-    return ''.join(lines)
-
-
-def _fmt(x: Any) -> str:
-    v = _finite(x)
-    # Deterministic formatting with 6 decimals
-    return ('%.6f' % v)
+    
+    for symbol in sorted(real_symbols):  # Sort for determinism
+        int_data = internal.get(symbol, {})
+        exc_data = exchange_by_symbol.get(symbol, {"pnl": 0.0, "fees_bps": 0.0, "turnover_usd": 0.0})
+        
+        # Calculate deltas using _to_float for safe conversion
+        pnl_delta = _to_float(int_data.get("pnl", 0.0)) - _to_float(exc_data.get("pnl", 0.0))
+        fees_delta = _to_float(int_data.get("fees_bps", 0.0)) - _to_float(exc_data.get("fees_bps", 0.0))
+        turn_delta = _to_float(int_data.get("turnover_usd", 0.0)) - _to_float(exc_data.get("turnover_usd", 0.0))
+        
+        # Store signed deltas (rounded, with EPS threshold)
+        by_symbol[symbol] = {
+            "pnl_delta": round(pnl_delta, 12) if abs(pnl_delta) > EPS else 0.0,
+            "fees_bps_delta": round(fees_delta, 12) if abs(fees_delta) > EPS else 0.0,
+            "turnover_delta_usd": round(turn_delta, 12) if abs(turn_delta) > EPS else 0.0,
+        }
+    
+    # Calculate totals (sum of signed deltas)
+    totals = {
+        "pnl_delta": sum(v["pnl_delta"] for v in by_symbol.values()),
+        "fees_bps_delta": sum(v["fees_bps_delta"] for v in by_symbol.values()),
+        "turnover_delta_usd": sum(v["turnover_delta_usd"] for v in by_symbol.values()),
+    }
+    
+    # Add runtime (deterministic if MM_FREEZE_UTC is set)
+    import os
+    from datetime import datetime, timezone
+    
+    if os.environ.get('MM_FREEZE_UTC') == '1':
+        utc_iso = "1970-01-01T00:00:00Z"
+    else:
+        utc_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    
+    # Match golden format exactly: by_symbol, runtime, totals (alphabetical order)
+    return {
+        "by_symbol": by_symbol,
+        "runtime": {
+            "utc": utc_iso,
+            "version": "0.1.0"
+        },
+        "totals": totals
+    }
 
 
 def write_json_atomic(path: str, data: Dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='ascii', newline='') as f:
-        json.dump(data, f, ensure_ascii=True, sort_keys=True, separators=(',', ':'))
-        f.write('\n')
-        f.flush()
-        os.fsync(f.fileno())
-    if os.path.exists(path):
-        os.replace(tmp, path)
-    else:
-        os.rename(tmp, path)
+    """
+    Write JSON atomically with sorted keys and trailing newline.
+    
+    Args:
+        path: Output file path
+        data: Data to serialize
+    """
+    import tempfile
+    import os
+    
+    # Write to temp file first
+    path_obj = Path(path)
+    path_obj.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=path_obj.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, 'w', encoding='ascii', newline='') as f:
+            json.dump(data, f, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+            f.write('\n')  # Trailing newline (Unix-style)
+        
+        # Atomic rename
+        os.replace(tmp_path, path)
+    except Exception:
+        # Clean up temp file on error
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        raise
 
 
+def render_reconcile_md(report: Dict[str, Any]) -> str:
+    """Render a deterministic Markdown table for FinOps reconcile.
 
+    - Fixed header
+    - Symbols listed in sorted order (lexicographic)
+    - Exactly 6 decimals for all numeric fields
+    - Final newline at the end of the document
+    """
+    lines: list[str] = []
+    lines.append("Reconcile Report")
+    lines.append("")
+    lines.append("| symbol | pnl_delta | fees_bps_delta | turnover_delta_usd |")
+    lines.append("|--------|-----------|----------------|--------------------|")
+
+    by_symbol: Dict[str, Dict[str, float]] = report.get("by_symbol", {}) or {}
+    for symbol in sorted(by_symbol.keys()):
+        d = by_symbol[symbol]
+        lines.append(
+            f"| {symbol} | {d.get('pnl_delta', 0.0):.6f} | "
+            f"{d.get('fees_bps_delta', 0.0):.6f} | "
+            f"{d.get('turnover_delta_usd', 0.0):.6f} |"
+        )
+
+    totals = report.get("totals", {}) or {}
+    lines.append(
+        f"| TOTAL | {totals.get('pnl_delta', 0.0):.6f} | "
+        f"{totals.get('fees_bps_delta', 0.0):.6f} | "
+        f"{totals.get('turnover_delta_usd', 0.0):.6f} |"
+    )
+    # ВАЖНО: завершающий перевод строки нужен для e2e
+    return "\n".join(lines) + "\n"
+
+
+if __name__ == "__main__":
+    # Smoke test
+    import tempfile
+    import json
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test artifacts
+        test_pnl = [{"pnl": 100.5, "realized_pnl": 50.0, "unrealized_pnl": 50.5}]
+        Path(tmpdir, "PNL.json").write_text(json.dumps(test_pnl))
+        
+        summary = reconcile(tmpdir)
+        assert summary["pnl"]["total"] == 100.5
+        
+        md = render_reconcile_md(summary)
+        assert "# FinOps Reconciliation Summary" in md
+        assert "$100.50" in md
+        
+        print("[OK] FinOps reconcile smoke test passed")

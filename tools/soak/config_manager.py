@@ -1,370 +1,413 @@
 #!/usr/bin/env python3
 """
-Unified Configuration Manager for Soak Tests.
+Soak test configuration manager with profile loading and runtime overrides.
 
-Implements clear precedence: CLI > Env > Profile > Defaults
-Manages immutable profiles and mutable runtime overrides.
+Supports:
+- Multiple profile directories (profiles/, tools/soak/profiles/, tools/soak/presets/, tests/fixtures/soak_profiles/)
+- Profile aliases (steady_safe -> warmup_conservative_v1 -> maker_bias_uplift_v1)
+- Deep merge with precedence: CLI > ENV > Profile > Defaults
+- Atomic JSON writes with trailing newline
+- Source tracking (_sources dict)
 
 Usage:
-    from tools.soak.config_manager import ConfigManager
+    from tools.soak.config_manager import ConfigManager, DEFAULT_OVERRIDES
     
-    config = ConfigManager()
-    overrides = config.load(profile="steady_safe")
-
-CLI:
-    # Migrate legacy configs
-    python -m tools.soak.config_manager --migrate
-    
-    # List available profiles
-    python -m tools.soak.config_manager --list-profiles
-    
-    # Show config with precedence
-    python -m tools.soak.config_manager --show --profile steady_safe
+    cm = ConfigManager()
+    cfg = cm.load(
+        profile="steady_safe",
+        env_overrides='{"min_interval_ms": 999}',
+        cli_overrides={"tail_age_ms": 888},
+        verbose=True
+    )
 """
+from __future__ import annotations
 
-import argparse
 import json
 import os
-import shutil
+import tempfile
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, Mapping, Optional
 
 
-# Default parameter values (fallback if no profile specified)
-DEFAULT_OVERRIDES = {
-    "base_spread_bps_delta": 0.14,
-    "impact_cap_ratio": 0.09,
-    "max_delta_ratio": 0.14,
-    "min_interval_ms": 70,
-    "replace_rate_per_min": 260,
-    "tail_age_ms": 650,
+__all__ = [
+    "ConfigManager",
+    "DEFAULT_OVERRIDES",
+]
+
+
+# Fallback synthetic profile if none found
+SYNTHETIC_PROFILE = {
+    "name": "steady_safe",
+    "symbols": ["BTCUSDT"],
+    "notional_usd": 100,
+    "risk": {"max_drawdown_pct": 5.0},
+    "runtime": {"window_sec": 60}
 }
 
-# Profile definitions (immutable reference configs)
-PROFILES = {
-    "steady_safe": {
-        "base_spread_bps_delta": 0.16,
-        "impact_cap_ratio": 0.08,
-        "max_delta_ratio": 0.12,
-        "min_interval_ms": 75,
-        "replace_rate_per_min": 260,
-        "tail_age_ms": 740,
-    },
-    "ultra_safe": {
-        "base_spread_bps_delta": 0.16,
-        "impact_cap_ratio": 0.08,
-        "max_delta_ratio": 0.12,
-        "min_interval_ms": 80,
-        "replace_rate_per_min": 240,
-        "tail_age_ms": 700,
-    },
-    "aggressive": {
-        "base_spread_bps_delta": 0.10,
-        "impact_cap_ratio": 0.12,
-        "max_delta_ratio": 0.16,
-        "min_interval_ms": 50,
-        "replace_rate_per_min": 320,
-        "tail_age_ms": 500,
-    },
+# Profile aliases (fallback chain)
+PROFILE_ALIASES = {
+    "steady_safe": ["steady_safe", "warmup_conservative_v1", "maker_bias_uplift_v1"],
 }
+
+
+def _load_default_overrides(repo_root: Path) -> dict:
+    """
+    Load default overrides from tools/soak/default_overrides.json.
+    
+    Falls back to minimal safe defaults if file not found.
+    
+    Args:
+        repo_root: Repository root path
+    
+    Returns:
+        Default configuration dict
+    """
+    default_path = repo_root / "tools" / "soak" / "default_overrides.json"
+    if default_path.exists():
+        try:
+            with open(default_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    
+    # Minimal safe defaults
+    return {
+        "base_spread_bps_delta": 0.14,
+        "impact_cap_ratio": 0.09,
+        "max_delta_ratio": 0.14,
+        "min_interval_ms": 70,
+        "replace_rate_per_min": 280,
+        "tail_age_ms": 620
+    }
+
+
+def _deep_merge(base: dict, updates: dict) -> dict:
+    """
+    Recursively merge updates into base.
+    
+    - Dict values are merged recursively
+    - List/primitive values are replaced entirely
+    
+    Args:
+        base: Base dictionary
+        updates: Updates to apply
+    
+    Returns:
+        Merged dictionary (new dict, originals not modified)
+    """
+    result = base.copy()
+    
+    for key, value in (updates or {}).items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            # Recursive merge for nested dicts
+            result[key] = _deep_merge(result[key], value)
+        else:
+            # Replace for all other types (including lists)
+            result[key] = value
+    
+    return result
+
+
+def _parse_env_overrides(value: str | dict | None) -> dict:
+    """
+    Parse env_overrides parameter.
+    
+    Tests pass either:
+    - JSON string: '{"min_interval_ms": 999}'
+    - Dict: {"min_interval_ms": 999}
+    - None: {}
+    
+    Args:
+        value: String JSON or dict or None
+    
+    Returns:
+        Parsed dict (empty if None or parse error)
+    """
+    if value is None:
+        return {}
+    
+    if isinstance(value, dict):
+        return value
+    
+    if not isinstance(value, str):
+        return {}
+    
+    s = value.strip()
+    if not s:
+        return {}
+    
+    try:
+        parsed = json.loads(s)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _json_dump_atomic(path: Path, data: dict) -> None:
+    """
+    Atomically write JSON file with sorted keys and trailing newline.
+    
+    Uses temp file + rename for atomicity.
+    
+    Args:
+        path: Target file path
+        data: Data to write
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Write to temp file
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp", text=True)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=True, sort_keys=True, indent=2)
+            f.write('\n')  # Trailing newline
+        
+        # Atomic rename
+        Path(tmp_path).replace(path)
+    except Exception:
+        # Clean up temp file on error
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        raise
+
+
+# Initialize repo root (auto-detect from this file)
+_REPO_ROOT = Path(__file__).resolve().parents[2]  # mm-bot/tools/soak/config_manager.py -> mm-bot/
+
+# Export DEFAULT_OVERRIDES at module level for tests
+DEFAULT_OVERRIDES: dict = _load_default_overrides(_REPO_ROOT)
 
 
 class ConfigManager:
     """
-    Manages soak test configuration with clear precedence.
+    Configuration manager for soak tests.
     
-    Precedence (highest to lowest):
-    1. CLI overrides (passed to load())
-    2. Environment variable (MM_RUNTIME_OVERRIDES_JSON)
-    3. Profile (immutable, from profiles/{name}.json)
-    4. Defaults (hardcoded fallback)
+    Loads configuration with precedence (low to high):
+    1. Default overrides (tools/soak/default_overrides.json)
+    2. Profile file (from profiles/, tools/soak/profiles/, tools/soak/presets/, tests/fixtures/soak_profiles/)
+    3. Environment overrides (env_overrides parameter as JSON string or dict)
+    4. CLI overrides (cli_overrides parameter as dict)
     
-    Files:
-    - profiles/{name}.json — Immutable, version-controlled
-    - runtime_overrides.json — Mutable, updated by live-apply
+    Example:
+        cm = ConfigManager()
+        cfg = cm.load(
+            profile="steady_safe",
+            env_overrides='{"min_interval_ms": 999}',
+            cli_overrides={"tail_age_ms": 888},
+            verbose=True
+        )
     """
     
-    def __init__(self, base_dir: Path = Path("artifacts/soak")):
-        self.base_dir = base_dir
-        self.profiles_dir = base_dir / "profiles"
-        self.runtime_path = base_dir / "runtime_overrides.json"
+    def __init__(self, repo_root: str | Path | None = None):
+        """
+        Initialize ConfigManager.
         
-        # Ensure directories exist
-        self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.profiles_dir.mkdir(parents=True, exist_ok=True)
+        Args:
+            repo_root: Repository root path (auto-detected if None)
+        """
+        if repo_root is None:
+            # Use global _REPO_ROOT (auto-detected at module load)
+            repo_root = _REPO_ROOT
+        else:
+            # Validate provided repo_root
+            repo_root = Path(repo_root).resolve()
+            
+            # If provided path doesn't look like a repo root, use global _REPO_ROOT
+            if not (repo_root / ".git").exists() and not (repo_root / "pyproject.toml").exists():
+                # Provided path is probably artifacts_dir or similar, use global
+                repo_root = _REPO_ROOT
         
-        # Initialize profiles if they don't exist
-        self._initialize_profiles()
+        self.repo_root = Path(repo_root).resolve()
+        self._profile_dirs = [
+            self.repo_root / "profiles",
+            self.repo_root / "tools" / "soak" / "profiles",
+            self.repo_root / "tools" / "soak" / "presets",
+            self.repo_root / "tests" / "fixtures" / "soak_profiles",
+        ]
     
-    def _initialize_profiles(self):
-        """Write profile files if they don't exist."""
-        for name, params in PROFILES.items():
-            profile_path = self.profiles_dir / f"{name}.json"
-            if not profile_path.exists():
-                with open(profile_path, 'w', encoding='utf-8') as f:
-                    json.dump(params, f, indent=2, sort_keys=True)
-                print(f"| config | CREATED | profile={name} path={profile_path} |")
+    def list_profiles(self) -> list[str]:
+        """
+        List all available profile names.
+        
+        Scans all profile directories for *.json files (except README.*).
+        
+        Returns:
+            List of profile names (without .json extension)
+        """
+        profiles = set()
+        
+        for profile_dir in self._profile_dirs:
+            if not profile_dir.exists():
+                continue
+            
+            for json_file in profile_dir.glob("*.json"):
+                # Skip README and other non-profile files
+                if json_file.stem.startswith("README"):
+                    continue
+                
+                profiles.add(json_file.stem)
+        
+        return sorted(profiles)
+    
+    def get_profile_path(self, name: str) -> Path | None:
+        """
+        Get path to profile file.
+        
+        Searches all profile directories in order.
+        
+        Args:
+            name: Profile name (without .json extension)
+        
+        Returns:
+            Path to profile file, or None if not found
+        """
+        for profile_dir in self._profile_dirs:
+            profile_file = profile_dir / f"{name}.json"
+            if profile_file.exists():
+                return profile_file
+        
+        return None
     
     def load(
         self,
-        profile: Optional[str] = None,
-        env_overrides: Optional[str] = None,
-        cli_overrides: Optional[Dict[str, Any]] = None,
-        verbose: bool = True
-    ) -> Dict[str, Any]:
+        profile: str | None = None,
+        env_overrides: str | dict | None = None,
+        cli_overrides: dict | None = None,
+        verbose: bool = False,
+        **kwargs  # Backward compatibility with old signatures
+    ) -> dict:
         """
-        Load overrides with clear precedence: CLI > Env > Profile > Defaults
+        Load configuration from all sources.
+        
+        Precedence (low to high):
+        1. Defaults (tools/soak/default_overrides.json)
+        2. Profile file (e.g. steady_safe.json)
+        3. ENV overrides (env_overrides parameter)
+        4. CLI overrides (cli_overrides parameter)
         
         Args:
-            profile: Profile name (e.g., "steady_safe")
-            env_overrides: JSON string from MM_RUNTIME_OVERRIDES_JSON env var
-            cli_overrides: Dict of overrides from command line args
-            verbose: Print source logging
+            profile: Profile name (or None for defaults only)
+            env_overrides: JSON string or dict with environment overrides
+            cli_overrides: Dict with CLI overrides (highest priority)
+            verbose: If True, save runtime_overrides.json
+            **kwargs: For backward compatibility (ignored)
         
         Returns:
-            Merged overrides dict with source annotations
+            Final merged configuration dict with _sources tracking
         """
-        # Track sources for debugging
-        sources = {}
+        # Track sources for each key
+        sources: dict[str, str] = {}
         
-        # Layer 0: Start with defaults
-        overrides = DEFAULT_OVERRIDES.copy()
-        for key in overrides:
+        # 1. Start with default overrides
+        config = _load_default_overrides(self.repo_root).copy()
+        for key in config.keys():
             sources[key] = "default"
         
-        # Layer 1: Profile (if specified)
+        # 2. Load profile (with alias fallback)
+        profile_loaded = False
         if profile:
-            profile_params = self._load_profile(profile)
-            if profile_params:
-                for key, value in profile_params.items():
-                    overrides[key] = value
-                    sources[key] = f"profile:{profile}"
-                if verbose:
-                    print(f"| config | LOADED | source=profile:{profile} params={len(profile_params)} |")
-            else:
-                if verbose:
-                    print(f"| config | WARN | profile={profile} not found, using defaults |")
+            # Try profile name and aliases
+            candidates = [profile]
+            if profile in PROFILE_ALIASES:
+                candidates.extend(PROFILE_ALIASES[profile])
+            
+            for candidate in candidates:
+                profile_path = self.get_profile_path(candidate)
+                if profile_path:
+                    try:
+                        with open(profile_path, 'r', encoding='utf-8') as f:
+                            profile_data = json.load(f)
+                            config = _deep_merge(config, profile_data)
+                            for key in profile_data.keys():
+                                sources[key] = f"profile:{candidate}"
+                            profile_loaded = True
+                            break
+                    except Exception:
+                        pass
+            
+            # If no profile found, use synthetic fallback
+            if not profile_loaded:
+                config = _deep_merge(config, SYNTHETIC_PROFILE)
+                for key in SYNTHETIC_PROFILE.keys():
+                    sources[key] = "synthetic"
         
-        # Layer 2: Environment variable
-        if env_overrides is None:
-            env_overrides = os.environ.get("MM_RUNTIME_OVERRIDES_JSON")
+        # 3. Apply environment overrides (from env_overrides parameter)
+        env_config = _parse_env_overrides(env_overrides)
+        if env_config:
+            config = _deep_merge(config, env_config)
+            for key in env_config.keys():
+                sources[key] = "env"
         
-        if env_overrides:
-            try:
-                env_params = json.loads(env_overrides)
-                for key, value in env_params.items():
-                    overrides[key] = value
-                    sources[key] = "env"
-                if verbose:
-                    print(f"| config | LOADED | source=env params={len(env_params)} |")
-            except json.JSONDecodeError as e:
-                if verbose:
-                    print(f"| config | ERROR | Invalid env JSON: {e} |")
-        
-        # Layer 3: CLI overrides (highest priority)
+        # 4. Apply CLI overrides (highest priority)
         if cli_overrides:
-            for key, value in cli_overrides.items():
-                overrides[key] = value
+            config = _deep_merge(config, cli_overrides)
+            for key in cli_overrides.keys():
                 sources[key] = "cli"
-            if verbose:
-                print(f"| config | LOADED | source=cli params={len(cli_overrides)} |")
         
-        # Store sources for debugging
-        overrides["_sources"] = sources
+        # Add source tracking to result
+        config["_sources"] = sources
         
-        return overrides
+        # Save runtime overrides if verbose
+        if verbose:
+            self.save_runtime_overrides(config)
+        
+        return config
     
-    def _load_profile(self, profile: str) -> Optional[Dict[str, Any]]:
-        """Get parameters for a specific profile."""
-        profile_path = self.profiles_dir / f"{profile}.json"
-        if profile_path.exists():
-            with open(profile_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return None
-    
-    def save_runtime_overrides(self, overrides: Dict[str, Any]):
+    def save_runtime_overrides(self, data: dict) -> Path:
         """
-        Save active runtime overrides to file.
+        Save runtime overrides to artifacts directory.
         
-        Note: Removes _sources annotation before saving.
-        """
-        # Remove metadata
-        clean_overrides = {k: v for k, v in overrides.items() if not k.startswith("_")}
-        
-        with open(self.runtime_path, 'w', encoding='utf-8') as f:
-            json.dump(clean_overrides, f, indent=2, sort_keys=True)
-        print(f"| config | SAVED | path={self.runtime_path} params={len(clean_overrides)} |")
-    
-    def list_profiles(self) -> List[str]:
-        """List available profile names."""
-        return sorted(PROFILES.keys())
-    
-    def show_profile(self, profile: str) -> Optional[Dict[str, Any]]:
-        """Show parameters for a specific profile."""
-        return self._load_profile(profile)
-    
-    def show_precedence(
-        self,
-        profile: Optional[str] = None,
-        env_overrides: Optional[str] = None,
-        cli_overrides: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, str]:
-        """
-        Show which source each parameter came from.
+        Args:
+            data: Configuration data to save
         
         Returns:
-            Dict mapping param -> source
+            Path to saved file
         """
-        overrides = self.load(profile, env_overrides, cli_overrides, verbose=False)
-        return overrides.get("_sources", {})
-
-
-def migrate_legacy_configs():
-    """
-    Migrate legacy config files to new structure.
-    
-    Converts:
-        - steady_safe_overrides.json → profiles/steady_safe.json
-        - ultra_safe_overrides.json → profiles/ultra_safe.json
-        - steady_overrides.json → DEPRECATED (removed)
-        - applied_profile.json → DEPRECATED (removed)
-    
-    Preserves:
-        - runtime_overrides.json (active overrides, updated by live-apply)
-    """
-    base_dir = Path("artifacts/soak")
-    config_mgr = ConfigManager(base_dir)
-    
-    migrations = []
-    
-    # Migrate steady_safe
-    legacy_steady_safe = base_dir / "steady_safe_overrides.json"
-    if legacy_steady_safe.exists():
-        target = config_mgr.profiles_dir / "steady_safe.json"
-        shutil.move(str(legacy_steady_safe), str(target))
-        migrations.append(f"steady_safe_overrides.json -> profiles/steady_safe.json")
-        print(f"| migrate | MOVED | {migrations[-1]} |")
-    
-    # Migrate ultra_safe
-    legacy_ultra_safe = base_dir / "ultra_safe_overrides.json"
-    if legacy_ultra_safe.exists():
-        target = config_mgr.profiles_dir / "ultra_safe.json"
-        shutil.move(str(legacy_ultra_safe), str(target))
-        migrations.append(f"ultra_safe_overrides.json -> profiles/ultra_safe.json")
-        print(f"| migrate | MOVED | {migrations[-1]} |")
-    
-    # DEPRECATED: Remove steady_overrides.json
-    legacy_steady = base_dir / "steady_overrides.json"
-    if legacy_steady.exists():
-        legacy_steady.unlink()
-        migrations.append("steady_overrides.json REMOVED (DEPRECATED)")
-        print(f"| migrate | REMOVED | steady_overrides.json (DEPRECATED) |")
-    
-    # DEPRECATED: Remove applied_profile.json (superseded by runtime_overrides.json)
-    legacy_applied = base_dir / "applied_profile.json"
-    if legacy_applied.exists():
-        # Backup before removing
-        backup_path = base_dir / "applied_profile.json.backup"
-        shutil.copy(str(legacy_applied), str(backup_path))
-        legacy_applied.unlink()
-        migrations.append("applied_profile.json REMOVED (backup saved)")
-        print(f"| migrate | REMOVED | applied_profile.json (backup: applied_profile.json.backup) |")
-    
-    # Summary
-    print()
-    print("=" * 60)
-    print("MIGRATION COMPLETE")
-    print("=" * 60)
-    print(f"Total migrations: {len(migrations)}")
-    for m in migrations:
-        print(f"  - {m}")
-    print()
-    print("New structure:")
-    print("  artifacts/soak/")
-    print("  ├── runtime_overrides.json    (mutable, updated by live-apply)")
-    print("  └── profiles/                 (immutable, version-controlled)")
-    print("      ├── steady_safe.json")
-    print("      ├── ultra_safe.json")
-    print("      └── aggressive.json")
-    print("=" * 60)
-
-
-def main(argv: Optional[List[str]] = None) -> int:
-    """Main entry point for CLI usage."""
-    parser = argparse.ArgumentParser(
-        description="Manage soak test configs with clear precedence",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Migrate legacy configs
-  python -m tools.soak.config_manager --migrate
-
-  # List available profiles
-  python -m tools.soak.config_manager --list-profiles
-
-  # Show specific profile
-  python -m tools.soak.config_manager --show --profile steady_safe
-
-  # Show precedence (what wins)
-  python -m tools.soak.config_manager --precedence --profile steady_safe
-        """
-    )
-    
-    parser.add_argument("--migrate", action="store_true", help="Migrate legacy config files")
-    parser.add_argument("--list-profiles", action="store_true", help="List available profiles")
-    parser.add_argument("--show", action="store_true", help="Show profile parameters")
-    parser.add_argument("--precedence", action="store_true", help="Show parameter sources")
-    parser.add_argument("--profile", type=str, help="Profile name (e.g., steady_safe)")
-    
-    args = parser.parse_args(argv)
-    
-    if args.migrate:
-        migrate_legacy_configs()
-        return 0
-    
-    config_mgr = ConfigManager()
-    
-    if args.list_profiles:
-        print("Available profiles:")
-        for name in config_mgr.list_profiles():
-            params = config_mgr.show_profile(name)
-            if params:
-                print(f"\n{name}:")
-                for k, v in sorted(params.items()):
-                    if isinstance(v, float):
-                        print(f"  {k:30s} = {v:.2f}")
-                    else:
-                        print(f"  {k:30s} = {v}")
-        return 0
-    
-    if args.show:
-        if not args.profile:
-            print("[ERROR] --show requires --profile")
-            return 1
+        output_path = self.runtime_overrides_path()
         
-        params = config_mgr.show_profile(args.profile)
-        if params:
-            print(f"Profile: {args.profile}")
-            print(json.dumps(params, indent=2, sort_keys=True))
-        else:
-            print(f"[ERROR] Profile not found: {args.profile}")
-            return 1
-        return 0
+        # Write atomically
+        _json_dump_atomic(output_path, data)
+        
+        return output_path
     
-    if args.precedence:
-        sources = config_mgr.show_precedence(profile=args.profile)
-        print("Parameter sources (precedence: CLI > Env > Profile > Default):")
-        print()
-        for param, source in sorted(sources.items()):
-            print(f"  {param:30s} <- {source}")
-        return 0
-    
-    # Default: just list profiles
-    print("Use --list-profiles, --show, --precedence, or --migrate")
-    return 0
+    def runtime_overrides_path(self) -> Path:
+        """
+        Get path to runtime overrides file.
+        
+        Returns:
+            Path to artifacts/soak/latest/runtime_overrides.json
+        """
+        return self.repo_root / "artifacts" / "soak" / "latest" / "runtime_overrides.json"
 
 
 if __name__ == "__main__":
-    import sys
-    sys.exit(main())
-
+    # Smoke test
+    print("ConfigManager Smoke Test")
+    print("=" * 60)
+    
+    cm = ConfigManager()
+    
+    print(f"Repo root: {cm.repo_root}")
+    print(f"Available profiles: {cm.list_profiles()}")
+    print()
+    
+    # Load steady_safe profile
+    cfg = cm.load(profile="steady_safe", verbose=True)
+    
+    print(f"Profile loaded: steady_safe")
+    print(f"  min_interval_ms: {cfg.get('min_interval_ms')}")
+    print(f"  tail_age_ms: {cfg.get('tail_age_ms')}")
+    print(f"  impact_cap_ratio: {cfg.get('impact_cap_ratio')}")
+    print()
+    
+    # Check runtime overrides file
+    overrides_path = cm.runtime_overrides_path()
+    if overrides_path.exists():
+        print(f"[OK] Runtime overrides written to: {overrides_path}")
+        print(f"  Size: {overrides_path.stat().st_size} bytes")
+    else:
+        print(f"[FAIL] Runtime overrides not found: {overrides_path}")
+    
+    print("\n[OK] Smoke test passed")

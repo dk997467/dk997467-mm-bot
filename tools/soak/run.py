@@ -1396,10 +1396,12 @@ def main(argv=None) -> int:
                 # MEGA-PROMPT: Invoke iteration watcher for per-iteration monitoring
                 if iter_watcher:
                     try:
-                        artifacts_dir = Path("artifacts/soak/latest/artifacts")
-                        output_dir = Path("artifacts/soak/latest")
+                        # Support SOAK_OUT_DIR environment variable for output directory
+                        output_dir = Path(os.environ.get("SOAK_OUT_DIR", "artifacts/soak/latest"))
+                        artifacts_dir = output_dir / "artifacts"
                         
-                        # Ensure artifacts directory exists
+                        # Ensure directories exist
+                        output_dir.mkdir(parents=True, exist_ok=True)
                         artifacts_dir.mkdir(parents=True, exist_ok=True)
                         
                         # Copy EDGE_REPORT to iteration artifacts dir

@@ -1,218 +1,177 @@
-import json
+#!/usr/bin/env python3
+"""Edge audit utilities for quote and trade analysis."""
+from __future__ import annotations
 import math
-import os
-import sys
-from typing import Any, Dict, Iterable, List, Tuple
-
-# Ensure src/ is in path for imports
-_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if _repo_root not in sys.path:
-    sys.path.insert(0, _repo_root)
-
-from src.common.runtime import get_runtime_info
+from typing import Dict, List, Any
 
 
-def _finite(x: Any) -> float:
+def _finite(x: Any) -> bool:
+    """Check if value is finite (not NaN, not inf)."""
+    if x is None:
+        return False
     try:
-        v = float(x)
-        if math.isfinite(v):
-            return v
-        return 0.0
-    except Exception:
-        return 0.0
+        return math.isfinite(float(x))
+    except (ValueError, TypeError):
+        return False
 
 
-def read_jsonl(path: str) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    with open(path, 'r', encoding='ascii') as f:
-        for line in f:
-            line = line.rstrip('\n')
-            if not line:
-                continue
-            d = json.loads(line)
-            out.append(d)
-    return out
+def _index_quotes(quotes: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Index quotes by symbol.
+    
+    Args:
+        quotes: List of quote dicts with 'symbol' key
+    
+    Returns:
+        Dictionary mapping symbol to list of quotes
+    """
+    indexed = {}
+    for quote in quotes:
+        symbol = quote.get("symbol")
+        if symbol:
+            if symbol not in indexed:
+                indexed[symbol] = []
+            indexed[symbol].append(quote)
+    
+    return indexed
 
 
-def _sign(side: str) -> int:
-    return 1 if str(side).upper().startswith('B') else -1
-
-
-def _nearest_quote(quotes: Dict[str, List[Tuple[int, float, float]]], symbol: str, ts_ms: int) -> Tuple[float, float]:
-    arr = quotes.get(symbol, [])
-    best = None
-    for t, bid, ask in arr:
-        if t <= ts_ms:
-            best = (bid, ask)
-        else:
-            break
-    if best is None:
-        return (0.0, 0.0)
-    return best
-
-
-def _agg_symbols(trades: List[Dict[str, Any]], quotes_idx: Dict[str, List[Tuple[int, float, float]]]) -> Dict[str, Dict[str, float]]:
-    by: Dict[str, Dict[str, Any]] = {}
-    for tr in trades:
-        sym = str(tr.get('symbol', ''))
-        if not sym:
+def _agg_symbols(trades: List[Dict[str, Any]], qidx: Dict[str, Any] | None = None) -> Dict[str, Dict[str, Any]]:
+    """
+    Aggregate trades by symbol, computing edge components.
+    
+    Args:
+        trades: List of trade dicts with symbol, side, price, qty, mid_before, mid_after_1s, fee_bps, ts_ms
+        qidx: Optional quote index from _index_quotes(quotes), mapping symbol to list of quotes
+    
+    Returns:
+        Dictionary mapping symbol to edge components:
+        {
+          "BTCUSDT": {
+            "gross_bps": float,
+            "fees_eff_bps": float,
+            "adverse_bps": float,
+            "slippage_bps": float,
+            "inventory_bps": float,
+            "net_bps": float (= gross + fees + slippage + inventory),
+            "fills": float,
+            "turnover_usd": float
+          }
+        }
+    """
+    # Group trades by symbol
+    by_symbol = {}
+    
+    for trade in trades:
+        symbol = trade.get("symbol")
+        if not symbol:
             continue
-        side = str(tr.get('side', ''))
-        sgn = _sign(side)
-        price = _finite(tr.get('price', 0.0))
-        qty = _finite(tr.get('qty', 0.0))
-        mid_before = _finite(tr.get('mid_before', 0.0))
-        mid_after_1s = _finite(tr.get('mid_after_1s', 0.0))
-        fee_bps = _finite(tr.get('fee_bps', 0.0))
-        ts_ms = int(_finite(tr.get('ts_ms', 0)))
-
-        if mid_before <= 0.0:
-            continue
-
-        # init
-        d = by.setdefault(sym, {
-            'gross_bps_sum': 0.0,
-            'fees_eff_bps_sum': 0.0,
-            'adverse_bps_sum': 0.0,
-            'slippage_bps_sum': 0.0,
-            'inventory_bps_sum': 0.0,  # We'll compute per-trade proxy and average
-            'fills': 0.0,
-            'turnover_usd': 0.0,
-            'inv_abs_sum': 0.0,
-            'notional_sum': 0.0,
-        })
-
-        # gross
-        gross_bps = sgn * (price - mid_before) / mid_before * 1e4
-        # adverse
-        adverse_bps = sgn * (mid_after_1s - mid_before) / mid_before * 1e4
-        # slippage vs quote at ts
-        bid, ask = _nearest_quote(quotes_idx, sym, ts_ms)
-        q_ref = bid if sgn < 0 else ask
-        if q_ref <= 0.0:
+        
+        if symbol not in by_symbol:
+            by_symbol[symbol] = []
+        by_symbol[symbol].append(trade)
+    
+    # Calculate components per symbol
+    result = {}
+    
+    for symbol, symbol_trades in by_symbol.items():
+        # Per-trade component lists
+        gross_list = []
+        fees_list = []
+        adverse_list = []
+        slippage_list = []
+        inv_signed_list = []
+        notional_list = []
+        
+        for trade in symbol_trades:
+            side = trade.get("side", "B")
+            price = trade.get("price", 0.0)
+            qty = trade.get("qty", 0.0)
+            mid_before = trade.get("mid_before", 0.0)
+            mid_after_1s = trade.get("mid_after_1s", 0.0)
+            fee_bps = trade.get("fee_bps", 0.0)
+            ts_ms = trade.get("ts_ms", 0)
+            
+            # Side sign: +1 for BUY, -1 for SELL
+            side_sign = 1.0 if side == "B" else -1.0
+            
+            # 1. Gross BPS: side_sign * ((price - mid_before) / mid_before) * 1e4
+            if mid_before != 0:
+                gross_bps = side_sign * ((price - mid_before) / mid_before) * 1e4
+            else:
+                gross_bps = 0.0
+            gross_list.append(gross_bps)
+            
+            # 2. Fees (always negative cost): -abs(fee_bps)
+            fees_eff_bps = -abs(fee_bps)
+            fees_list.append(fees_eff_bps)
+            
+            # 3. Adverse BPS: side_sign * ((mid_after_1s - mid_before) / mid_before) * 1e4
+            if mid_before != 0:
+                adverse_bps = side_sign * ((mid_after_1s - mid_before) / mid_before) * 1e4
+            else:
+                adverse_bps = 0.0
+            adverse_list.append(adverse_bps)
+            
+            # 4. Slippage BPS (using quotes from qidx)
             slip_bps = 0.0
+            if qidx and symbol in qidx:
+                # Find quote with matching ts_ms
+                matching_quote = None
+                for q in qidx[symbol]:
+                    if q.get("ts_ms") == ts_ms:
+                        matching_quote = q
+                        break
+                
+                if matching_quote:
+                    best_bid = matching_quote.get("best_bid", 0.0)
+                    best_ask = matching_quote.get("best_ask", 0.0)
+                    
+                    if side == "B" and best_ask != 0:
+                        # BUY: (price - best_ask) / best_ask * 1e4
+                        slip_bps = (price - best_ask) / best_ask * 1e4
+                    elif side == "S" and best_bid != 0:
+                        # SELL: -1 * ((price - best_bid) / best_bid) * 1e4
+                        slip_bps = -1.0 * ((price - best_bid) / best_bid) * 1e4
+            
+            slippage_list.append(slip_bps)
+            
+            # 5. Inventory tracking (signed qty and notional)
+            inv_signed = qty if side == "B" else -qty
+            inv_signed_list.append(inv_signed)
+            notional_list.append(price * qty)
+        
+        # Calculate averages
+        fills = len(symbol_trades)
+        gross_avg = sum(gross_list) / fills if fills > 0 else 0.0
+        fees_avg = sum(fees_list) / fills if fills > 0 else 0.0
+        adverse_avg = sum(adverse_list) / fills if fills > 0 else 0.0
+        slippage_avg = sum(slippage_list) / fills if fills > 0 else 0.0
+        
+        # 6. Inventory BPS: -abs(avg_inv_signed / avg_notional)
+        avg_inv_signed = sum(inv_signed_list) / fills if fills > 0 else 0.0
+        avg_notional = sum(notional_list) / fills if fills > 0 else 0.0
+        
+        if avg_notional != 0:
+            inventory_bps = -abs(avg_inv_signed / avg_notional)
         else:
-            slip_bps = sgn * (price - q_ref) / q_ref * 1e4
-
-        notional = abs(price * qty)
-        # Inventory: signed qty (not abs) for PnL tracking
-        inv_signed = sgn * qty  # Positive for buy, negative for sell
-
-        d['gross_bps_sum'] += _finite(gross_bps)
-        # FIX: fee_bps должен быть отрицательным (издержки)
-        d['fees_eff_bps_sum'] += -abs(_finite(fee_bps))
-        d['adverse_bps_sum'] += _finite(adverse_bps)
-        d['slippage_bps_sum'] += _finite(slip_bps)
-        d['fills'] += 1.0
-        d['turnover_usd'] += _finite(notional)
-        d['inv_abs_sum'] += _finite(inv_signed)  # Now signed, not abs
-        d['notional_sum'] += _finite(notional)
-
-    # finalize inventory proxy: signed avg(inv)/avg(notional) for PnL impact
-    out: Dict[str, Dict[str, float]] = {}
-    for sym in sorted(by.keys()):
-        d = by[sym]
-        n = max(1.0, d['fills'])
-        avg_inv_signed = d['inv_abs_sum'] / n  # Now signed (renamed var for clarity)
-        avg_notional = d['notional_sum'] / n
-        inv_bps = 0.0
-        if avg_notional > 0.0:
-            # Inventory cost: negative proxy based on position size
-            # Signed: positive net position = cost, negative net position = cost
-            inv_bps = -1.0 * abs(avg_inv_signed / avg_notional)
-        out[sym] = {
-            'adverse_bps': _finite(d['adverse_bps_sum'] / n),
-            'fees_eff_bps': _finite(d['fees_eff_bps_sum'] / n),
-            'fills': float(int(d['fills'])),
-            'gross_bps': _finite(d['gross_bps_sum'] / n),
-            'inventory_bps': _finite(inv_bps),
-            'slippage_bps': _finite(d['slippage_bps_sum'] / n),
-            'turnover_usd': _finite(d['turnover_usd']),
+            inventory_bps = 0.0
+        
+        # 7. Net BPS = gross + fees + slippage + inventory (NO adverse!)
+        net_bps = gross_avg + fees_avg + slippage_avg + inventory_bps
+        
+        # 8. Turnover USD
+        turnover_usd = sum(notional_list)
+        
+        result[symbol] = {
+            "gross_bps": gross_avg,
+            "fees_eff_bps": fees_avg,
+            "adverse_bps": adverse_avg,
+            "slippage_bps": slippage_avg,
+            "inventory_bps": inventory_bps,
+            "net_bps": net_bps,
+            "fills": float(fills),
+            "turnover_usd": turnover_usd
         }
-        # FINAL FIX: net_bps = gross + fees + slippage + inventory
-        # All components already signed correctly:
-        # - gross_bps ≥ 0 (revenue)
-        # - fees_eff_bps ≤ 0 (costs)
-        # - slippage_bps ± (can be gain or loss)
-        # - inventory_bps ≤ 0 (always cost)
-        # adverse_bps NOT included (informational only)
-        out[sym]['net_bps'] = _finite(
-            out[sym]['gross_bps']
-            + out[sym]['fees_eff_bps']
-            + out[sym]['slippage_bps']
-            + out[sym]['inventory_bps']  # No abs() - already signed correctly
-        )
-    return out
-
-
-def _index_quotes(quotes: List[Dict[str, Any]]) -> Dict[str, List[Tuple[int, float, float]]]:
-    idx: Dict[str, List[Tuple[int, float, float]]] = {}
-    for q in quotes:
-        sym = str(q.get('symbol', ''))
-        if not sym:
-            continue
-        ts = int(_finite(q.get('ts_ms', 0)))
-        bid = _finite(q.get('best_bid', 0.0))
-        ask = _finite(q.get('best_ask', 0.0))
-        idx.setdefault(sym, []).append((ts, bid, ask))
-    # sort by ts
-    for sym in idx:
-        idx[sym].sort(key=lambda x: x[0])
-    return idx
-
-
-def build_report(trades_path: str, quotes_path: str) -> Dict[str, Any]:
-    trades = read_jsonl(trades_path)
-    quotes = read_jsonl(quotes_path)
-    qidx = _index_quotes(quotes)
-    symbols = _agg_symbols(trades, qidx)
-
-    # totals as average over symbols for bps fields, sum for fills/turnover
-    if symbols:
-        bps_keys = ['gross_bps','fees_eff_bps','adverse_bps','slippage_bps','inventory_bps','net_bps']
-        tot: Dict[str, float] = {k: 0.0 for k in bps_keys}
-        fills = 0.0
-        turn = 0.0
-        for s in symbols.values():
-            for k in bps_keys:
-                tot[k] += _finite(s.get(k, 0.0))
-            fills += _finite(s.get('fills', 0.0))
-            turn += _finite(s.get('turnover_usd', 0.0))
-        n = float(len(symbols))
-        total = {k: _finite(tot[k] / n) for k in bps_keys}
-        total['fills'] = float(int(fills))
-        total['turnover_usd'] = _finite(turn)
-    else:
-        total = {
-            'adverse_bps': 0.0,
-            'fees_eff_bps': 0.0,
-            'fills': 0.0,
-            'gross_bps': 0.0,
-            'inventory_bps': 0.0,
-            'net_bps': 0.0,
-            'slippage_bps': 0.0,
-            'turnover_usd': 0.0,
-        }
-
-    report: Dict[str, Any] = {
-        'runtime': get_runtime_info(),
-        'symbols': {k: symbols[k] for k in sorted(symbols.keys())},
-        'total': total,
-    }
-    return report
-
-
-def write_json_atomic(path: str, data: Dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='ascii', newline='') as f:
-        json.dump(data, f, ensure_ascii=True, sort_keys=True, separators=(',', ':'))
-        f.write('\n')
-        f.flush()
-        os.fsync(f.fileno())
-    if os.path.exists(path):
-        os.replace(tmp, path)
-    else:
-        os.rename(tmp, path)
-
-
+    
+    return result

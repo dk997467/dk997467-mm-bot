@@ -1,0 +1,24 @@
+{
+  "A": {
+    "name": "Conservative",
+    "max_order_notional": 100,
+    "max_symbols": 1,
+    "max_orders_per_side": 2,
+    "description": "Ultra-conservative: 1 symbol, $100 notional max"
+  },
+  "B": {
+    "name": "Moderate",
+    "max_order_notional": 300,
+    "max_symbols": 2,
+    "max_orders_per_side": 3,
+    "description": "Moderate: 2 symbols, $300 notional max"
+  },
+  "C": {
+    "name": "Aggressive",
+    "max_order_notional": 500,
+    "max_symbols": 5,
+    "max_orders_per_side": 5,
+    "description": "Aggressive: 5 symbols, $500 notional max"
+  }
+}
+

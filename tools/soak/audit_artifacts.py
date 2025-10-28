@@ -22,13 +22,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# UTF-8 safe I/O for cross-platform compatibility
+from tools.common.utf8io import ensure_utf8_stdio, puts, sym
+
+# Ensure UTF-8 output on all platforms
+ensure_utf8_stdio()
+
 # Try pandas, fallback to manual tabulation
 try:
     import pandas as pd
     HAS_PANDAS = True
 except ImportError:
     HAS_PANDAS = False
-    print("[WARN] pandas not available; using manual tabulation", file=sys.stderr)
+    puts("[WARN] pandas not available; using manual tabulation", file=sys.stderr)
 
 # Try matplotlib for plots
 try:
@@ -214,7 +220,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
     # ----- 1. Verify folder structure -----
     print("[1/11] Verifying folder structure...")
     if not base_path.exists():
-        print(f"❌ ERROR: Base directory not found: {base_dir}")
+        puts(f"{sym('fail')} ERROR: Base directory not found: {base_dir}")
         sys.exit(1)
     
     all_files = sorted(base_path.rglob("*"))
@@ -224,7 +230,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
             size_kb = f.stat().st_size / 1024
             file_inventory.append((f.relative_to(base_path), f"{size_kb:.1f} KB"))
     
-    print(f"✓ Base directory exists: {base_path.absolute()}")
+    puts(f"{sym('ok')} Base directory exists: {base_path.absolute()}")
     print(f"  Files found: {len(file_inventory)} (showing first 120)")
     for name, size in file_inventory[:10]:
         print(f"    - {name}: {size}")
@@ -247,7 +253,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
     
     print("Key files:")
     for fname, exists in files_present.items():
-        status = "✓" if exists else "✗ (missing)"
+        status = f"{sym('ok')}" if exists else f"{sym('fail')} (missing)"
         print(f"  {status} {fname}")
     print()
     
@@ -256,9 +262,9 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
     iter_files = sorted(base_path.glob("ITER_SUMMARY_*.json"))
     
     if len(iter_files) < 16:
-        print(f"⚠ WARNING: Only {len(iter_files)} ITER_SUMMARY files found (expected >= 16)")
+        puts(f"{sym('warn')} WARNING: Only {len(iter_files)} ITER_SUMMARY files found (expected >= 16)")
     else:
-        print(f"✓ Found {len(iter_files)} ITER_SUMMARY files")
+        puts(f"{sym('ok')} Found {len(iter_files)} ITER_SUMMARY files")
     
     iter_data = []
     for iter_file in iter_files:
@@ -268,21 +274,21 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
             
             iter_idx = data.get("iteration") or extract_iter_index(iter_file.name)
             if iter_idx is None:
-                print(f"  ⚠ WARNING: Cannot extract iteration index from {iter_file.name}")
+                puts(f"  {sym('warn')} WARNING: Cannot extract iteration index from {iter_file.name}")
                 continue
             
             kpi = robust_kpi_extract(data, iter_idx)
             iter_data.append(kpi)
         except Exception as e:
-            print(f"  ❌ ERROR loading {iter_file.name}: {e}")
+            puts(f"  {sym('fail')} ERROR loading {iter_file.name}: {e}")
     
     if not iter_data:
-        print("❌ FATAL: No ITER_SUMMARY data loaded")
+        puts(f"{sym('fail')} FATAL: No ITER_SUMMARY data loaded")
         sys.exit(1)
     
     # Sort by iteration
     iter_data.sort(key=lambda x: x["iter"])
-    print(f"✓ Loaded {len(iter_data)} iterations")
+    puts(f"{sym('ok')} Loaded {len(iter_data)} iterations")
     print()
     
     # Build DataFrame
@@ -339,7 +345,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
     if snapshot_path.exists():
         with open(snapshot_path, 'r', encoding='utf-8') as f:
             snapshot = json.load(f)
-        print("✓ Loaded existing POST_SOAK_SNAPSHOT.json")
+        puts(f"{sym('ok')} Loaded existing POST_SOAK_SNAPSHOT.json")
         
         # Extract last-8 KPIs (may be in different structures)
         kpi_last8 = snapshot.get("kpi_last_n", {}) or snapshot.get("last8", {}) or snapshot
@@ -350,7 +356,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
             "risk_ratio": kpi_last8.get("risk_ratio", {}).get("median", float('nan')),
         }
     else:
-        print("⚠ POST_SOAK_SNAPSHOT.json not found; deriving from last-8 window")
+        puts(f"{sym('warn')} POST_SOAK_SNAPSHOT.json not found; deriving from last-8 window")
         snapshot_kpis = {
             "maker_taker_ratio": trend_stats["maker_taker_ratio"]["last8"]["median"],
             "net_bps": trend_stats["net_bps"]["last8"]["median"],
@@ -379,15 +385,15 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
             status = "MISSING"
         else:
             passed = (actual >= threshold) if op == ">=" else (actual <= threshold)
-            status = "✓ PASS" if passed else "✗ FAIL"
+            status = f"{sym('ok')} PASS" if passed else f"{sym('fail')} FAIL"
         
         print(f"{metric:<20} {target_str:<15} {actual:>10.3f} {status:>10}")
     
     print()
     if all_pass:
-        print("✅ READINESS: OK (all KPIs within thresholds)")
+        puts(f"{sym('ok')} READINESS: OK (all KPIs within thresholds)")
     else:
-        print("❌ READINESS: HOLD")
+        puts(f"{sym('fail')} READINESS: HOLD")
         for failure in failures:
             print(f"  - {failure}")
     print()
@@ -431,7 +437,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
             tuning_summary["proposed_total"] = proposed_count
             tuning_summary["applied_total"] = applied_count
             
-            print("✓ TUNING_REPORT.json found")
+            puts(f"{sym('ok')} TUNING_REPORT.json found")
             print(f"  Deltas: {applied_count}/{proposed_count} applied")
             
             if skip_reasons:
@@ -439,10 +445,10 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
                 for reason, count in skip_reasons.most_common(5):
                     print(f"    - {reason}: {count}")
         except Exception as e:
-            print(f"  ❌ ERROR parsing TUNING_REPORT: {e}")
+            puts(f"  {sym('fail')} ERROR parsing TUNING_REPORT: {e}")
             tuning_summary["error"] = str(e)
     else:
-        print("✗ TUNING_REPORT.json not found")
+        puts(f"{sym('fail')} TUNING_REPORT.json not found")
     print()
     
     # ----- 7. Parse DELTA_VERIFY_REPORT -----
@@ -466,15 +472,15 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
                 delta_verify_summary["full_total"] = full_total
                 delta_verify_summary["full_pct"] = full_pct
                 
-                print("✓ DELTA_VERIFY_REPORT.md found")
+                puts(f"{sym('ok')} DELTA_VERIFY_REPORT.md found")
                 print(f"  Full applications: {full_applied}/{full_total} ({full_pct}%)")
             else:
                 print("✓ DELTA_VERIFY_REPORT.md found (couldn't parse stats)")
         except Exception as e:
-            print(f"  ❌ ERROR parsing DELTA_VERIFY_REPORT: {e}")
+            puts(f"  {sym('fail')} ERROR parsing DELTA_VERIFY_REPORT: {e}")
             delta_verify_summary["error"] = str(e)
     else:
-        print("✗ DELTA_VERIFY_REPORT.md not found")
+        puts(f"{sym('fail')} DELTA_VERIFY_REPORT.md not found")
     print()
     
     # ----- 8. Parse warmup_metrics.prom -----
@@ -501,7 +507,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
             
             warmup_summary["guard_triggers"] = guard_triggers
             
-            print("✓ warmup_metrics.prom found")
+            puts(f"{sym('ok')} warmup_metrics.prom found")
             if warmup_summary.get("exporter_error"):
                 print(f"  exporter_error: {warmup_summary['exporter_error']}")
             if guard_triggers:
@@ -509,10 +515,10 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
                 for gtype, count in sorted(guard_triggers.items()):
                     print(f"    - {gtype}: {count}")
         except Exception as e:
-            print(f"  ❌ ERROR parsing warmup_metrics: {e}")
+            puts(f"  {sym('fail')} ERROR parsing warmup_metrics: {e}")
             warmup_summary["error"] = str(e)
     else:
-        print("✗ warmup_metrics.prom not found")
+        puts(f"{sym('fail')} warmup_metrics.prom not found")
     print()
     
     # ----- 9. Recommendations -----
@@ -525,7 +531,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
     if mt_last8 < 0.83 and not (mt_last8 != mt_last8):
         adv_steady_median = trend_stats.get("net_bps", {}).get("steady", {}).get("median", float('nan'))
         
-        rec = "⚠ Maker/taker ratio below target (last-8: {:.3f} < 0.83):".format(mt_last8)
+        rec = f"{sym('warn')} Maker/taker ratio below target (last-8: {mt_last8:.3f} < 0.83):"
         recommendations.append(rec)
         recommendations.append("  • Increase maker share:")
         recommendations.append("    - Nudge `quoting.base_spread_bps_delta` slightly higher")
@@ -543,12 +549,12 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
         actual = snapshot_kpis.get(metric, float('nan'))
         if actual == actual:  # Not NaN
             if op == ">=" and actual < threshold:
-                recommendations.append(f"⚠ {metric} below target: {actual:.3f} < {threshold}")
+                recommendations.append(f"{sym('warn')} {metric} below target: {actual:.3f} < {threshold}")
             elif op == "<=" and actual > threshold:
-                recommendations.append(f"⚠ {metric} above target: {actual:.3f} > {threshold}")
+                recommendations.append(f"{sym('warn')} {metric} above target: {actual:.3f} > {threshold}")
     
     if not recommendations:
-        recommendations.append("✓ All KPIs within target ranges; no immediate action needed")
+        recommendations.append(f"{sym('ok')} All KPIs within target ranges; no immediate action needed")
     
     print("Recommendations:")
     for rec in recommendations:
@@ -576,7 +582,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
                 for row in iter_data:
                     f.write(",".join(str(row.get(h, "")) for h in headers) + "\n")
     
-    print(f"✓ Saved CSV: {out_csv_path}")
+    puts(f"{sym('ok')} Saved CSV: {out_csv_path}")
     
     # Create Markdown
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -597,7 +603,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
     ]
     
     for fname, exists in files_present.items():
-        status = "✓" if exists else "✗ (missing)"
+        status = f"{sym('ok')}" if exists else f"{sym('fail')} (missing)"
         md_lines.append(f"- {status} `{fname}`")
     
     md_lines.extend([
@@ -618,13 +624,13 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
             status = "MISSING"
         else:
             passed = (actual >= threshold) if op == ">=" else (actual <= threshold)
-            status = "✓ PASS" if passed else "✗ FAIL"
+            status = f"{sym('ok')} PASS" if passed else f"{sym('fail')} FAIL"
         
         md_lines.append(f"| {metric} | {target_str} | {actual:.3f} | {status} |")
     
     md_lines.extend([
         f"",
-        f"**Verdict:** {'✅ READINESS: OK' if all_pass else '❌ READINESS: HOLD'}",
+        f"**Verdict:** {sym('ok') + ' READINESS: OK' if all_pass else sym('fail') + ' READINESS: HOLD'}",
         f"",
     ])
     
@@ -714,7 +720,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
     with open(out_md_path, 'w', encoding='utf-8') as f:
         f.write("\n".join(md_lines))
     
-    print(f"✓ Saved Markdown: {out_md_path}")
+    puts(f"{sym('ok')} Saved Markdown: {out_md_path}")
     
     # Save JSON summary
     json_summary = {
@@ -746,7 +752,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
     with open(out_json_path, 'w', encoding='utf-8') as f:
         json.dump(json_summary, f, indent=2)
     
-    print(f"✓ Saved JSON: {out_json_path}")
+    puts(f"{sym('ok')} Saved JSON: {out_json_path}")
     print()
     
     # ----- 11. Print report preview -----
@@ -776,7 +782,7 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
         print("[12/12] Generating plots...")
         
         if not HAS_MATPLOTLIB:
-            print("⚠ WARNING: matplotlib not available; skipping plots")
+            puts(f"{sym('warn')} WARNING: matplotlib not available; skipping plots")
         else:
             plots_dir = out_dir / "plots"
             plots_dir.mkdir(parents=True, exist_ok=True)
@@ -805,11 +811,11 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
                         plot_path = plots_dir / f"{col}.png"
                         plt.savefig(plot_path, dpi=100, bbox_inches='tight')
                         plt.close()
-                        print(f"  ✓ Saved: {plot_path.name}")
+                        puts(f"  {sym('ok')} Saved: {plot_path.name}")
                     except Exception as e:
-                        print(f"  ⚠ Failed to generate {col}.png: {e}")
+                        puts(f"  {sym('warn')} Failed to generate {col}.png: {e}")
             else:
-                print("  ⚠ pandas not available; cannot generate plots")
+                puts(f"  {sym('warn')} pandas not available; cannot generate plots")
             
             print()
     
@@ -858,7 +864,7 @@ def main():
         print("\n[INTERRUPTED]")
         sys.exit(1)
     except Exception as e:
-        print(f"\n❌ FATAL ERROR: {e}", file=sys.stderr)
+        puts(f"\n{sym('fail')} FATAL ERROR: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
         sys.exit(1)

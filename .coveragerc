@@ -1,0 +1,47 @@
+[run]
+branch = True
+# Считаем покрытие только по подсистемам, где есть тесты
+source =
+    tools/live
+    tools/obs
+    tools/state
+    tools/common
+    tools/ci
+# Явно исключаем тяжёлые/скриптовые подсистемы без тестов
+omit =
+    */__init__.py
+    tools/soak/*
+    tools/shadow/*
+    tools/release/*
+    tools/ops/*
+    tools/audit/*
+    tools/backtest/*
+    tools/finops/*
+    tools/tuning/*
+    tools/edge_sentinel/*
+    tools/edge_cli.py
+    tools/edge_sentinel/__main__.py
+    tools/live/exchange_bybit.py
+    tools/live/run_live.py
+    tools/live/secrets_cli.py
+    tools/live/risk_monitor_cli.py
+    tools/dryrun/*
+    tools/cron/*
+    tools/calibration/*
+    tools/chaos/*
+    tools/debug/*
+    tools/edge_sentinel/report.py
+    tools/edge_sentinel/analyze.py
+
+[report]
+# Тот же порог, что и в CI
+fail_under = 14
+show_missing = True
+precision = 2
+exclude_lines =
+    pragma: no cover
+    if typing.TYPE_CHECKING:
+    if __name__ == .__main__.:
+    raise NotImplementedError
+    except ImportError:
+

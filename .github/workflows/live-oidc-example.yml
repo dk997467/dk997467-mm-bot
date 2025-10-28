@@ -1,0 +1,433 @@
+name: Live Mode (OIDC + AWS Secrets Manager)
+
+# This workflow demonstrates secure secret access using:
+# - GitHub Actions OIDC (no hardcoded credentials)
+# - AWS Secrets Manager (centralized secret storage)
+# - IAM role-based access (least privilege)
+
+on:
+  workflow_dispatch:
+    inputs:
+      env_name:
+        description: 'Environment (dev/staging/prod)'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      dry_run:
+        description: 'Dry-run mode (no real trades)'
+        required: false
+        default: true
+        type: boolean
+
+# CRITICAL: Explicit permissions for OIDC token
+permissions:
+  id-token: write   # Required for OIDC token generation
+  contents: read    # Required for repo checkout
+
+concurrency:
+  group: live-mode-${{ github.ref }}-${{ inputs.env_name }}
+  cancel-in-progress: false
+
+jobs:
+  live-trading:
+    name: Live Trading (${{ inputs.env_name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    # Environment variables (NO SECRETS HERE)
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTHONPATH: "${{ github.workspace }}"
+      AWS_REGION: "us-east-1"
+      ENVIRONMENT: "${{ inputs.env_name }}"
+      
+      # Enable Secrets Manager mode (not mock)
+      SECRETS_MOCK_MODE: "0"
+    
+    steps:
+      # ======================================================================
+      # SETUP: Checkout and Dependencies
+      # ======================================================================
+      
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - name: Prepare minimal requirements for CI
+        shell: bash
+        run: |
+          awk '
+            BEGIN{IGNORECASE=1}
+            /^[[:space:]]*bybit-connector/ {next}
+            /^[[:space:]]*mm-orderbook/ {next}
+            /^[[:space:]]*mm_orderbook/ {next}
+            /^[[:space:]]*git\+/ {next}
+            {print}
+          ' requirements.txt > requirements_ci.txt
+          
+          # Add boto3 for AWS Secrets Manager
+          echo "boto3>=1.34,<2" >> requirements_ci.txt
+          echo "pydantic>=2,<3" >> requirements_ci.txt
+          echo "pydantic-settings>=2,<3" >> requirements_ci.txt
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          pip install maturin
+          pip install -e . -v
+          pip install -r requirements_ci.txt
+      
+      # ======================================================================
+      # SECURITY: AWS OIDC Authentication (NO HARDCODED CREDENTIALS)
+      # ======================================================================
+      
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # IAM role ARN (replace with your actual role)
+          # Format: arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME
+          role-to-assume: arn:aws:iam::123456789012:role/github-actions-mm-bot-${{ inputs.env_name }}
+          
+          # AWS region
+          aws-region: us-east-1
+          
+          # Role session name (for CloudTrail audit)
+          role-session-name: GitHubActions-${{ github.run_id }}-${{ inputs.env_name }}
+          
+          # Session duration (max: 12 hours)
+          role-duration-seconds: 3600  # 1 hour
+      
+      - name: Verify AWS credentials
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "AWS CREDENTIALS VERIFICATION"
+          echo "================================================"
+          
+          # Get caller identity (should show assumed role)
+          aws sts get-caller-identity
+          
+          # Verify region
+          echo ""
+          echo "AWS Region: $(aws configure get region)"
+          
+          echo ""
+          echo "✓ AWS OIDC authentication successful"
+          echo "================================================"
+      
+      # ======================================================================
+      # SECRET RETRIEVAL: Via tools/live/secrets.py (NO ENV VARS)
+      # ======================================================================
+      
+      - name: Test secret retrieval
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "SECRET RETRIEVAL TEST"
+          echo "================================================"
+          
+          # Test retrieving API credentials from AWS Secrets Manager
+          # This will use the IAM role assumed via OIDC
+          
+          python - <<'EOF'
+          from tools.live.secrets import get_api_credentials, log_secret_access
+          
+          try:
+              # Retrieve credentials for environment
+              env = "${{ inputs.env_name }}"
+              creds = get_api_credentials(env=env, exchange="bybit")
+              
+              # Log access (audit trail)
+              log_secret_access(
+                  secret_id=f"{env}/bybit/api",
+                  accessor="github-actions-${{ github.run_id }}",
+                  action="read",
+                  success=True,
+              )
+              
+              print(f"✓ Credentials retrieved: {creds}")
+              print(f"✓ API key (masked): {creds.api_key[:8]}...***")
+              print(f"✓ Retrieved at: {creds.retrieved_at}")
+          
+          except Exception as e:
+              print(f"❌ Secret retrieval failed: {e}")
+              log_secret_access(
+                  secret_id=f"{env}/bybit/api",
+                  accessor="github-actions-${{ github.run_id }}",
+                  action="read",
+                  success=False,
+              )
+              exit(1)
+          EOF
+          
+          echo "================================================"
+      
+      # ======================================================================
+      # LIVE TRADING: Run trading bot with secure credentials
+      # ======================================================================
+      
+      - name: Run Live Trading (with AWS secrets)
+        id: live_run
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "LIVE TRADING: ${{ inputs.env_name }}"
+          echo "================================================"
+          
+          DRY_RUN_FLAG=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+          
+          # Run live trading module
+          # Credentials will be fetched automatically from AWS Secrets Manager
+          python -m tools.live.run_live \
+            --env "${{ inputs.env_name }}" \
+            --symbols "BTCUSDT,ETHUSDT" \
+            --exchange bybit \
+            --iterations 1 \
+            $DRY_RUN_FLAG \
+            --verbose
+          
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          
+          echo ""
+          echo "Live run exit code: $EXIT_CODE"
+      
+      - name: Display Live Report
+        if: always()
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "LIVE REPORT"
+          echo "================================================"
+          
+          if [ -f artifacts/live/latest/LIVE_REPORT.md ]; then
+            cat artifacts/live/latest/LIVE_REPORT.md
+          else
+            echo "❌ LIVE_REPORT.md not found"
+          fi
+      
+      # ======================================================================
+      # ARTIFACTS: Upload results
+      # ======================================================================
+      
+      - name: Upload Live Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-mode-oidc-${{ inputs.env_name }}-${{ github.run_id }}
+          path: |
+            artifacts/live/latest/LIVE_*.md
+            artifacts/live/latest/LIVE_*.json
+          if-no-files-found: warn
+          retention-days: 30
+      
+      # ======================================================================
+      # AUDIT: Log secret access to CloudWatch
+      # ======================================================================
+      
+      - name: Audit Trail
+        if: always()
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "AUDIT TRAIL SUMMARY"
+          echo "================================================"
+          
+          python - <<'EOF'
+          import json
+          from datetime import datetime, timezone
+          
+          audit_entry = {
+              "event": "secret_access",
+              "timestamp": datetime.now(timezone.utc).isoformat(),
+              "environment": "${{ inputs.env_name }}",
+              "accessor": "github-actions",
+              "run_id": "${{ github.run_id }}",
+              "repository": "${{ github.repository }}",
+              "ref": "${{ github.ref }}",
+              "actor": "${{ github.actor }}",
+              "secret_id": "${{ inputs.env_name }}/bybit/api",
+              "action": "read",
+              "success": "${{ steps.live_run.outputs.exit_code }}" == "0",
+          }
+          
+          print(json.dumps(audit_entry, indent=2))
+          
+          # In production, write to CloudWatch Logs:
+          # aws logs put-log-events \
+          #   --log-group-name /aws/mm-bot/audit \
+          #   --log-stream-name github-actions \
+          #   --log-events "timestamp=$(date +%s)000,message=$(echo $audit_entry | jq -c .)"
+          EOF
+          
+          echo "================================================"
+      
+      # ======================================================================
+      # NOTIFICATION: Post results to PR (if applicable)
+      # ======================================================================
+      
+      - name: Comment Live Results to PR
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.number
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const summaryPath = 'artifacts/live/latest/LIVE_SUMMARY.json';
+            
+            if (!fs.existsSync(summaryPath)) {
+              console.log('LIVE_SUMMARY.json not found, skipping comment');
+              return;
+            }
+            
+            const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+            const exitCode = '${{ steps.live_run.outputs.exit_code }}';
+            const badge = exitCode === '0' ? '✅' : '❌';
+            
+            const comment = `### ${badge} Live Mode: ${{ inputs.env_name }}
+            
+            **Environment:** ${{ inputs.env_name }}
+            **Dry-run:** ${{ inputs.dry_run }}
+            **Secrets:** Fetched via AWS OIDC (no hardcoded credentials)
+            
+            **Exit Code:** ${exitCode}
+            
+            **Audit Trail:**
+            - Accessor: github-actions-${{ github.run_id }}
+            - IAM Role: \`github-actions-mm-bot-${{ inputs.env_name }}\`
+            - Secret ID: \`${{ inputs.env_name }}/bybit/api\`
+            - Action: read
+            
+            _Secure credential management via AWS Secrets Manager + OIDC_`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: comment
+            });
+      
+      # ======================================================================
+      # GATE: Check exit code
+      # ======================================================================
+      
+      - name: Check Live Mode Result
+        if: always()
+        shell: bash
+        run: |
+          EXIT_CODE="${{ steps.live_run.outputs.exit_code }}"
+          
+          echo "================================================"
+          echo "LIVE MODE RESULT"
+          echo "================================================"
+          echo "Exit code: $EXIT_CODE"
+          
+          if [ "$EXIT_CODE" = "0" ]; then
+            echo "✅ Live Mode: PASS"
+            exit 0
+          else
+            echo "❌ Live Mode: FAIL"
+            exit 1
+          fi
+
+# ==============================================================================
+# OIDC SETUP INSTRUCTIONS
+# ==============================================================================
+#
+# To use this workflow, you must configure:
+#
+# 1. AWS IAM OIDC Provider (one-time setup per AWS account):
+#    ```
+#    aws iam create-open-id-connect-provider \
+#      --url https://token.actions.githubusercontent.com \
+#      --client-id-list sts.amazonaws.com \
+#      --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+#    ```
+#
+# 2. IAM Role for GitHub Actions (per environment):
+#    ```
+#    aws iam create-role \
+#      --role-name github-actions-mm-bot-dev \
+#      --assume-role-policy-document file://trust-policy.json
+#    ```
+#
+#    trust-policy.json:
+#    {
+#      "Version": "2012-10-17",
+#      "Statement": [
+#        {
+#          "Effect": "Allow",
+#          "Principal": {
+#            "Federated": "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+#          },
+#          "Action": "sts:AssumeRoleWithWebIdentity",
+#          "Condition": {
+#            "StringEquals": {
+#              "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+#            },
+#            "StringLike": {
+#              "token.actions.githubusercontent.com:sub": "repo:your-org/mm-bot:*"
+#            }
+#          }
+#        }
+#      ]
+#    }
+#
+# 3. IAM Policy (attach to role):
+#    ```
+#    aws iam put-role-policy \
+#      --role-name github-actions-mm-bot-dev \
+#      --policy-name SecretsManagerReadOnly \
+#      --policy-document file://secrets-policy.json
+#    ```
+#
+#    secrets-policy.json:
+#    {
+#      "Version": "2012-10-17",
+#      "Statement": [
+#        {
+#          "Effect": "Allow",
+#          "Action": [
+#            "secretsmanager:GetSecretValue",
+#            "secretsmanager:DescribeSecret"
+#          ],
+#          "Resource": [
+#            "arn:aws:secretsmanager:us-east-1:123456789012:secret:dev/*",
+#            "arn:aws:secretsmanager:us-east-1:123456789012:secret:staging/*"
+#          ]
+#        },
+#        {
+#          "Effect": "Allow",
+#          "Action": [
+#            "kms:Decrypt"
+#          ],
+#          "Resource": "arn:aws:kms:us-east-1:123456789012:key/YOUR-KMS-KEY-ID"
+#        }
+#      ]
+#    }
+#
+# 4. Update workflow (line 109):
+#    Replace `123456789012` with your AWS account ID
+#
+# 5. Test workflow:
+#    Run workflow_dispatch with env=dev, dry_run=true
+#
+# ==============================================================================
+

@@ -80,18 +80,20 @@ class TestMDCache:
         config.enabled = False
         cache = MDCache(config)
         
-        result = await cache.get_orderbook("BTCUSDT", depth=50)
+        result, meta = await cache.get_orderbook("BTCUSDT", depth=50)
         assert result is None
+        assert meta["cache_hit"] is False
     
     @pytest.mark.asyncio
     async def test_cache_miss_first_call(self, config, mock_refresh):
         """First call should miss and refresh."""
         cache = MDCache(config, refresh_callback=mock_refresh)
         
-        result = await cache.get_orderbook("BTCUSDT", depth=50)
+        result, meta = await cache.get_orderbook("BTCUSDT", depth=50)
         
         assert result is not None
         assert result["symbol"] == "BTCUSDT"
+        assert meta["cache_hit"] is False
         assert cache.get_hit_ratio("BTCUSDT") == 0.0  # First call = miss
     
     @pytest.mark.asyncio
@@ -100,41 +102,46 @@ class TestMDCache:
         cache = MDCache(config, refresh_callback=mock_refresh)
         
         # First call - miss
-        result1 = await cache.get_orderbook("BTCUSDT", depth=50)
+        result1, meta1 = await cache.get_orderbook("BTCUSDT", depth=50)
         assert result1 is not None
+        assert meta1["cache_hit"] is False
         
         # Second call immediately - should hit
-        result2 = await cache.get_orderbook("BTCUSDT", depth=50)
+        result2, meta2 = await cache.get_orderbook("BTCUSDT", depth=50)
         assert result2 is not None
+        assert meta2["cache_hit"] is True
         assert result2 == result1  # Same data
         
         # Hit ratio should be 50% (1 hit, 1 miss)
         assert cache.get_hit_ratio("BTCUSDT") == 0.5
     
     @pytest.mark.asyncio
-    async def test_cache_stale_while_refresh(self, config, mock_refresh, cleanup_tasks):
+    async def test_cache_stale_while_refresh(self, config, mock_refresh):
         """Stale data should be returned while refreshing."""
         config.ttl_ms = 50  # Short TTL
         cache = MDCache(config, refresh_callback=mock_refresh)
         
         # First call - populate cache
-        result1 = await cache.get_orderbook("BTCUSDT", depth=50)
+        result1, meta1 = await cache.get_orderbook("BTCUSDT", depth=50)
         assert result1 is not None
+        assert meta1["cache_hit"] is False
         
         # Wait for TTL to expire
         await asyncio.sleep(0.06)
         
         # Second call - should return stale + trigger refresh
-        result2 = await cache.get_orderbook("BTCUSDT", depth=50)
+        result2, meta2 = await cache.get_orderbook("BTCUSDT", depth=50)
         assert result2 is not None
+        assert meta2["used_stale"] is True
         assert result2 == result1  # Stale data returned immediately
         
         # Wait for background refresh to complete
         await asyncio.sleep(0.02)
         
         # Third call - should hit fresh cache
-        result3 = await cache.get_orderbook("BTCUSDT", depth=50)
+        result3, meta3 = await cache.get_orderbook("BTCUSDT", depth=50)
         assert result3 is not None
+        assert meta3["cache_hit"] is True
     
     def test_cache_invalidate(self, config):
         """Test cache invalidation."""

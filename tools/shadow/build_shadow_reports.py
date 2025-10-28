@@ -3,6 +3,7 @@
 Shadow Reports Builder
 
 Generates POST_SHADOW_SNAPSHOT.json and summary reports from shadow run artifacts.
+Includes per-symbol analysis and winsorized p95 statistics.
 
 Usage:
     python -m tools.shadow.build_shadow_reports
@@ -12,8 +13,9 @@ Usage:
 import argparse
 import json
 import sys
+from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 # Fix Windows console encoding
 if sys.platform == "win32":
@@ -27,6 +29,72 @@ def load_iter_summaries(base_dir: Path) -> List[Dict]:
         with open(iter_file, 'r', encoding='utf-8') as f:
             summaries.append(json.load(f))
     return summaries
+
+
+def p95_winsorized(vals: List[float], trim: float = 0.01) -> float:
+    """
+    Compute p95 on winsorized (trimmed) data.
+    
+    Args:
+        vals: List of values
+        trim: Fraction to trim from each tail (default: 0.01 = 1%)
+    
+    Returns:
+        p95 of the trimmed dataset
+    """
+    if not vals:
+        return 0.0
+    
+    s = sorted(vals)
+    n = len(s)
+    
+    # Trim indices
+    a = max(0, int(n * trim))
+    b = min(n, int(n * (1 - trim)))
+    
+    # Core (trimmed) data
+    core = s[a:b] if b > a else s
+    
+    if not core:
+        return 0.0
+    
+    # p95 on core
+    k = int(round(0.95 * max(0, len(core) - 1)))
+    return float(core[k])
+
+
+def compute_per_symbol_stats(summaries: List[Dict]) -> Tuple[Dict, Dict]:
+    """
+    Compute per-symbol statistics.
+    
+    Returns:
+        (by_symbol, all_symbols) where:
+        - by_symbol: {symbol: {kpis, latencies}}
+        - all_symbols: set of all symbols
+    """
+    by_symbol = defaultdict(lambda: {
+        "maker_taker": [],
+        "net_bps": [],
+        "latencies": [],
+        "risk": [],
+        "count": 0,
+    })
+    
+    all_symbols = set()
+    
+    for s in summaries:
+        symbol = s.get("symbol", "UNKNOWN")
+        all_symbols.add(symbol)
+        
+        summary = s.get("summary", {})
+        
+        by_symbol[symbol]["maker_taker"].append(summary.get("maker_taker_ratio", 0))
+        by_symbol[symbol]["net_bps"].append(summary.get("net_bps", 0))
+        by_symbol[symbol]["latencies"].append(summary.get("p95_latency_ms", 0))
+        by_symbol[symbol]["risk"].append(summary.get("risk_ratio", 0))
+        by_symbol[symbol]["count"] += 1
+    
+    return dict(by_symbol), all_symbols
 
 
 def compute_snapshot(summaries: List[Dict], last_n: int) -> Dict:
@@ -92,7 +160,7 @@ def compute_snapshot(summaries: List[Dict], last_n: int) -> Dict:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build shadow mode reports and snapshot"
+        description="Build shadow mode reports and snapshot (with per-symbol analysis)"
     )
     parser.add_argument(
         "--src",
@@ -126,7 +194,7 @@ def main():
     print()
     
     # Load summaries
-    print("[1/2] Loading ITER_SUMMARY files...")
+    print("[1/4] Loading ITER_SUMMARY files...")
     summaries = load_iter_summaries(base_dir)
     
     if not summaries:
@@ -136,8 +204,14 @@ def main():
     print(f"✓ Loaded {len(summaries)} iterations")
     print()
     
+    # Per-symbol stats
+    print("[2/4] Computing per-symbol statistics...")
+    by_symbol, all_symbols = compute_per_symbol_stats(summaries)
+    print(f"✓ Found {len(all_symbols)} symbols: {', '.join(sorted(all_symbols))}")
+    print()
+    
     # Compute snapshot
-    print(f"[2/2] Computing snapshot (last-{args.last_n})...")
+    print(f"[3/4] Computing snapshot (last-{args.last_n})...")
     snapshot = compute_snapshot(summaries, args.last_n)
     
     # Write snapshot
@@ -148,7 +222,38 @@ def main():
     print(f"✓ Saved: {snapshot_file}")
     print()
     
-    # Print KPIs
+    # Print per-symbol KPIs
+    print("[4/4] Per-Symbol KPI Summary")
+    print("=" * 80)
+    print(f"{'Symbol':<10} {'Windows':<8} {'Maker/Taker':<12} {'Net BPS':<10} {'p95 Latency':<12} {'p95_w (1%)':<12} {'Risk':<8}")
+    print("-" * 80)
+    
+    def mean(vals):
+        return sum(vals) / len(vals) if vals else 0.0
+    
+    for symbol in sorted(all_symbols):
+        stats = by_symbol[symbol]
+        maker_taker_avg = mean(stats["maker_taker"])
+        net_bps_avg = mean(stats["net_bps"])
+        latency_p95 = mean(stats["latencies"])
+        latency_p95_w = p95_winsorized(stats["latencies"], trim=0.01)
+        risk_avg = mean(stats["risk"])
+        count = stats["count"]
+        
+        print(f"{symbol:<10} {count:<8} {maker_taker_avg:>11.3f} {net_bps_avg:>9.2f} {latency_p95:>11.0f}ms {latency_p95_w:>11.0f}ms {risk_avg:>7.3f}")
+    
+    print("-" * 80)
+    
+    # Overall averages
+    all_maker_taker = [v for s in by_symbol.values() for v in s["maker_taker"]]
+    all_net_bps = [v for s in by_symbol.values() for v in s["net_bps"]]
+    all_latencies = [v for s in by_symbol.values() for v in s["latencies"]]
+    all_risk = [v for s in by_symbol.values() for v in s["risk"]]
+    
+    print(f"{'Overall':<10} {len(summaries):<8} {mean(all_maker_taker):>11.3f} {mean(all_net_bps):>9.2f} {mean(all_latencies):>11.0f}ms {p95_winsorized(all_latencies):>11.0f}ms {mean(all_risk):>7.3f}")
+    print()
+    
+    # Print global KPIs (from snapshot)
     print("=" * 80)
     print("SHADOW SNAPSHOT KPIs (last-{})".format(args.last_n))
     print("=" * 80)

@@ -45,3 +45,23 @@ tests/test_audit_chain_verify_unit.py
 tests/test_promql_p99_alert_rule.py
 tests/test_readiness_score_unit.py
 
+# P0.8: State & Concurrency (Redis, Redlock, DurableOrderStore)
+tests/unit/test_redis_kv_unit.py
+tests/unit/test_redlock_unit.py
+tests/unit/test_retry_unit.py
+tests/unit/test_order_store_durable_unit.py
+
+# P0.9: Observability (JSON Logs, Metrics, Health Server)
+tests/unit/test_jsonlog_unit.py
+tests/unit/test_metrics_unit.py
+tests/unit/test_health_server_unit.py
+
+# P0.3: Live-prep (Maker-Only, Testnet, Secrets/ENV)
+tests/unit/test_maker_policy_unit.py
+tests/unit/test_secrets_env_unit.py
+
+# P0.10: Testnet Soak & Canary (Recon, Fees, Kill-Switch, Symbol Filters)
+tests/unit/test_fees_unit.py
+tests/unit/test_fees_profiles_unit.py
+tests/unit/test_kill_switch_unit.py
+

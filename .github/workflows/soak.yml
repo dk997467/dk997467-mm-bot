@@ -11,7 +11,7 @@ on:
       mock_mode:
         description: 'Use mock data for testing'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
 concurrency:
@@ -23,6 +23,20 @@ jobs:
     name: Run Soak Test
     runs-on: ubuntu-latest
     timeout-minutes: 4380  # 73 hours max
+    env:
+      SOAK_OFFLINE: "1"
+      BYBIT_API_KEY: "N/A"
+      BYBIT_API_SECRET: "N/A"
+      STORAGE_PG_PASSWORD: "N/A"
+      # Safe fallbacks for inputs (available in all trigger contexts)
+      DURATION_HOURS: ${{ github.event_name == 'workflow_dispatch' && inputs.duration_hours || '72' }}
+      MOCK_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mock_mode || false }}
+      # PYTHONPATH for correct module imports
+      PYTHONPATH: ${{ github.workspace }}
+      # Soak artifacts directory for kpi_gate fallback
+      SOAK_ARTIFACTS_DIR: artifacts/soak/latest
+      # Soak output directory for iteration files
+      SOAK_OUT_DIR: artifacts/soak/latest
     
     steps:
       - name: Checkout code
@@ -45,18 +59,137 @@ jobs:
         continue-on-error: true
         run: |
           MOCK_FLAG=""
-          if [ "${{ inputs.mock_mode }}" = "true" ]; then
+          if [ "${{ env.MOCK_MODE }}" = "true" ]; then
             MOCK_FLAG="--mock"
           fi
           
           python -m tools.soak.run \
-            --hours ${{ inputs.duration_hours }} \
+            --hours ${{ env.DURATION_HOURS }} \
             --export-json artifacts/reports/soak_metrics.json \
             --export-md artifacts/reports/SOAK_RESULTS.md \
             --gate-summary artifacts/reports/gates_summary.json \
             $MOCK_FLAG
           
           echo "EXIT_CODE=$?" >> $GITHUB_OUTPUT
+      
+      - name: List Soak Artifacts (Linux)
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "================================================"
+          echo "SOAK ARTIFACTS DIAGNOSTIC (Linux)"
+          echo "================================================"
+          echo "PWD=$(pwd)"
+          echo "workspace=${{ github.workspace }}"
+          echo "PYTHONPATH=$PYTHONPATH"
+          echo "SOAK_ARTIFACTS_DIR=$SOAK_ARTIFACTS_DIR"
+          echo "SOAK_OUT_DIR=$SOAK_OUT_DIR"
+          echo ""
+          echo "Artifacts in artifacts/soak/latest:"
+          ls -lah artifacts/soak/latest || echo "Directory not found"
+          echo ""
+          echo "ITER_SUMMARY files:"
+          ITER_COUNT=$(ls artifacts/soak/latest/ITER_SUMMARY_*.json 2>/dev/null | wc -l || echo 0)
+          echo "Found $ITER_COUNT ITER_SUMMARY files"
+          
+          if [ "$ITER_COUNT" -eq "0" ]; then
+            echo "::error::No ITER_SUMMARY_*.json produced in artifacts/soak/latest (check soak producer step)."
+            echo "No ITER_SUMMARY files found - cannot run KPI gate"
+            exit 1
+          else
+            ls -lah artifacts/soak/latest/ITER_SUMMARY_*.json
+          fi
+        shell: bash
+      
+      - name: Build Soak KPI (if builder exists)
+        if: always()
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: |
+          if python -c "import importlib; importlib.import_module('tools.soak.build_soak_reports')" 2>/dev/null; then
+            python -m tools.soak.build_soak_reports --in artifacts/soak/latest --out artifacts/soak/latest/SOAK_KPI.json
+          else
+            echo "[i] build_soak_reports not found — will gate by --iter mask"
+          fi
+        shell: bash
+      
+      - name: KPI Gate (explicit path or iter mask)
+        if: always()
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "================================================"
+          echo "KPI GATE (Linux)"
+          echo "================================================"
+          if [ -f artifacts/soak/latest/SOAK_KPI.json ] && [ -s artifacts/soak/latest/SOAK_KPI.json ]; then
+            echo "Using SOAK_KPI.json"
+            python -m tools.soak.kpi_gate artifacts/soak/latest/SOAK_KPI.json
+          else
+            echo "Using ITER_SUMMARY glob"
+            python -m tools.soak.kpi_gate --iter "artifacts/soak/latest/ITER_SUMMARY_*.json"
+          fi
+        shell: bash
+      
+      - name: Write readiness.json (Linux)
+        if: always()
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "================================================"
+          echo "WRITING READINESS.JSON (Linux)"
+          echo "================================================"
+          python -m tools.soak.write_readiness \
+            --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+            --out "artifacts/reports/readiness.json" \
+            --min_maker_taker 0.83 --min_edge 2.9 --max_latency 330 --max_risk 0.40
+          echo ""
+          if [ -f artifacts/reports/readiness.json ]; then
+            echo "✓ readiness.json created:"
+            cat artifacts/reports/readiness.json
+          else
+            echo "⚠ readiness.json not created"
+          fi
+        shell: bash
+      
+      - name: Post-Soak Analyzer V2 (trends, sparklines, violations)
+        id: post-soak-analyzer
+        if: always()
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "================================================"
+          echo "POST-SOAK ANALYZER V2"
+          echo "================================================"
+          
+          mkdir -p artifacts/reports/analysis
+          
+          python -m tools.soak.analyze_post_soak \
+            --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" \
+            --min-windows 8 \
+            --out-dir artifacts/reports/analysis \
+            --warn-edge 2.5 --crit-edge 2.0 \
+            --warn-maker 0.80 --crit-maker 0.75 \
+            --warn-lat 350 --crit-lat 400 \
+            --warn-risk 0.45 --crit-risk 0.50
+          
+          if [ $? -eq 0 ]; then
+            echo "✓ Post-soak analysis completed"
+            
+            if [ -f artifacts/reports/analysis/POST_SOAK_ANALYSIS.md ]; then
+              echo ""
+              echo "=== Analysis Preview (first 30 lines) ==="
+              head -30 artifacts/reports/analysis/POST_SOAK_ANALYSIS.md
+            fi
+            
+            if [ -f artifacts/reports/analysis/VIOLATIONS.json ]; then
+              echo ""
+              echo "=== Violations Summary ==="
+              cat artifacts/reports/analysis/VIOLATIONS.json
+            fi
+          else
+            echo "⚠ Post-soak analysis returned non-zero exit code (non-blocking)"
+          fi
+        shell: bash
       
       - name: Upload soak artifacts
         if: always()
@@ -67,8 +200,105 @@ jobs:
             artifacts/reports/soak_metrics.json
             artifacts/reports/SOAK_RESULTS.md
             artifacts/reports/gates_summary.json
+            artifacts/reports/readiness.json
+            artifacts/reports/analysis/POST_SOAK_ANALYSIS.md
+            artifacts/reports/analysis/RECOMMENDATIONS.md
+            artifacts/reports/analysis/VIOLATIONS.json
+            artifacts/reports/analysis/SOAK_SUMMARY.json
+            artifacts/soak/latest/SOAK_KPI.json
+            artifacts/soak/latest/ITER_SUMMARY_*.json
           if-no-files-found: warn
           retention-days: 90
+      
+      - name: Upload full artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-failure-debug-${{ github.run_id }}
+          path: |
+            artifacts/**
+            ./*.log
+            **/*.err.log
+          if-no-files-found: ignore
+          retention-days: 30
+      
+      - name: Post Soak Summary to PR
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = 'artifacts/reports/analysis/SOAK_SUMMARY.json';
+            
+            if (!fs.existsSync(path)) {
+              core.warning('SOAK_SUMMARY.json not found, skipping comment.');
+              return;
+            }
+            
+            const sum = JSON.parse(fs.readFileSync(path, 'utf8')) || {};
+            const verdict = (sum.overall?.verdict || 'N/A').toUpperCase();
+            const badge = verdict === 'OK' ? '✅' : (verdict === 'WARN' ? '🟡' : '🔴');
+            const tldr = `${badge} ${verdict} | windows=${sum.windows ?? 'N/A'} | symbols=${Object.keys(sum.symbols||{}).length} | crit=${sum.overall?.crit_count ?? 0} warn=${sum.overall?.warn_count ?? 0}`;
+            
+            // Build artifact links
+            const runId = context.runId;
+            let artifactsPage = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${runId}#artifacts`;
+            
+            let links = `- [📦 Artifacts page](${artifactsPage})\n`;
+            
+            // Try to fetch artifacts via API
+            try {
+              const { data: arts } = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId
+              });
+              
+              function find(name) {
+                return arts.artifacts.find(a => a.name && a.name.includes(name));
+              }
+              
+              const aMain = find('soak-test-results');
+              if (aMain) {
+                links += `- [⬇️ soak-test-results.zip](${aMain.archive_download_url}) (auth required)\n`;
+              }
+            } catch (e) {
+              core.warning(`Failed to fetch artifacts: ${e.message}`);
+            }
+            
+            // Compact table per symbol
+            let table = `| Symbol | Edge(last) | Maker/Taker | p95(ms) | Risk | Status |\n|---|---:|---:|---:|---:|---|\n`;
+            for (const [sym, v] of Object.entries(sum.symbols || {})) {
+              const edge = v.edge_bps || {};
+              const maker = v.maker_taker_ratio || {};
+              const lat = v.p95_latency_ms || {};
+              const risk = v.risk_ratio || {};
+              
+              // Determine symbol status
+              let symStatus = '✅ OK';
+              if ([edge.status, maker.status, lat.status, risk.status].includes('CRIT')) {
+                symStatus = '🔴 CRIT';
+              } else if ([edge.status, maker.status, lat.status, risk.status].includes('WARN')) {
+                symStatus = '🟡 WARN';
+              }
+              
+              table += `| ${sym} | ${edge.last ?? 'n/a'} ${edge.trend ?? ''} | ${maker.last ?? 'n/a'} ${maker.trend ?? ''} | ${lat.last ?? 'n/a'} ${lat.trend ?? ''} | ${risk.last ?? 'n/a'} ${risk.trend ?? ''} | ${symStatus} |\n`;
+            }
+            
+            const body =
+              `### 🧪 Soak Summary\n` +
+              `**TL;DR:** ${tldr}\n\n` +
+              table + `\n` +
+              `**Artifacts:**\n` + links + `\n` +
+              `_Commit: \`${sum.meta?.commit_range || 'n/a'}\`, Profile: \`${sum.meta?.profile || 'n/a'}\`_`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body
+            });
       
       - name: Comment PR with results (if applicable)
         if: always() && github.event_name == 'pull_request'

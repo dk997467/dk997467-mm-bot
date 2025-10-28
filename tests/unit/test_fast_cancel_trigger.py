@@ -23,9 +23,33 @@ def mock_ctx():
     fast_cancel_cfg.cancel_threshold_bps = 3.0
     fast_cancel_cfg.cooldown_after_spike_ms = 500
     fast_cancel_cfg.spike_threshold_bps = 10.0
+    
+    # Mock adaptive_spread config (required by QuoteLoop)
+    adaptive_spread_cfg = Mock()
+    adaptive_spread_cfg.enabled = False  # Disable for fast_cancel tests
+    adaptive_spread_cfg.base_spread_bps = 5.0
+    adaptive_spread_cfg.min_spread_bps = 2.0
+    adaptive_spread_cfg.max_spread_bps = 20.0
+    adaptive_spread_cfg.vol_window_sec = 60.0
+    adaptive_spread_cfg.vol_ema_alpha = 0.1
+    adaptive_spread_cfg.vol_scaling_factor = 1.5
+    
+    # Mock risk_guards config (required by QuoteLoop)
+    risk_guards_cfg = Mock()
+    risk_guards_cfg.enabled = False  # Disable for fast_cancel tests
+    risk_guards_cfg.max_drawdown_bps = 1000.0
+    risk_guards_cfg.max_position_usd = 100000.0
+    risk_guards_cfg.vol_ema_sec = 60.0
+    risk_guards_cfg.max_vol_bps = 500.0
+    risk_guards_cfg.freeze_on_breach = False
+    
+    # Mock cfg object with all required sub-configs
     ctx.cfg = Mock()
     ctx.cfg.fast_cancel = fast_cancel_cfg
+    ctx.cfg.adaptive_spread = adaptive_spread_cfg
+    ctx.cfg.risk_guards = risk_guards_cfg
     ctx.cfg.taker_cap = None  # Disable taker cap for these tests
+    ctx.cfg.queue_aware = None  # Disable queue-aware for these tests
     
     return ctx
 
@@ -55,7 +79,9 @@ def test_no_cancel_within_threshold(quote_loop):
         price=50000.0,
         qty=0.01,
         status="New",
-        create_time=time.time(),
+        filled_qty=0.0,
+        remaining_qty=0.01,
+        created_time=time.time(),
         last_update_time=time.time()
     )
     
@@ -79,7 +105,9 @@ def test_cancel_beyond_threshold(quote_loop):
         price=50000.0,
         qty=0.01,
         status="New",
-        create_time=time.time(),
+        filled_qty=0.0,
+        remaining_qty=0.01,
+        created_time=time.time(),
         last_update_time=time.time()
     )
     
@@ -104,7 +132,9 @@ def test_cancel_on_volatile_spike(quote_loop):
         price=50000.0,
         qty=0.01,
         status="New",
-        create_time=time.time(),
+        filled_qty=0.0,
+        remaining_qty=0.01,
+        created_time=time.time(),
         last_update_time=time.time()
     )
     
@@ -141,7 +171,9 @@ def test_no_cancel_during_cooldown(quote_loop):
         price=50000.0,
         qty=0.01,
         status="New",
-        create_time=time.time(),
+        filled_qty=0.0,
+        remaining_qty=0.01,
+        created_time=time.time(),
         last_update_time=time.time()
     )
     
@@ -182,7 +214,9 @@ def test_fast_cancel_disabled(quote_loop):
         price=50000.0,
         qty=0.01,
         status="New",
-        create_time=time.time(),
+        filled_qty=0.0,
+        remaining_qty=0.01,
+        created_time=time.time(),
         last_update_time=time.time()
     )
     
@@ -211,7 +245,9 @@ async def test_check_and_cancel_stale_orders(quote_loop, mock_order_manager):
         price=50000.0,
         qty=0.01,
         status="New",
-        create_time=time.time(),
+        filled_qty=0.0,
+        remaining_qty=0.01,
+        created_time=time.time(),
         last_update_time=time.time()
     )
     
@@ -220,10 +256,12 @@ async def test_check_and_cancel_stale_orders(quote_loop, mock_order_manager):
         order_id="",
         symbol=symbol,
         side="Sell",
-        price=50100.0,
+        price=50050.0,  # Closer to mid to avoid volatile_spike
         qty=0.01,
         status="New",
-        create_time=time.time(),
+        filled_qty=0.0,
+        remaining_qty=0.01,
+        created_time=time.time(),
         last_update_time=time.time()
     )
     
@@ -232,18 +270,19 @@ async def test_check_and_cancel_stale_orders(quote_loop, mock_order_manager):
         "order2": order2
     }
     
-    # Price moves to 50030 (6 bps from order1, 1.4 bps from order2)
-    current_mid = 50030.0
+    # Price moves to 50025 (5 bps from order1, 5 bps from order2)
+    # Both trigger fast-cancel (> 3 bps), but not volatile_spike (< 10 bps)
+    current_mid = 50025.0
     
     canceled_ids = await quote_loop.check_and_cancel_stale_orders(symbol, current_mid, now_ms)
     
-    # Only order1 should be canceled (>3 bps drift)
-    assert len(canceled_ids) == 1
+    # Both orders should be canceled (both > 3 bps drift)
+    assert len(canceled_ids) == 2
     assert "order1" in canceled_ids
+    assert "order2" in canceled_ids
     
-    # Verify cancel_order was called
-    assert mock_order_manager.cancel_order.call_count == 1
-    mock_order_manager.cancel_order.assert_called_with("order1")
+    # Verify cancel_order was called twice
+    assert mock_order_manager.cancel_order.call_count == 2
 
 
 def test_bid_sell_symmetry(quote_loop):
@@ -259,7 +298,9 @@ def test_bid_sell_symmetry(quote_loop):
         price=50000.0,
         qty=0.01,
         status="New",
-        create_time=time.time(),
+        filled_qty=0.0,
+        remaining_qty=0.01,
+        created_time=time.time(),
         last_update_time=time.time()
     )
     
@@ -272,7 +313,9 @@ def test_bid_sell_symmetry(quote_loop):
         price=50000.0,
         qty=0.01,
         status="New",
-        create_time=time.time(),
+        filled_qty=0.0,
+        remaining_qty=0.01,
+        created_time=time.time(),
         last_update_time=time.time()
     )
     

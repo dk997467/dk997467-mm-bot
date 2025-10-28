@@ -6,6 +6,15 @@ import platform
 import socket as _socket
 
 # ============================================================================
+# CRITICAL FIX #0: Add project root to sys.path for imports
+# ============================================================================
+# This MUST happen before any test imports are attempted
+# ============================================================================
+PROJECT_ROOT = Path(__file__).resolve().parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+# ============================================================================
 # CRITICAL FIX: Windows asyncio event loop policy
 # ============================================================================
 # On Windows, ProactorEventLoop has issues with socket pairs used by pytest.
@@ -53,7 +62,7 @@ async def cleanup_tasks():
 # However, fixtures are actually in `tests/fixtures/` and `tests/golden/`.
 # This creates symlinks in project root to resolve paths correctly.
 # ============================================================================
-PROJECT_ROOT = Path(__file__).resolve().parent
+# PROJECT_ROOT already defined above for sys.path
 FIXTURES_TARGET = PROJECT_ROOT / "tests" / "fixtures"
 GOLDEN_TARGET = PROJECT_ROOT / "tests" / "golden"
 FIXTURES_LINK = PROJECT_ROOT / "fixtures"
@@ -161,6 +170,11 @@ if not isinstance(sys.stderr, io.TextIOBase):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
+    # CRITICAL: Add project root to sys.path FIRST to allow imports from tools/, src/, etc.
+    project_root = Path(__file__).resolve().parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    
     os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
     os.environ.setdefault("TZ", "UTC")
     try:

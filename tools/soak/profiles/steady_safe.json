@@ -1,0 +1,14 @@
+{
+  "description": "Steady safe profile: conservative parameters for smoke testing",
+  "version": "1.0",
+  "base_spread_bps_delta": 0.15,
+  "impact_cap_ratio": 0.08,
+  "max_delta_ratio": 0.15,
+  "min_interval_ms": 75,
+  "replace_rate_per_min": 250,
+  "tail_age_ms": 740,
+  "risk_limit": 0.40,
+  "maker_taker_min": 0.83,
+  "latency_p95_limit_ms": 350
+}
+

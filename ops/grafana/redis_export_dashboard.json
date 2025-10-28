@@ -1,0 +1,336 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "redis-export-monitoring",
+    "title": "Redis Export Monitoring",
+    "description": "Performance and health monitoring for Redis KPI export operations (labeled metrics)",
+    "tags": ["redis", "export", "performance", "observability"],
+    "timezone": "browser",
+    "schemaVersion": 30,
+    "version": 2,
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timepicker": {},
+    "templating": {
+      "list": [
+        {
+          "name": "env",
+          "type": "query",
+          "label": "Environment",
+          "query": "label_values(redis_export_batches_total, env)",
+          "current": {
+            "text": "dev",
+            "value": "dev"
+          },
+          "multi": false,
+          "includeAll": false,
+          "refresh": 2
+        },
+        {
+          "name": "exchange",
+          "type": "query",
+          "label": "Exchange",
+          "query": "label_values(redis_export_batches_total{env=\"$env\"}, exchange)",
+          "current": {
+            "text": "bybit",
+            "value": "bybit"
+          },
+          "multi": false,
+          "includeAll": false,
+          "refresh": 2
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "type": "graph",
+        "title": "Export Batches per Second",
+        "gridPos": {
+          "x": 0,
+          "y": 0,
+          "w": 12,
+          "h": 8
+        },
+        "targets": [
+          {
+            "expr": "sum by (env, exchange, mode) (rate(redis_export_batches_total{env=\"$env\",exchange=\"$exchange\"}[5m]))",
+            "legendFormat": "{{env}}/{{exchange}}/{{mode}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "label": "Batches/sec",
+            "format": "short"
+          },
+          {
+            "show": false
+          }
+        ],
+        "xaxis": {
+          "show": true,
+          "mode": "time"
+        },
+        "lines": true,
+        "fill": 1,
+        "linewidth": 2,
+        "pointradius": 2,
+        "points": false,
+        "legend": {
+          "show": true,
+          "alignAsTable": true,
+          "avg": true,
+          "current": true,
+          "max": true,
+          "min": true
+        },
+        "tooltip": {
+          "shared": true,
+          "value_type": "individual"
+        },
+        "nullPointMode": "null"
+      },
+      {
+        "id": 2,
+        "type": "graph",
+        "title": "Average Batch Duration (ms) - p50",
+        "gridPos": {
+          "x": 12,
+          "y": 0,
+          "w": 12,
+          "h": 8
+        },
+        "targets": [
+          {
+            "expr": "sum(rate(redis_export_batch_duration_ms_sum{env=\"$env\",exchange=\"$exchange\"}[5m])) by (env, exchange, mode) / sum(rate(redis_export_batch_duration_ms_count{env=\"$env\",exchange=\"$exchange\"}[5m])) by (env, exchange, mode)",
+            "legendFormat": "{{env}}/{{exchange}}/{{mode}} (avg)",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "label": "Milliseconds",
+            "format": "ms"
+          },
+          {
+            "show": false
+          }
+        ],
+        "xaxis": {
+          "show": true,
+          "mode": "time"
+        },
+        "lines": true,
+        "fill": 1,
+        "linewidth": 2,
+        "pointradius": 2,
+        "points": false,
+        "legend": {
+          "show": true,
+          "alignAsTable": true,
+          "avg": true,
+          "current": true,
+          "max": true,
+          "min": true
+        },
+        "tooltip": {
+          "shared": true,
+          "value_type": "individual"
+        },
+        "nullPointMode": "null",
+        "thresholds": [
+          {
+            "value": 100,
+            "colorMode": "critical",
+            "op": "gt",
+            "fill": true,
+            "line": true
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "type": "graph",
+        "title": "Keys Written per Minute",
+        "gridPos": {
+          "x": 0,
+          "y": 8,
+          "w": 12,
+          "h": 8
+        },
+        "targets": [
+          {
+            "expr": "sum by (env, exchange, mode) (increase(redis_export_keys_written_total{env=\"$env\",exchange=\"$exchange\"}[1m]))",
+            "legendFormat": "{{env}}/{{exchange}}/{{mode}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "label": "Keys/min",
+            "format": "short"
+          },
+          {
+            "show": false
+          }
+        ],
+        "xaxis": {
+          "show": true,
+          "mode": "time"
+        },
+        "lines": true,
+        "fill": 1,
+        "linewidth": 2,
+        "pointradius": 2,
+        "points": false,
+        "bars": false,
+        "legend": {
+          "show": true,
+          "alignAsTable": true,
+          "avg": true,
+          "current": true,
+          "max": true,
+          "min": true
+        },
+        "tooltip": {
+          "shared": true,
+          "value_type": "individual"
+        },
+        "nullPointMode": "null"
+      },
+      {
+        "id": 4,
+        "type": "stat",
+        "title": "Failed Batches (last 5m)",
+        "gridPos": {
+          "x": 12,
+          "y": 8,
+          "w": 6,
+          "h": 8
+        },
+        "targets": [
+          {
+            "expr": "sum(increase(redis_export_batches_failed_total{env=\"$env\",exchange=\"$exchange\"}[5m]))",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "background",
+          "justifyMode": "center",
+          "orientation": "auto",
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"]
+          },
+          "textMode": "value_and_name"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "decimals": 0,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": null, "color": "green"},
+                {"value": 1, "color": "yellow"},
+                {"value": 5, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "type": "stat",
+        "title": "Total Batches (last 5m)",
+        "gridPos": {
+          "x": 18,
+          "y": 8,
+          "w": 6,
+          "h": 8
+        },
+        "targets": [
+          {
+            "expr": "sum(increase(redis_export_batches_total{env=\"$env\",exchange=\"$exchange\"}[5m]))",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "background",
+          "justifyMode": "center",
+          "orientation": "auto",
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"]
+          },
+          "textMode": "value_and_name"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "decimals": 0,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": null, "color": "blue"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 6,
+        "type": "table",
+        "title": "Export Metrics Summary (by Mode)",
+        "gridPos": {
+          "x": 0,
+          "y": 16,
+          "w": 24,
+          "h": 6
+        },
+        "targets": [
+          {
+            "expr": "redis_export_batches_total{env=\"$env\",exchange=\"$exchange\"}",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "{{mode}}",
+            "refId": "A"
+          },
+          {
+            "expr": "redis_export_keys_written_total{env=\"$env\",exchange=\"$exchange\"}",
+            "format": "table",
+            "instant": true,
+            "refId": "B"
+          },
+          {
+            "expr": "redis_export_batches_failed_total{env=\"$env\",exchange=\"$exchange\"}",
+            "format": "table",
+            "instant": true,
+            "refId": "C"
+          }
+        ],
+        "options": {
+          "showHeader": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "left",
+              "displayMode": "auto"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "overwrite": true,
+  "message": "Redis Export Monitoring Dashboard v2.0 - Labeled metrics with env/exchange/mode",
+  "folderId": 0,
+  "folderUid": ""
+}

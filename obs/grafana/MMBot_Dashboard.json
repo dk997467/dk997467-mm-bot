@@ -1,0 +1,314 @@
+{
+  "dashboard": {
+    "title": "MM-Bot Production Dashboard",
+    "tags": ["mm-bot", "trading", "monitoring"],
+    "timezone": "browser",
+    "schemaVersion": 16,
+    "version": 1,
+    "refresh": "10s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Reconciliation Divergences (by type)",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "sum(mm_recon_divergence_total) by (type)",
+            "legendFormat": "{{ type }}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "Count"},
+          {"format": "short"}
+        ],
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": {"params": [0], "type": "gt"},
+              "operator": {"type": "and"},
+              "query": {"params": ["A", "10m", "now"]},
+              "reducer": {"params": [], "type": "diff"},
+              "type": "query"
+            }
+          ],
+          "executionErrorState": "alerting",
+          "frequency": "60s",
+          "handler": 1,
+          "name": "Recon Divergence Alert",
+          "noDataState": "no_data",
+          "notifications": []
+        }
+      },
+      {
+        "id": 2,
+        "title": "Maker/Taker Ratio",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "mm_maker_taker_ratio",
+            "legendFormat": "Maker/Taker Ratio",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "percentunit", "label": "Ratio", "min": 0, "max": 1},
+          {"format": "short"}
+        ],
+        "thresholds": [
+          {
+            "value": 0.85,
+            "colorMode": "critical",
+            "op": "lt",
+            "fill": true,
+            "line": true
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Net PnL (BPS)",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "mm_net_bps",
+            "legendFormat": "Net BPS",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "Basis Points"},
+          {"format": "short"}
+        ],
+        "thresholds": [
+          {
+            "value": 0,
+            "colorMode": "critical",
+            "op": "lt",
+            "fill": true,
+            "line": true
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Orders Blocked (by reason)",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "sum(rate(mm_orders_blocked_total[5m])) by (reason)",
+            "legendFormat": "{{ reason }}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Blocks/sec"},
+          {"format": "short"}
+        ],
+        "stack": true
+      },
+      {
+        "id": 5,
+        "title": "Symbol Filters Source (stacked)",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "sum(rate(mm_symbol_filters_source_total[5m])) by (source)",
+            "legendFormat": "{{ source }}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Lookups/sec"},
+          {"format": "short"}
+        ],
+        "stack": true
+      },
+      {
+        "id": 6,
+        "title": "Freeze Events",
+        "type": "stat",
+        "gridPos": {"x": 12, "y": 16, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "sum(mm_freeze_events_total) by (reason)",
+            "legendFormat": "{{ reason }}",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "colorMode": "background",
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": ["lastNotNull"],
+            "fields": "",
+            "values": false
+          },
+          "textMode": "auto"
+        },
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {"value": null, "color": "green"},
+            {"value": 1, "color": "yellow"},
+            {"value": 10, "color": "red"}
+          ]
+        }
+      },
+      {
+        "id": 7,
+        "title": "Kill-Switch Status (Live Enable)",
+        "type": "stat",
+        "gridPos": {"x": 18, "y": 16, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "mm_live_enable",
+            "legendFormat": "Live Mode",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "colorMode": "background",
+          "graphMode": "none",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": ["lastNotNull"],
+            "fields": "",
+            "values": false
+          },
+          "textMode": "value_and_name"
+        },
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {"value": 0, "color": "green"},
+            {"value": 1, "color": "red"}
+          ]
+        },
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              {"type": "value", "value": "0", "text": "SHADOW"},
+              {"type": "value", "value": "1", "text": "LIVE"}
+            ]
+          }
+        }
+      },
+      {
+        "id": 8,
+        "title": "Exchange Latency (histogram)",
+        "type": "heatmap",
+        "gridPos": {"x": 0, "y": 20, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "sum(rate(mm_exchange_latency_ms_bucket[5m])) by (le)",
+            "legendFormat": "{{ le }}",
+            "refId": "A",
+            "format": "heatmap"
+          }
+        ],
+        "heatmap": {},
+        "cards": {
+          "cardPadding": null,
+          "cardRound": null
+        },
+        "color": {
+          "mode": "spectrum",
+          "cardColor": "#b4ff00",
+          "colorScale": "sqrt",
+          "exponent": 0.5,
+          "min": null,
+          "max": null
+        },
+        "dataFormat": "tsbuckets",
+        "yAxis": {
+          "format": "ms",
+          "decimals": null,
+          "logBase": 1,
+          "min": null,
+          "max": null
+        }
+      },
+      {
+        "id": 9,
+        "title": "Symbol Filters Fetch Errors",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 20, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "sum(rate(mm_symbol_filters_fetch_errors_total[5m]))",
+            "legendFormat": "Errors/sec",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Errors/sec"},
+          {"format": "short"}
+        ],
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": {"params": [0], "type": "gt"},
+              "operator": {"type": "and"},
+              "query": {"params": ["A", "15m", "now"]},
+              "reducer": {"params": [], "type": "diff"},
+              "type": "query"
+            }
+          ],
+          "executionErrorState": "alerting",
+          "frequency": "60s",
+          "handler": 1,
+          "name": "Symbol Filters Error Alert",
+          "noDataState": "no_data"
+        }
+      },
+      {
+        "id": 10,
+        "title": "Cache Hit Rate",
+        "type": "gauge",
+        "gridPos": {"x": 12, "y": 28, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "rate(mm_symbol_filters_source_total{source=\"cached\"}[5m]) / (rate(mm_symbol_filters_source_total[5m]) + 0.0001) * 100",
+            "legendFormat": "Cache Hit %",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
+        },
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {"value": null, "color": "red"},
+            {"value": 50, "color": "yellow"},
+            {"value": 80, "color": "green"}
+          ]
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100
+          }
+        }
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timepicker": {
+      "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m"],
+      "time_options": ["5m", "15m", "1h", "6h", "12h", "24h", "2d", "7d", "30d"]
+    }
+  }
+}
+

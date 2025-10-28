@@ -1,0 +1,423 @@
+name: Accuracy Gate (Shadow ↔ Dry-Run)
+
+on:
+  pull_request:
+    paths:
+      - 'tools/shadow/**'
+      - 'tools/dryrun/**'
+      - 'tools/accuracy/**'
+      - '.github/workflows/accuracy.yml'
+  workflow_dispatch:
+    inputs:
+      min_windows:
+        description: 'Minimum windows required'
+        required: false
+        default: '24'
+        type: string
+      mape_threshold:
+        description: 'MAPE threshold (0.15 = 15%)'
+        required: false
+        default: '0.15'
+        type: string
+      sanity_mode:
+        description: 'Run sanity check only (edge cases + formatting)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: accuracy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  accuracy-gate:
+    name: Accuracy Comparison
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTHONPATH: "${{ github.workspace }}"
+      BYBIT_API_KEY: "test_api_key_for_ci_only"
+      BYBIT_API_SECRET: "test_api_secret_for_ci_only"
+      STORAGE_PG_PASSWORD: "test_pg_password_for_ci_only"
+      MAX_SYMBOLS_IN_PR: "10"  # Truncate PR tables to top N symbols
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - name: Prepare minimal requirements for CI
+        shell: bash
+        run: |
+          awk '
+            BEGIN{IGNORECASE=1}
+            /^[[:space:]]*bybit-connector/ {next}
+            /^[[:space:]]*mm-orderbook/ {next}
+            /^[[:space:]]*mm_orderbook/ {next}
+            /^[[:space:]]*git\+/ {next}
+            {print}
+          ' requirements.txt > requirements_ci.txt
+          
+          echo "pydantic>=2,<3" >> requirements_ci.txt
+          echo "pydantic-settings>=2,<3" >> requirements_ci.txt
+          echo "pandas>=2,<3" >> requirements_ci.txt
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          pip install maturin
+          pip install -e . -v
+          pip install -r requirements_ci.txt
+      
+      - name: Run Shadow Mode (mock, 24 iterations)
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "SHADOW MODE: 24 iterations for accuracy baseline"
+          echo "================================================"
+          
+          mkdir -p artifacts/shadow/latest
+          
+          python -m tools.shadow.run_shadow \
+            --iterations 24 \
+            --duration 60 \
+            --profile moderate \
+            --exchange bybit \
+            --mock \
+            --output artifacts/shadow/latest
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Shadow run failed"
+            exit 1
+          fi
+          
+          echo "✓ Shadow run completed"
+          ls -lah artifacts/shadow/latest/ITER_SUMMARY_*.json | head -5
+      
+      - name: Run Dry-Run Mode (mock/redis, 24 iterations)
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "DRY-RUN MODE: 24 iterations for accuracy comparison"
+          echo "================================================"
+          
+          mkdir -p artifacts/dryrun/latest
+          
+          # Run dryrun with same parameters as shadow
+          python -m tools.dryrun.run_dryrun \
+            --symbols BTCUSDT ETHUSDT \
+            --iterations 24 \
+            --duration 60 \
+            --output artifacts/dryrun/latest
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Dry-run failed"
+            exit 1
+          fi
+          
+          echo "✓ Dry-run completed"
+          ls -lah artifacts/dryrun/latest/ITER_SUMMARY_*.json | head -5
+      
+      - name: Run Accuracy Comparison
+        if: ${{ github.event.inputs.sanity_mode != 'true' }}
+        id: accuracy_compare
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "ACCURACY GATE: Comparing Shadow vs Dry-Run"
+          echo "================================================"
+          
+          MIN_WINDOWS="${{ github.event.inputs.min_windows || '24' }}"
+          MAPE_THRESHOLD="${{ github.event.inputs.mape_threshold || '0.15' }}"
+          
+          python -m tools.accuracy.compare_shadow_dryrun \
+            --shadow "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+            --dryrun "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+            --symbols BTCUSDT,ETHUSDT \
+            --min-windows "$MIN_WINDOWS" \
+            --max-age-min 120 \
+            --mape-threshold "$MAPE_THRESHOLD" \
+            --median-delta-threshold-bps 1.5 \
+            --out-dir reports/analysis \
+            --verbose
+          
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          
+          echo ""
+          echo "Accuracy comparison exit code: $EXIT_CODE"
+          echo "  0 = PASS, 1 = FAIL, 2 = WARN"
+      
+      - name: Run Sanity Check
+        if: ${{ github.event.inputs.sanity_mode == 'true' }}
+        id: sanity_check
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "ACCURACY GATE: Sanity Check Mode"
+          echo "================================================"
+          
+          MIN_WINDOWS="${{ github.event.inputs.min_windows || '24' }}"
+          MAPE_THRESHOLD="${{ github.event.inputs.mape_threshold || '0.15' }}"
+          
+          python -m tools.accuracy.sanity_check \
+            --shadow-glob "artifacts/shadow/latest/ITER_SUMMARY_*.json" \
+            --dryrun-glob "artifacts/dryrun/latest/ITER_SUMMARY_*.json" \
+            --min-windows "$MIN_WINDOWS" \
+            --max-age-min 120 \
+            --mape-threshold "$MAPE_THRESHOLD" \
+            --median-delta-bps 1.5 \
+            --report-dir reports/analysis \
+            --verbose
+          
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          
+          echo ""
+          echo "Sanity check exit code: $EXIT_CODE"
+          echo "  0 = PASS (all scenarios OK), 1 = ATTENTION (some failed)"
+      
+      - name: Display Accuracy Report
+        if: always()
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "ACCURACY REPORT"
+          echo "================================================"
+          
+          if [ -f reports/analysis/ACCURACY_REPORT.md ]; then
+            cat reports/analysis/ACCURACY_REPORT.md
+          else
+            echo "❌ ACCURACY_REPORT.md not found"
+          fi
+          
+          echo ""
+          echo "================================================"
+          echo "ACCURACY SUMMARY (JSON)"
+          echo "================================================"
+          
+          if [ -f reports/analysis/ACCURACY_SUMMARY.json ]; then
+            cat reports/analysis/ACCURACY_SUMMARY.json | jq .
+          else
+            echo "❌ ACCURACY_SUMMARY.json not found"
+          fi
+          
+          # Display sanity report if in sanity mode
+          if [ "${{ github.event.inputs.sanity_mode }}" = "true" ]; then
+            echo ""
+            echo "================================================"
+            echo "SANITY CHECK REPORT"
+            echo "================================================"
+            
+            if [ -f reports/analysis/ACCURACY_SANITY.md ]; then
+              cat reports/analysis/ACCURACY_SANITY.md
+            else
+              echo "❌ ACCURACY_SANITY.md not found"
+            fi
+          fi
+      
+      - name: Upload Accuracy Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-gate-${{ github.run_id }}
+          path: |
+            reports/analysis/ACCURACY_*.md
+            reports/analysis/ACCURACY_*.json
+            reports/analysis/sanity_*/**
+            artifacts/shadow/latest/ITER_SUMMARY_*.json
+            artifacts/dryrun/latest/ITER_SUMMARY_*.json
+          if-no-files-found: warn
+          retention-days: 30
+      
+      - name: Comment Accuracy Results to PR
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.number
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const sanityMode = '${{ github.event.inputs.sanity_mode }}' === 'true';
+            
+            // Build artifact links
+            const runId = context.runId;
+            const artifactsPage = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${runId}#artifacts`;
+            
+            let comment = '';
+            
+            if (sanityMode) {
+              // Sanity mode comment
+              const sanityPath = 'reports/analysis/ACCURACY_SANITY.md';
+              
+              if (!fs.existsSync(sanityPath)) {
+                console.log('ACCURACY_SANITY.md not found, skipping comment');
+                return;
+              }
+              
+              const sanityReport = fs.readFileSync(sanityPath, 'utf8');
+              
+              // Extract verdict from report
+              const verdictMatch = sanityReport.match(/\*\*Overall Verdict:\*\*\s*(.*)/);
+              const verdict = verdictMatch ? verdictMatch[1].trim() : 'UNKNOWN';
+              const badge = verdict.includes('PASS') ? '✅' : '⚠️';
+              
+              // Extract TL;DR from sanity report
+              const scenario1 = sanityReport.match(/Scenario 1.*?Status:\*\*\s*(.*?)\n/s);
+              const scenario2 = sanityReport.match(/Scenario 2.*?Status:\*\*\s*(.*?)\n/s);
+              const scenario3 = sanityReport.match(/Scenario 3.*?Status:\*\*\s*(.*?)\n/s);
+              
+              const s1Status = scenario1 ? scenario1[1].trim().replace(/[✅❌]/g, '').trim() : 'UNKNOWN';
+              const s2Status = scenario2 ? scenario2[1].trim().replace(/[✅❌]/g, '').trim() : 'UNKNOWN';
+              const s3Status = scenario3 ? scenario3[1].trim().replace(/[✅❌]/g, '').trim() : 'UNKNOWN';
+              
+              const tldr = `Sanity: ${verdict} | Empty/Non-overlap=${s1Status} | Max-Age=${s2Status} | Formatting=${s3Status} (top-10 shown)`;
+              
+              comment = `### ${badge} Accuracy Gate: Sanity Check
+              
+              **TL;DR:** ${tldr}
+              
+              **Mode:** Edge Cases + Formatting Validation
+              
+              **Verdict:** ${verdict}
+              
+              **Scenarios Tested:**
+              1. Empty/Non-overlapping symbols → Expected: WARN (no data to compare)
+              2. Max-Age filtering → Expected: Exit 1 or WARN (insufficient windows)
+              3. Formatting (many symbols) → Expected: PASS (table renders OK)
+              
+              **Full Report:** See artifacts for \`ACCURACY_SANITY.md\` and \`ACCURACY_SANITY_SUMMARY.json\`
+              
+              **Artifacts:** [📦 Download](${artifactsPage})
+              
+              _Sanity check validates edge cases and formatting, not actual accuracy._`;
+              
+            } else {
+              // Normal accuracy comparison comment
+              const summaryPath = 'reports/analysis/ACCURACY_SUMMARY.json';
+              
+              if (!fs.existsSync(summaryPath)) {
+                console.log('ACCURACY_SUMMARY.json not found, skipping comment');
+                return;
+              }
+              
+              const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+              const verdict = summary.verdict || 'UNKNOWN';
+              const badge = verdict === 'PASS' ? '✅' : (verdict === 'WARN' ? '🟡' : '🔴');
+              const thresholds = summary.thresholds || {};
+              
+              // Build symbol table (with truncation)
+              const maxSymbols = parseInt(process.env.MAX_SYMBOLS_IN_PR || '10');
+              const allSymbols = Object.keys(summary.symbols || {}).sort();
+              const symbolsToShow = allSymbols.slice(0, maxSymbols);
+              const hiddenCount = Math.max(0, allSymbols.length - maxSymbols);
+              
+              let table = `| Symbol | KPI | MAPE (%) | Median Δ | Status |\n|--------|-----|----------|----------|--------|\n`;
+              
+              for (const sym of symbolsToShow) {
+                const kpis = summary.symbols[sym];
+                for (const [kpi, metrics] of Object.entries(kpis)) {
+                  const mape = metrics.mape_pct ?? 'n/a';
+                  const delta = metrics.median_delta ?? 'n/a';
+                  const status = metrics.status || 'OK';
+                  const statusBadge = status === 'OK' ? '✅' : (status === 'WARN' ? '🟡' : '🔴');
+                  
+                  // Truncate values to prevent line wrap
+                  const mapeStr = typeof mape === 'number' ? mape.toFixed(2) : 'n/a';
+                  const deltaStr = typeof delta === 'number' ? delta.toFixed(4) : 'n/a';
+                  
+                  table += `| ${sym} | ${kpi} | ${mapeStr} | ${deltaStr} | ${statusBadge} ${status} |\n`;
+                }
+              }
+              
+              if (hiddenCount > 0) {
+                table += `| ... | ... | ... | ... | _...and ${hiddenCount} more_ |\n`;
+              }
+              
+              comment = `### ${badge} Accuracy Gate: ${verdict}
+              
+              **Shadow ↔ Dry-Run Comparison**
+              
+              ${table}
+              
+              **Thresholds:**
+              - MAPE: **${thresholds.mape_pct ?? 'n/a'}%**
+              - Median Δ (BPS): **${thresholds.median_delta_bps ?? 'n/a'}**
+              
+              **Summary:**
+              - Symbols: **${summary.meta?.symbols_count ?? 0}**
+              - Fail count: **${summary.meta?.fail_count ?? 0}**
+              - Warn count: **${summary.meta?.warn_count ?? 0}**
+              
+              **Artifacts:** [📦 Download](${artifactsPage})
+              
+              _Generated: ${summary.generated_at_utc || 'n/a'}_`;
+            }
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: comment
+            });
+      
+      - name: Check Accuracy Gate Result
+        if: always()
+        shell: bash
+        run: |
+          SANITY_MODE="${{ github.event.inputs.sanity_mode }}"
+          
+          echo "================================================"
+          echo "ACCURACY GATE RESULT"
+          echo "================================================"
+          
+          if [ "$SANITY_MODE" = "true" ]; then
+            # Sanity mode - informational only, never fails
+            EXIT_CODE="${{ steps.sanity_check.outputs.exit_code }}"
+            
+            if [ "$EXIT_CODE" = "0" ]; then
+              echo "✅ Sanity Check PASSED"
+              echo "All edge case scenarios behaved as expected"
+            else
+              echo "⚠️ Sanity Check: ATTENTION"
+              echo "Some scenarios need review (informational only)"
+            fi
+            
+            echo ""
+            echo "Sanity mode is informational - not blocking"
+            exit 0
+          else
+            # Normal accuracy mode - can block PR
+            EXIT_CODE="${{ steps.accuracy_compare.outputs.exit_code }}"
+            
+            if [ "$EXIT_CODE" = "0" ]; then
+              echo "✅ Accuracy Gate PASSED"
+              echo "Shadow and Dry-Run KPIs are within acceptable thresholds"
+              exit 0
+            elif [ "$EXIT_CODE" = "2" ]; then
+              echo "🟡 Accuracy Gate WARN"
+              echo "Some soft thresholds violated - informational only"
+              exit 0
+            else
+              echo "🔴 Accuracy Gate FAILED"
+              echo "Critical thresholds violated - blocking PR"
+              echo ""
+              echo "Review ACCURACY_REPORT.md for details"
+              exit 1
+            fi
+          fi
+

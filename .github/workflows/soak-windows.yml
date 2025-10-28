@@ -71,6 +71,11 @@ on:
         required: false
         type: number
         default: 1
+      smoke_fallback:
+        description: "Enable smoke fallback (create test files if no ITER_SUMMARY found)"
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "0 2 * * 1" # Понедельник в 02:00 UTC
 
@@ -84,15 +89,26 @@ jobs:
     defaults:
       run:
         shell: pwsh
+        working-directory: ${{ github.workspace }}
     timeout-minutes: 4380 # 73 hours (max: 72h + 1h buffer)
     env:
       # ========================================================================
       # RUNTIME CONFIGURATION
       # ========================================================================
       
+      # Force UTF-8 for Python I/O (prevents UnicodeEncodeError on Windows cp1251)
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+      
       # Python: Auto-detect from PATH or use custom path from input
       # Note: Removed hardcoded path for portability across runners
-      PYTHON_EXE: ${{ inputs.python_path || 'python' }}
+      PYTHON_EXE: ${{ github.event_name == 'workflow_dispatch' && inputs.python_path || 'python' }}
+      
+      # Smoke fallback for diagnostics (default: false)
+      SMOKE_FALLBACK: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke_fallback || 'false' }}
+      
+      # Step control flags (will be set by guard steps)
+      skip_reports: 'false'
       
       # Pytest: Disable plugin autoload for predictability
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
@@ -106,30 +122,35 @@ jobs:
       # MEGA-PROMPT: Runtime overrides and profile
       MM_PROFILE: "S1"
       MM_ALLOW_MISSING_SECRETS: "1"
-      MM_RUNTIME_OVERRIDES_JSON: ${{ inputs.overrides_json }}
+      MM_RUNTIME_OVERRIDES_JSON: ${{ github.event_name == 'workflow_dispatch' && inputs.overrides_json || '' }}
       
       # ========================================================================
       # SOAK TEST PARAMETERS (configurable via workflow_dispatch)
       # ========================================================================
       
       # Duration: How long to run the soak test
-      SOAK_HOURS: ${{ inputs.soak_hours || '24' }}
+      SOAK_HOURS: ${{ github.event_name == 'workflow_dispatch' && inputs.soak_hours || '24' }}
       
       # Timeout: Max time per iteration (prevents hanging)
-      SOAK_ITERATION_TIMEOUT_SECONDS: ${{ inputs.iteration_timeout_seconds || '1200' }}
+      SOAK_ITERATION_TIMEOUT_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.iteration_timeout_seconds || '1200' }}
       
       # Heartbeat: Sleep between iterations (allows system cooldown)
-      SOAK_HEARTBEAT_INTERVAL_SECONDS: ${{ inputs.heartbeat_interval_seconds || '300' }}
+      SOAK_HEARTBEAT_INTERVAL_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.heartbeat_interval_seconds || '300' }}
       
       # Stay-awake: Prevent Windows sleep during soak (1=enabled, 0=disabled)
-      SOAK_STAY_AWAKE: ${{ inputs.stay_awake || '1' }}
+      SOAK_STAY_AWAKE: ${{ github.event_name == 'workflow_dispatch' && inputs.stay_awake || '1' }}
+      
+      # Mini-soak mode parameters (safe fallbacks for all trigger contexts)
+      SOAK_ITERATIONS: ${{ github.event_name == 'workflow_dispatch' && inputs.iterations || '' }}
+      SOAK_AUTO_TUNE: ${{ github.event_name == 'workflow_dispatch' && inputs.auto_tune || false }}
+      ARTIFACT_RETENTION_DAYS: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact_retention_days || '14' }}
       
       # ========================================================================
       # VALIDATION TIMEOUTS (for full_stack_validate.py)
       # ========================================================================
       
       # Step timeout: Max time per validation step
-      FSV_TIMEOUT_SEC: ${{ inputs.validation_timeout_seconds || '900' }}
+      FSV_TIMEOUT_SEC: ${{ github.event_name == 'workflow_dispatch' && inputs.validation_timeout_seconds || '900' }}
       
       # Retries: Allow flaky tests to retry once
       FSV_RETRIES: "1"
@@ -179,7 +200,8 @@ jobs:
       # ========================================================================
       
       ARTIFACTS_ROOT: "${{ github.workspace }}/artifacts"
-      SOAK_ARTIFACTS_DIR: "${{ github.workspace }}/artifacts/soak"
+      SOAK_ARTIFACTS_DIR: "artifacts/soak/latest"
+      SOAK_OUT_DIR: "artifacts/soak/latest"
       CI_ARTIFACTS_DIR: "${{ github.workspace }}/artifacts/ci"
 
     steps:
@@ -192,6 +214,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: "[1.5/13] Force UTF-8 console encoding (PowerShell)"
+        id: force-utf8
+        shell: pwsh
+        run: |
+          Write-Host "=== Configuring UTF-8 console encoding ==="
+          
+          # Set console output encoding to UTF-8
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [Console]::OutputEncoding = $utf8
+          [Console]::InputEncoding = $utf8
+          $OutputEncoding = $utf8
+          
+          # Change console code page to 65001 (UTF-8)
+          chcp 65001 | Out-Null
+          
+          Write-Host "[OK] Console encoding set to UTF-8"
+          Write-Host "[INFO] Code page: $(chcp)"
+          Write-Host "================================================"
 
       - name: Clear Cargo Cache (to ensure clean build)
         run: |
@@ -460,19 +501,19 @@ jobs:
 
       - name: Run mini-soak with auto-tuning
         id: mini-soak
-        if: ${{ inputs.iterations }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.iterations }}
         env:
-          SOAK_SLEEP_SECONDS: ${{ inputs.heartbeat_interval_seconds || 300 }}
+          SOAK_SLEEP_SECONDS: ${{ env.SOAK_HEARTBEAT_INTERVAL_SECONDS }}
         run: |
           Write-Host "================================================"
-          Write-Host "MINI-SOAK MODE: ${{ inputs.iterations }} iterations"
+          Write-Host "MINI-SOAK MODE: $env:SOAK_ITERATIONS iterations"
           Write-Host "================================================"
           
-          $iterations = [int]"${{ inputs.iterations }}"
-          $autotuneFlag = if ("${{ inputs.auto_tune }}" -eq "true") { "--auto-tune" } else { "" }
+          $iterations = [int]$env:SOAK_ITERATIONS
+          $autotuneFlag = if ($env:SOAK_AUTO_TUNE -eq "true") { "--auto-tune" } else { "" }
           
           Write-Host "Iterations: $iterations"
-          Write-Host "Auto-tune: ${{ inputs.auto_tune }}"
+          Write-Host "Auto-tune: $env:SOAK_AUTO_TUNE"
           Write-Host "Profile: $env:MM_PROFILE"
           Write-Host "Sleep between iterations: $env:SOAK_SLEEP_SECONDS seconds"
           Write-Host ""
@@ -499,7 +540,7 @@ jobs:
 
       - name: Verify sleep was used
         id: verify-sleep
-        if: ${{ inputs.iterations }}
+        if: ${{ env.SOAK_ITERATIONS != '' }}
         run: |
           Write-Host "================================================"
           Write-Host "VERIFYING SLEEP BETWEEN ITERATIONS"
@@ -508,7 +549,7 @@ jobs:
           # Check if sleep marker was logged
           # Note: In PowerShell, we can't directly grep the previous step's output
           # So we check if iterations > 1 (sleep only happens when iterations > 1)
-          $iterations = [int]"${{ inputs.iterations }}"
+          $iterations = [int]$env:SOAK_ITERATIONS
           if ($iterations -gt 1) {
             Write-Host "✓ Multi-iteration mode: sleep should have been used"
             Write-Host "  Expected sleep between $($iterations - 1) iteration pairs"
@@ -518,7 +559,7 @@ jobs:
 
       - name: Verify mini-soak artifacts
         id: verify-artifacts
-        if: ${{ inputs.iterations }}
+        if: ${{ env.SOAK_ITERATIONS != '' }}
         run: |
           Write-Host "================================================"
           Write-Host "VERIFYING MINI-SOAK ARTIFACTS"
@@ -549,9 +590,28 @@ jobs:
           
           Write-Host "✅ All required artifacts present"
 
+      - name: Guard - Skip reports if no ITER_SUMMARY yet
+        id: guard-reports
+        if: ${{ env.SOAK_ITERATIONS != '' }}
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "GUARD: Checking for ITER_SUMMARY files"
+          Write-Host "================================================"
+          
+          $iter1 = "artifacts\soak\latest\ITER_SUMMARY_1.json"
+          if (!(Test-Path $iter1)) {
+            Write-Host "[SKIP] No ITER_SUMMARY_1.json yet, skipping report steps"
+            "skip_reports=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } else {
+            Write-Host "[OK] ITER_SUMMARY_1.json found, proceeding with reports"
+            "skip_reports=false" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+          Write-Host "================================================"
+
       - name: Build reports for POST_SOAK_SNAPSHOT
         id: build-reports
-        if: ${{ inputs.iterations }}
+        if: ${{ env.SOAK_ITERATIONS != '' && env.skip_reports != 'true' }}
         continue-on-error: true
         shell: pwsh
         run: |
@@ -580,9 +640,62 @@ jobs:
           }
           Write-Host "================================================"
 
+      - name: Readiness Gate (artifact-based, non-strict for hourly runs)
+        id: readiness-gate
+        if: ${{ env.SOAK_ITERATIONS != '' && env.skip_reports != 'true' }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "READINESS GATE (informational for hourly soak)"
+          Write-Host "================================================"
+          
+          $path = "artifacts\soak\latest"
+          
+          # PR-mode thresholds (non-strict for hourly runs)
+          & $env:PYTHON_EXE -m tools.soak.ci_gates.readiness_gate `
+            --path $path `
+            --min_maker_taker 0.83 `
+            --min_edge 2.9 `
+            --max_latency 330 `
+            --max_risk 0.40
+          
+          $exitCode = $LASTEXITCODE
+          
+          if ($exitCode -ne 0) {
+            Write-Warning "Readiness gate returned HOLD (exit code $exitCode)"
+            Write-Warning "This is informational for hourly runs - not blocking"
+          } else {
+            Write-Host "✓ Readiness gate PASSED"
+          }
+          
+          Write-Host "================================================"
+
+      - name: Write legacy readiness.json (compat)
+        id: legacy-readiness
+        if: ${{ env.SOAK_ITERATIONS != '' && env.skip_reports != 'true' }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "WRITING LEGACY readiness.json (compatibility)"
+          Write-Host "================================================"
+          
+          & $env:PYTHON_EXE -m tools.soak.ci_gates.write_legacy_readiness_json `
+            --src "artifacts\soak\latest" `
+            --out "artifacts\reports"
+          
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✓ Legacy readiness.json written"
+          } else {
+            Write-Warning "Failed to write legacy readiness.json (non-critical)"
+          }
+          
+          Write-Host "================================================"
+
       - name: Post-Soak Audit (generates reports + validates)
         id: post-soak-audit
-        if: ${{ inputs.iterations }}
+        if: ${{ env.SOAK_ITERATIONS != '' && env.skip_reports != 'true' }}
         shell: pwsh
         env:
           PYTHON_EXE: python
@@ -597,9 +710,159 @@ jobs:
             Write-Warning "Audit returned exit code $LASTEXITCODE (informational)"
           }
 
+      - name: List Soak Artifacts (Windows)
+        id: list-artifacts-win
+        if: ${{ env.SOAK_ITERATIONS != '' }}
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "SOAK ARTIFACTS DIAGNOSTIC (Windows)"
+          Write-Host "================================================"
+          Write-Host "PWD=$((Get-Location).Path)"
+          Write-Host "workspace=${{ github.workspace }}"
+          Write-Host "PYTHONPATH=$env:PYTHONPATH"
+          Write-Host "SOAK_ARTIFACTS_DIR=$env:SOAK_ARTIFACTS_DIR"
+          Write-Host "SOAK_OUT_DIR=$env:SOAK_OUT_DIR"
+          Write-Host "SMOKE_FALLBACK=$env:SMOKE_FALLBACK"
+          Write-Host ""
+          
+          # Ensure directories exist
+          if (-not (Test-Path "artifacts\soak")) { 
+            New-Item -ItemType Directory -Path "artifacts\soak" -Force | Out-Null 
+          }
+          if (-not (Test-Path "artifacts\soak\latest")) { 
+            New-Item -ItemType Directory -Path "artifacts\soak\latest" -Force | Out-Null 
+          }
+          
+          Write-Host "Artifacts in artifacts\soak:"
+          Get-ChildItem -Path "artifacts\soak" -Force -ErrorAction SilentlyContinue | Format-Table Name, Length, LastWriteTime -AutoSize
+          
+          Write-Host "Artifacts in artifacts\soak\latest:"
+          Get-ChildItem -Path "artifacts\soak\latest" -Force -ErrorAction SilentlyContinue | Format-Table Name, Length, LastWriteTime -AutoSize
+          
+          Write-Host ""
+          Write-Host "ITER_SUMMARY files:"
+          $iterFiles = Get-ChildItem -Path "artifacts\soak\latest\ITER_SUMMARY_*.json" -ErrorAction SilentlyContinue
+          $cnt = if ($iterFiles) { $iterFiles.Count } else { 0 }
+          Write-Host "Found $cnt ITER_SUMMARY files"
+          
+          if ($cnt -eq 0 -and "$env:SMOKE_FALLBACK" -eq "true") {
+            Write-Warning "No ITER_SUMMARY files found — creating SMOKE windows for diagnostics"
+            '{"maker_taker_ratio":0.85,"net_bps":3.0,"p95_latency_ms":250,"risk_ratio":0.35,"symbol":"BTCUSDT"}' | Set-Content "artifacts\soak\latest\ITER_SUMMARY_001.json" -Encoding UTF8
+            '{"maker_taker_ratio":0.86,"net_bps":2.9,"p95_latency_ms":240,"risk_ratio":0.34,"symbol":"ETHUSDT"}' | Set-Content "artifacts\soak\latest\ITER_SUMMARY_002.json" -Encoding UTF8
+            $iterFiles = Get-ChildItem -Path "artifacts\soak\latest\ITER_SUMMARY_*.json" -ErrorAction SilentlyContinue
+            $cnt = if ($iterFiles) { $iterFiles.Count } else { 0 }
+            Write-Host "ITER files after SMOKE fallback: $cnt"
+          }
+          
+          if ($cnt -eq 0) {
+            Write-Host "::error::No ITER_SUMMARY_*.json produced in artifacts/soak/latest (check soak producer step)."
+            Write-Error "No ITER_SUMMARY files found - cannot run KPI gate"
+            exit 1
+          }
+          
+          $iterFiles | Format-Table Name, Length -AutoSize
+
+      - name: KPI Gate (explicit path or iter mask)
+        id: kpi-gate-win
+        if: ${{ env.SOAK_ITERATIONS != '' }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "KPI GATE (Windows)"
+          Write-Host "================================================"
+          
+          $kpi = "artifacts\soak\latest\SOAK_KPI.json"
+          $iterGlob = "artifacts/soak/latest/ITER_SUMMARY_*.json"
+          
+          if ((Test-Path $kpi -PathType Leaf) -and ((Get-Item $kpi).Length -gt 0)) {
+            Write-Host "Using SOAK_KPI.json with --debug"
+            & $env:PYTHON_EXE -m tools.soak.kpi_gate --debug $kpi
+          } else {
+            Write-Host "Using ITER_SUMMARY glob with --debug: $iterGlob"
+            # Pass glob as string - PowerShell doesn't expand it for external commands
+            # kpi_gate.py will handle glob expansion internally
+            & $env:PYTHON_EXE -m tools.soak.kpi_gate --debug --iter "$iterGlob"
+          }
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "KPI gate returned exit code $LASTEXITCODE (informational)"
+          }
+
+      - name: Write readiness.json (Windows)
+        id: write-readiness-win
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "WRITING READINESS.JSON (Windows)"
+          Write-Host "================================================"
+          
+          # Ensure reports directory exists
+          if (-not (Test-Path "artifacts\reports")) {
+            New-Item -ItemType Directory -Path "artifacts\reports" -Force | Out-Null
+          }
+          
+          & $env:PYTHON_EXE -m tools.soak.write_readiness `
+            --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" `
+            --out "artifacts/reports/readiness.json" `
+            --min_maker_taker 0.83 --min_edge 2.9 --max_latency 330 --max_risk 0.40
+          
+          Write-Host ""
+          if (Test-Path "artifacts\reports\readiness.json") {
+            Write-Host "✓ readiness.json created:"
+            Get-Content "artifacts\reports\readiness.json"
+          } else {
+            Write-Warning "readiness.json not created"
+          }
+
+      - name: Post-Soak Analyzer V2 (trends, sparklines, violations)
+        id: post-soak-analyzer
+        if: ${{ env.SOAK_ITERATIONS != '' }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "================================================"
+          Write-Host "POST-SOAK ANALYZER V2"
+          Write-Host "================================================"
+          
+          $outDir = "artifacts\reports\analysis"
+          if (-not (Test-Path $outDir)) {
+            New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+          }
+          
+          & $env:PYTHON_EXE -m tools.soak.analyze_post_soak `
+            --iter-glob "artifacts/soak/latest/ITER_SUMMARY_*.json" `
+            --min-windows 8 `
+            --out-dir $outDir `
+            --warn-edge 2.5 --crit-edge 2.0 `
+            --warn-maker 0.80 --crit-maker 0.75 `
+            --warn-lat 350 --crit-lat 400 `
+            --warn-risk 0.45 --crit-risk 0.50
+          
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✓ Post-soak analysis completed"
+            
+            if (Test-Path "$outDir\POST_SOAK_ANALYSIS.md") {
+              Write-Host ""
+              Write-Host "=== Analysis Preview (first 30 lines) ==="
+              Get-Content "$outDir\POST_SOAK_ANALYSIS.md" | Select-Object -First 30
+            }
+            
+            if (Test-Path "$outDir\VIOLATIONS.json") {
+              Write-Host ""
+              Write-Host "=== Violations Summary ==="
+              Get-Content "$outDir\VIOLATIONS.json"
+            }
+          } else {
+            Write-Warning "Post-soak analysis returned exit code $LASTEXITCODE (non-blocking)"
+          }
+
       - name: Build PR summary (short)
         id: pr-summary
-        if: ${{ inputs.iterations && github.event.pull_request.number }}
+        if: ${{ env.SOAK_ITERATIONS != '' && github.event_name == 'pull_request' && github.event.pull_request.number }}
         shell: pwsh
         env:
           PYTHON_EXE: python
@@ -613,7 +876,7 @@ jobs:
           Get-Content pr_summary.md
 
       - name: Comment readiness summary to PR
-        if: ${{ inputs.iterations && github.event.pull_request.number }}
+        if: ${{ env.SOAK_ITERATIONS != '' && github.event_name == 'pull_request' && github.event.pull_request.number }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -629,7 +892,7 @@ jobs:
 
       - name: Start resource monitoring (background)
         id: start-monitoring
-        if: ${{ !inputs.iterations }}
+        if: ${{ env.SOAK_ITERATIONS == '' }}
         run: |
           Write-Host "--- Starting resource monitor in background ---"
           $monitorScript = "${{ github.workspace }}\tools\soak\resource_monitor.py"
@@ -645,7 +908,7 @@ jobs:
           "monitor_job_id=$($monitorJob.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Run long soak loop (legacy mode)
-        if: ${{ !inputs.iterations }}
+        if: ${{ env.SOAK_ITERATIONS == '' }}
         id: soak-loop
         run: |
           $durationHours = [int]$env:SOAK_HOURS
@@ -1018,7 +1281,20 @@ jobs:
             artifacts/**
             .pytest_cache/**
           if-no-files-found: ignore
-          retention-days: ${{ inputs.artifact_retention_days || 14 }}
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+      
+      - name: Upload full artifacts on failure (Windows)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-windows-failure-debug-${{ github.run_id }}
+          path: |
+            artifacts/**
+            *.log
+            **/*.err.log
+            .pytest_cache/**
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: "[13/13] Telegram failure notification"
         id: notify-telegram

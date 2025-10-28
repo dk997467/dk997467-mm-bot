@@ -1,0 +1,134 @@
+# MM-Bot Prometheus Alert Rules
+# P0.11: Testnet Smoke Pack — Production-readiness alerts
+
+groups:
+  - name: mm_bot_critical
+    interval: 30s
+    rules:
+      # Critical: Reconciliation detected divergence between local and remote state
+      - alert: MMBotReconDivergence
+        expr: increase(mm_recon_divergence_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          component: reconciliation
+        annotations:
+          summary: "MM-Bot reconciliation divergence detected"
+          description: |
+            Reconciliation found {{ $value }} divergence(s) in the last 10 minutes.
+            Type: {{ $labels.type }}
+            Possible causes:
+            - orders_local_only: Order canceled on exchange without local knowledge
+            - orders_remote_only: Orphan order on exchange (CRITICAL - cancel immediately)
+            - position_mismatch: Missed fill events or processing errors
+            
+            Immediate action required. See RUNBOOK_SHADOW.md P0.10 reconciliation triage.
+
+      # Critical: Live mode armed but bot is down (safety check)
+      - alert: MMBotLiveEnableArmed
+        expr: mm_live_enable == 1 and up == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: kill_switch
+        annotations:
+          summary: "MM-Bot live mode armed but process down"
+          description: |
+            Live trading mode is enabled (MM_LIVE_ENABLE=1) but the bot process is not running.
+            This indicates a potential unclean shutdown or crash while live trading was active.
+            
+            IMMEDIATE ACTION:
+            1. Verify no open orders on exchange
+            2. Check for orphan positions
+            3. Review crash logs
+            4. Run reconciliation before restart
+
+  - name: mm_bot_warning
+    interval: 60s
+    rules:
+      # Warning: Maker/taker ratio too low (paying excessive taker fees)
+      - alert: MMBotMakerTakerLow
+        expr: mm_maker_taker_ratio < 0.85
+        for: 30m
+        labels:
+          severity: warning
+          component: execution
+        annotations:
+          summary: "MM-Bot maker/taker ratio below threshold"
+          description: |
+            Maker/taker ratio is {{ $value | humanizePercentage }}, below 85% threshold for 30 minutes.
+            This indicates too many taker fills (crossing spread, paying higher fees).
+            
+            Possible causes:
+            - Insufficient post-only offset (--post-only-offset-bps too low)
+            - Fast market conditions
+            - Aggressive pricing
+            
+            Action: Review --post-only-offset-bps setting (current target: ≥1.5 bps).
+
+      # Warning: Net PnL negative for extended period
+      - alert: MMBotNetBpsNegative
+        expr: mm_net_bps < 0
+        for: 30m
+        labels:
+          severity: warning
+          component: pnl
+        annotations:
+          summary: "MM-Bot net PnL negative for 30 minutes"
+          description: |
+            Net basis points (after fees/rebates) is {{ $value }} bps, negative for 30 minutes.
+            The strategy is losing money.
+            
+            Possible causes:
+            - Adverse selection (filled on wrong side of market moves)
+            - Excessive taker fees
+            - Inventory risk not managed
+            - Market conditions unfavorable
+            
+            Action: Review execution quality, consider pausing or adjusting parameters.
+
+      # Warning: Symbol filters falling back to defaults (exchange API issues)
+      - alert: MMBotFiltersFallback
+        expr: |
+          increase(mm_symbol_filters_fetch_errors_total[15m]) > 0 or
+          rate(mm_symbol_filters_source_total{source="default_fallback"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: exchange_api
+        annotations:
+          summary: "MM-Bot using fallback symbol filters"
+          description: |
+            Symbol filters fetch failed or falling back to hardcoded defaults.
+            
+            Errors in last 15min: {{ $value }}
+            
+            Possible causes:
+            - Exchange API down or rate-limited
+            - Network connectivity issues
+            - Invalid API credentials
+            
+            Action:
+            1. Check exchange API status
+            2. Verify network connectivity
+            3. Review recent symbol filter fetch errors in logs
+            
+            Risk: Default filters may not match current exchange rules, leading to rejected orders.
+
+  - name: mm_bot_info
+    interval: 120s
+    rules:
+      # Info: Reconciliation summary (non-alerting, for dashboards)
+      - record: mm_recon_divergence_by_type
+        expr: sum(mm_recon_divergence_total) by (type)
+
+      # Info: Symbol filters cache hit rate
+      - record: mm_symbol_filters_cache_hit_rate
+        expr: |
+          rate(mm_symbol_filters_source_total{source="cached"}[5m]) /
+          (rate(mm_symbol_filters_source_total[5m]) + 0.0001)
+
+      # Info: Orders blocked summary
+      - record: mm_orders_blocked_by_reason
+        expr: sum(mm_orders_blocked_total) by (reason)
+
