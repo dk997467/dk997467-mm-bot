@@ -189,7 +189,7 @@ def get_redis_client(redis_url: str) -> Optional[Any]:
             RuntimeWarning
         )
         return None
-        except Exception as e:
+    except Exception as e:
         warnings.warn(
             f"Cannot connect to Redis at {redis_url}: {e}\n"
             f"Falling back to dry-run mode (no actual export).",
@@ -461,7 +461,7 @@ def _export_flat_mode(
         # Dry-run: just log what would be done
         for key, value in all_operations:
             print(f"[DRY-RUN] SETEX {key} {ttl} {value}")
-                exported_count += 1
+            exported_count += 1
         
         # Update metrics even in dry-run
         _increment_metric("redis_export_keys_written_total", env, exchange, mode, exported_count)
@@ -604,8 +604,8 @@ def main():
     # Load iteration summaries
     print(f"[INFO] Loading summaries from: {args.src}")
     summaries = load_iter_summaries(args.src)
-            
-            if not summaries:
+    
+    if not summaries:
         print("[ERROR] No iteration summaries found")
         return 1
     

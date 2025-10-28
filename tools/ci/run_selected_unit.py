@@ -63,7 +63,16 @@ for m in critical_mods:
         sys.exit(2)
 # --- END: robust repo root bootstrap ---
 
-import subprocess, pathlib
+import subprocess, pathlib, compileall
+
+# --- BEGIN: Syntax check ---
+print("[unit-runner] Running syntax check on ./tools...")
+if not compileall.compile_dir("tools", quiet=1):
+    print("[CI] ERROR: Syntax check failed in ./tools", file=sys.stderr)
+    print("[CI] Fix syntax errors before running tests", file=sys.stderr)
+    sys.exit(3)
+print("[unit-runner] OK: Syntax check passed")
+# --- END: Syntax check ---
 
 os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD","1")
 os.environ.setdefault("TZ","UTC")
@@ -80,13 +89,52 @@ if not sel.exists():
 paths = [p.strip() for p in sel.read_text(encoding="ascii").splitlines() 
          if p.strip() and not p.strip().startswith("#")]
 
+# --- BEGIN: Coverage plugin injection ---
+def _ensure_pytest_cov_loaded(pytest_args: list) -> list:
+    """
+    Если переданы флаги --cov*, а автозагрузка плагинов отключена,
+    инжектим явную загрузку плагина: -p pytest_cov.
+    """
+    need_cov = any(a.startswith("--cov") for a in pytest_args)
+    autoload_off = os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "") == "1"
+
+    if need_cov and autoload_off:
+        # Проверим, что плагин установлен
+        try:
+            import pytest_cov  # noqa: F401
+            print("[unit-runner] OK: pytest-cov detected, will inject -p pytest_cov")
+        except ImportError as e:
+            print("[CI] ERROR: pytest-cov не доступен, а --cov передан", file=sys.stderr)
+            print("[CI] Установите: pip install pytest-cov", file=sys.stderr)
+            print(f"[CI] Import error: {e}", file=sys.stderr)
+            sys.exit(3)
+        
+        # Вставим -p pytest_cov в начало, если его ещё нет
+        if "-p" not in pytest_args or "pytest_cov" not in " ".join(pytest_args):
+            pytest_args = ["-p", "pytest_cov"] + pytest_args
+            print("[unit-runner] Injected: -p pytest_cov")
+    
+    return pytest_args
+
+# Собираем аргументы для pytest
+pytest_args_base = ["-q", "-o", "importmode=prepend"]
+pytest_args_user = sys.argv[1:]
+
+# Инжектим pytest_cov если нужно
+pytest_args_user = _ensure_pytest_cov_loaded(pytest_args_user)
+
+# Диагностика
+print("[unit-runner] PYTEST_DISABLE_PLUGIN_AUTOLOAD =", os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD"))
+print("[unit-runner] pytest args:", " ".join(pytest_args_base + paths + pytest_args_user))
+# --- END: Coverage plugin injection ---
+
 # Unit tests: Run sequentially to prevent zombie processes from subprocess-heavy tests
 # Many tests spawn subprocesses (daily_check, postmortem, etc.)
 # Parallel execution can cause CPU overload and zombie process accumulation
 # Timeout: 15 minutes should be enough for all unit tests sequentially
 # CRITICAL: Use prepend import mode to ensure local 'tools' package is used
 # Pass additional CLI arguments (e.g., --cov=tools --cov-fail-under=60)
-cmd = [sys.executable, "-m", "pytest", "-q", "-o", "importmode=prepend", *paths, *sys.argv[1:]]
+cmd = [sys.executable, "-m", "pytest", *pytest_args_base, *paths, *pytest_args_user]
 try:
     # CRITICAL: Pass environment to subprocess so PYTHONPATH is visible to pytest
     r = subprocess.run(cmd, check=False, timeout=900, env=os.environ)  # 15 min timeout
