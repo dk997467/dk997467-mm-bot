@@ -242,8 +242,8 @@ def detect_violations(
                         "window_index": idx,
                         "value": value,
                         "threshold": crit_thresh,
-                        "note": f"Edge below critical threshold ({
-                            value:.2f} < {crit_thresh})"}
+                        "note": f"Edge below critical threshold ({value:.2f} < {crit_thresh})"
+                    }
                 elif value < warn_thresh:
                     violation = {
                         "symbol": symbol,
@@ -252,8 +252,8 @@ def detect_violations(
                         "window_index": idx,
                         "value": value,
                         "threshold": warn_thresh,
-                        "note": f"Edge below warning threshold ({
-                            value:.2f} < {warn_thresh})"}
+                        "note": f"Edge below warning threshold ({value:.2f} < {warn_thresh})"
+                    }
 
             elif metric_name == "maker_taker_ratio":
                 crit_thresh = thresholds.get("crit_maker", 0.70)
@@ -292,8 +292,8 @@ def detect_violations(
                         "window_index": idx,
                         "value": value,
                         "threshold": crit_thresh,
-                        "note": f"Latency above critical threshold ({
-                            value:.0f} > {crit_thresh})"}
+                        "note": f"Latency above critical threshold ({value:.0f} > {crit_thresh})"
+                    }
                 elif value > warn_thresh:
                     violation = {
                         "symbol": symbol,
@@ -302,8 +302,8 @@ def detect_violations(
                         "window_index": idx,
                         "value": value,
                         "threshold": warn_thresh,
-                        "note": f"Latency above warning threshold ({
-                            value:.0f} > {warn_thresh})"}
+                        "note": f"Latency above warning threshold ({value:.0f} > {warn_thresh})"
+                    }
 
             elif metric_name == "risk_ratio":
                 crit_thresh = thresholds.get("crit_risk", 0.40)
@@ -327,8 +327,8 @@ def detect_violations(
                         "window_index": idx,
                         "value": value,
                         "threshold": warn_thresh,
-                        "note": f"Risk approaching warning threshold ({
-                            value:.3f} near {warn_thresh})"}
+                        "note": f"Risk approaching warning threshold ({value:.3f} near {warn_thresh})"
+                    }
 
             if violation:
                 violations.append(violation)
