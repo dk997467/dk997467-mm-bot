@@ -63,7 +63,7 @@ for m in critical_mods:
         sys.exit(2)
 # --- END: robust repo root bootstrap ---
 
-import subprocess, pathlib, compileall
+import subprocess, pathlib, compileall, shlex
 
 # --- BEGIN: Syntax check ---
 print("[unit-runner] Running syntax check on ./tools...")
@@ -116,12 +116,52 @@ def _ensure_pytest_cov_loaded(pytest_args: list) -> list:
     
     return pytest_args
 
+
+def _rewrite_cov_targets(args: list[str]) -> list[str]:
+    """Заменяем широкое --cov=tools на точечные пакеты с реальными тестами."""
+    new_args: list[str] = []
+    replaced = False
+    for a in args:
+        if a.startswith("--cov=tools") and not any(
+            a.startswith(f"--cov=tools/{pkg}") 
+            for pkg in ["live", "obs", "state", "common", "ci"]
+        ):
+            # пропускаем это значение
+            if not replaced:
+                new_args += [
+                    "--cov=tools/live",
+                    "--cov=tools/obs",
+                    "--cov=tools/state",
+                    "--cov=tools/common",
+                    "--cov=tools/ci",
+                ]
+                replaced = True
+                print("[unit-runner] Rewrote --cov=tools -> точечные пакеты")
+        else:
+            new_args.append(a)
+    return new_args
+
+
+def _ensure_cov_config(args: list[str]) -> list[str]:
+    """Гарантируем, что .coveragerc будет подключён."""
+    has_cfg = any(a.startswith("--cov-config") for a in args)
+    if not has_cfg and os.path.exists(".coveragerc"):
+        args = ["--cov-config=.coveragerc"] + args
+        print("[unit-runner] Injected: --cov-config=.coveragerc")
+    return args
+
 # Собираем аргументы для pytest
 pytest_args_base = ["-q", "-o", "importmode=prepend"]
 pytest_args_user = sys.argv[1:]
 
 # Инжектим pytest_cov если нужно
 pytest_args_user = _ensure_pytest_cov_loaded(pytest_args_user)
+
+# Перепишем --cov=tools на точечные таргеты
+pytest_args_user = _rewrite_cov_targets(pytest_args_user)
+
+# Гарантируем подключение .coveragerc
+pytest_args_user = _ensure_cov_config(pytest_args_user)
 
 # Диагностика
 print("[unit-runner] PYTEST_DISABLE_PLUGIN_AUTOLOAD =", os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD"))
