@@ -1,0 +1,2 @@
+"""Fake implementations for testing."""
+

@@ -85,7 +85,8 @@ paths = [p.strip() for p in sel.read_text(encoding="ascii").splitlines()
 # Parallel execution can cause CPU overload and zombie process accumulation
 # Timeout: 15 minutes should be enough for all unit tests sequentially
 # CRITICAL: Use prepend import mode to ensure local 'tools' package is used
-cmd = [sys.executable, "-m", "pytest", "-q", "-o", "importmode=prepend", *paths]
+# Pass additional CLI arguments (e.g., --cov=tools --cov-fail-under=60)
+cmd = [sys.executable, "-m", "pytest", "-q", "-o", "importmode=prepend", *paths, *sys.argv[1:]]
 try:
     # CRITICAL: Pass environment to subprocess so PYTHONPATH is visible to pytest
     r = subprocess.run(cmd, check=False, timeout=900, env=os.environ)  # 15 min timeout

@@ -94,6 +94,7 @@ if __name__ == "__main__":
     parser.add_argument("--in", dest="input_file", help="Input JSONL file (alias)")
     parser.add_argument("--out", help="Output JSONL file (alias)")
     parser.add_argument("--smoke", action="store_true", help="Run smoke test")
+    parser.add_argument("--update-golden", action="store_true", help="Update golden file for tests")
     args = parser.parse_args()
     
     if args.smoke:
@@ -116,22 +117,6 @@ if __name__ == "__main__":
         print("Usage: python -m tools.debug.repro_minimizer --events <input.jsonl> --out-jsonl <output.jsonl>", file=sys.stderr)
         sys.exit(1)
     
-    # Try golden-compat mode
-    from pathlib import Path
-    import shutil
-    
-    is_test_fixture = Path(input_file).name in ["case.jsonl", "full_case.jsonl"]
-    
-    if is_test_fixture:
-        golden_jsonl = Path("tests/golden/REPRO_MIN_case1.jsonl")
-        golden_md = Path("tests/golden/REPRO_MIN_case1.md")
-        
-        if golden_jsonl.exists() and golden_md.exists() and output_jsonl and output_md:
-            Path(output_jsonl).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(golden_jsonl, output_jsonl)
-            shutil.copy(golden_md, output_md)
-            sys.exit(0)
-    
     # Read input file
     input_text = Path(input_file).read_text(encoding='utf-8')
     
@@ -153,8 +138,20 @@ if __name__ == "__main__":
             f.write(f"- Steps removed: {steps}\n\n")
             f.write("## Minimized Output\n\n")
             f.write("```jsonl\n")
-            f.write("".join(lines))
+            for line in lines:
+                f.write(line + "\n")
             f.write("```\n")
+    
+    # Update golden files if requested
+    if args.update_golden:
+        import shutil
+        golden_dir = Path("tests/golden")
+        golden_dir.mkdir(parents=True, exist_ok=True)
+        if output_jsonl:
+            shutil.copy(output_jsonl, golden_dir / "REPRO_MIN_case1.jsonl")
+        if output_md:
+            shutil.copy(output_md, golden_dir / "REPRO_MIN_case1.md")
+        print(f"[OK] Updated golden files: {golden_dir}/REPRO_MIN_case1.{{jsonl,md}}")
     
     # No stdout in CLI mode
     sys.exit(0)

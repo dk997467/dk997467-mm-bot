@@ -26,6 +26,122 @@ _SECTION_WEIGHTS = {
 }
 
 
+def _normalize_bounds(x: float, lo: float, hi: float) -> float:
+    """
+    Normalize value to 0-100 scale with clipping.
+    
+    Args:
+        x: Input value
+        lo: Lower bound (maps to 0)
+        hi: Upper bound (maps to 100)
+    
+    Returns:
+        Normalized value in [0, 100]
+    
+    Example:
+        >>> _normalize_bounds(50, 0, 100)
+        50.0
+        >>> _normalize_bounds(150, 0, 100)
+        100.0
+        >>> _normalize_bounds(-10, 0, 100)
+        0.0
+    """
+    if hi == lo:
+        return 0.0
+    normalized = ((x - lo) / (hi - lo)) * 100
+    return min(100.0, max(0.0, normalized))
+
+
+def _calc_section_scores(raw: Dict[str, Any]) -> Dict[str, float]:
+    """
+    Calculate normalized section scores from raw metrics.
+    
+    Args:
+        raw: Dictionary with aggregated metrics:
+            - avg_edge: Average edge in basis points
+            - avg_latency: Average P95 latency in ms
+            - avg_taker: Average taker share percentage
+            - guards_pct: Guards pass percentage (0-100)
+            - chaos_pct: Chaos pass percentage (0-100)
+            - tests_pct: Tests pass percentage (0-100)
+    
+    Returns:
+        Dictionary of section scores (0-100)
+    
+    Example:
+        >>> raw = {
+        ...     "avg_edge": 2.8,
+        ...     "avg_latency": 320.0,
+        ...     "avg_taker": 12.0,
+        ...     "guards_pct": 100.0,
+        ...     "chaos_pct": 100.0,
+        ...     "tests_pct": 100.0
+        ... }
+        >>> scores = _calc_section_scores(raw)
+        >>> scores["edge"]
+        93.33...
+    """
+    sections = {}
+    
+    # Edge: higher is better (target: 2.5+, scale 0-3)
+    avg_edge = raw.get("avg_edge", 0.0)
+    sections["edge"] = min(100.0, max(0.0, (avg_edge / 3.0) * 100))
+    
+    # Latency: lower is better (target: <350ms, scale 500-0)
+    avg_latency = raw.get("avg_latency", 0.0)
+    sections["latency"] = min(100.0, max(0.0, (500 - avg_latency) / 5.0))
+    
+    # Taker: lower is better (target: <15%, scale 20-0)
+    avg_taker = raw.get("avg_taker", 0.0)
+    sections["taker"] = min(100.0, max(0.0, (20 - avg_taker) * 5))
+    
+    # Guards, Chaos, Tests: direct percentages
+    sections["guards"] = raw.get("guards_pct", 0.0)
+    sections["chaos"] = raw.get("chaos_pct", 0.0)
+    sections["tests"] = raw.get("tests_pct", 0.0)
+    
+    return sections
+
+
+def _calc_total_score(sections: Dict[str, float], weights: Dict[str, float]) -> float:
+    """
+    Calculate weighted total score from section scores.
+    
+    Args:
+        sections: Dictionary of section scores (0-100)
+        weights: Dictionary of section weights (auto-normalized if sum != 1.0)
+    
+    Returns:
+        Weighted total score (0-100)
+    
+    Example:
+        >>> sections = {"edge": 90.0, "latency": 80.0}
+        >>> weights = {"edge": 0.6, "latency": 0.4}
+        >>> _calc_total_score(sections, weights)
+        86.0
+        >>> # Auto-normalizes weights
+        >>> weights = {"edge": 3, "latency": 2}
+        >>> _calc_total_score(sections, weights)
+        86.0
+    """
+    if not weights:
+        return 0.0
+    
+    # Auto-normalize weights if needed
+    weight_sum = sum(weights.values())
+    if weight_sum == 0:
+        return 0.0
+    
+    normalized_weights = {k: v / weight_sum for k, v in weights.items()}
+    
+    total = sum(
+        sections.get(section, 0.0) * weight
+        for section, weight in normalized_weights.items()
+    )
+    
+    return total
+
+
 def _section_scores(reports: List[Dict[str, Any]]) -> Tuple[Dict[str, float], float]:
     """
     Calculate readiness scores from reports.
@@ -70,45 +186,71 @@ def _section_scores(reports: List[Dict[str, Any]]) -> Tuple[Dict[str, float], fl
     chaos_ok = sum(1 for r in reports if r.get("chaos_result") == "OK")
     tests_ok = sum(1 for r in reports if r.get("bug_bash") == "OK")
     
-    # Score each section (0-100)
-    sections = {}
+    # Aggregate raw metrics
+    raw = {
+        "avg_edge": avg_edge,
+        "avg_latency": avg_latency,
+        "avg_taker": avg_taker,
+        "guards_pct": (guards_ok / len(reports)) * 100 if reports else 0.0,
+        "chaos_pct": (chaos_ok / len(reports)) * 100 if reports else 0.0,
+        "tests_pct": (tests_ok / len(reports)) * 100 if reports else 0.0,
+    }
     
-    # Edge: higher is better (target: 2.5+)
-    sections["edge"] = min(100.0, max(0.0, (avg_edge / 3.0) * 100))
+    # Calculate section scores using pure function
+    sections = _calc_section_scores(raw)
     
-    # Latency: lower is better (target: <350ms)
-    sections["latency"] = min(100.0, max(0.0, (500 - avg_latency) / 5.0))
-    
-    # Taker: lower is better (target: <15%)
-    sections["taker"] = min(100.0, max(0.0, (20 - avg_taker) * 5))
-    
-    # Guards: % passed
-    sections["guards"] = (guards_ok / len(reports)) * 100 if reports else 0.0
-    
-    # Chaos: % passed
-    sections["chaos"] = (chaos_ok / len(reports)) * 100 if reports else 0.0
-    
-    # Tests: % passed
-    sections["tests"] = (tests_ok / len(reports)) * 100 if reports else 0.0
-    
-    # Calculate weighted total
-    total = sum(
-        sections.get(section, 0.0) * weight
-        for section, weight in _SECTION_WEIGHTS.items()
-    )
+    # Calculate weighted total using pure function
+    total = _calc_total_score(sections, _SECTION_WEIGHTS)
     
     return sections, total
 
 
-if __name__ == "__main__":
+def _calc_verdict(total_score: float) -> str:
+    """
+    Determine release verdict based on total score.
+    
+    Args:
+        total_score: Total readiness score (0-100)
+    
+    Returns:
+        Verdict: "READY" (>=90), "HOLD" (>=70), or "BLOCK" (<70)
+    
+    Example:
+        >>> _calc_verdict(95.0)
+        'READY'
+        >>> _calc_verdict(75.0)
+        'HOLD'
+        >>> _calc_verdict(50.0)
+        'BLOCK'
+    """
+    if total_score >= 90.0:
+        return "READY"
+    elif total_score >= 70.0:
+        return "HOLD"
+    else:
+        return "BLOCK"
+
+
+def main(argv=None):
+    """
+    CLI entry point for release readiness score.
+    
+    Args:
+        argv: Command-line arguments (default: sys.argv)
+    
+    Returns:
+        Exit code: 0 on success, 1 on failure
+    """
     import argparse
     import json
     import sys
+    import os
+    from datetime import datetime, timezone
     
     parser = argparse.ArgumentParser(description="Release Readiness Score")
     parser.add_argument("--json", action="store_true", default=True, help="Output as JSON (default)")
     parser.add_argument("--smoke", action="store_true", help="Run smoke test")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     
     if args.smoke:
         # Smoke test mode (outputs to stderr to avoid polluting stdout)
@@ -145,7 +287,7 @@ if __name__ == "__main__":
         assert set(sections.keys()) == {"edge", "latency", "taker", "guards", "chaos", "tests"}
         
         sys.stderr.write("\n[OK] Smoke test passed\n")
-        sys.exit(0)
+        return 0
     
     # Default mode: JSON output
     test_reports = [
@@ -163,8 +305,6 @@ if __name__ == "__main__":
     sections, total = _section_scores(test_reports)
     
     # Add runtime (deterministic for tests)
-    import os
-    from datetime import datetime, timezone
     if os.environ.get('CI_FAKE_UTC'):
         utc_iso = os.environ.get('CI_FAKE_UTC')
     elif os.environ.get('MM_FREEZE_UTC') == '1':
@@ -172,13 +312,8 @@ if __name__ == "__main__":
     else:
         utc_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     
-    # Determine verdict based on score
-    if total >= 0.9:
-        verdict = "READY"
-    elif total >= 0.7:
-        verdict = "HOLD"
-    else:
-        verdict = "BLOCK"
+    # Determine verdict
+    verdict = _calc_verdict(total)
     
     result = {
         "runtime": {
@@ -192,4 +327,9 @@ if __name__ == "__main__":
     
     # Print ONLY JSON to stdout (no prefixes, no [OK] markers)
     print(json.dumps(result, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
-    sys.exit(0)
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

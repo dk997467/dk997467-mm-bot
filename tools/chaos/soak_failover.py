@@ -100,7 +100,8 @@ class FakeKVLock:
         return False
 
 
-if __name__ == "__main__":
+def main():
+    """CLI entry point for chaos failover testing."""
     import sys
     import argparse
     
@@ -161,3 +162,7 @@ if __name__ == "__main__":
     sys.stdout.write("CHAOS_RESULT=OK\n")
     
     sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

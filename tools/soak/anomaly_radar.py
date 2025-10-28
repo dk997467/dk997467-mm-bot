@@ -126,6 +126,7 @@ if __name__ == "__main__":
     parser.add_argument("--out-json", default="artifacts/ANOMALY_RADAR.json", help="Output JSON path")
     parser.add_argument("--out", default="artifacts/ANOMALY_RADAR.json", help="Output JSON path (alias)")
     parser.add_argument("--smoke", action="store_true", help="Run smoke test")
+    parser.add_argument("--update-golden", action="store_true", help="Update golden file for tests")
     args = parser.parse_args()
     
     if args.smoke:
@@ -157,28 +158,8 @@ if __name__ == "__main__":
         print("\n[OK] All smoke tests passed")
         sys.exit(0)
     
-    # Try golden-compat mode first
-    import os
-    import shutil
-    
-    # Check if input is known test fixture
-    is_test_fixture = args.edge_report and Path(args.edge_report).name == "EDGE_REPORT_DAY.json"
-    
-    if is_test_fixture:
-        # Try to find golden files
-        golden_json = Path("tests/golden/ANOMALY_RADAR_case1.json")
-        golden_md = Path("tests/golden/ANOMALY_RADAR_case1.md")
-        
-        if golden_json.exists() and golden_md.exists():
-            # Copy golden files
-            out_json_path = Path(args.out_json if args.out_json != "artifacts/ANOMALY_RADAR.json" else args.out)
-            out_md_path = out_json_path.with_suffix('.md')
-            out_json_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(golden_json, out_json_path)
-            shutil.copy(golden_md, out_md_path)
-            sys.exit(0)
-    
     # CLI mode: Generate report from edge-report or use minimal data
+    import os
     if args.edge_report:
         # Load edge report
         edge_data = json.loads(Path(args.edge_report).read_text(encoding='utf-8'))
@@ -193,8 +174,19 @@ if __name__ == "__main__":
     
     anomalies = detect_anomalies(buckets, k=3.0)
     
+    # Sort anomalies by kind, then by bucket for stable output
+    anomalies_sorted = sorted(anomalies, key=lambda x: (x['kind'], x['bucket']))
+    
+    # Deterministic timestamp
+    from datetime import datetime, timezone
+    utc_iso = os.environ.get('MM_FREEZE_UTC_ISO', datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+    
     report = {
-        "anomalies": anomalies,
+        "anomalies": anomalies_sorted,
+        "runtime": {
+            "utc": utc_iso,
+            "version": "0.1.0"
+        },
         "status": "OK"
     }
     
@@ -210,11 +202,20 @@ if __name__ == "__main__":
     with open(out_md_path, 'w', encoding='utf-8', newline='') as f:
         f.write("# Anomaly Radar Report\n\n")
         f.write(f"Status: {report['status']}\n\n")
-        f.write(f"Anomalies detected: {len(anomalies)}\n\n")
-        if anomalies:
-            f.write("| Kind | Bucket | Value |\n")
-            f.write("|------|--------|-------|\n")
-            for a in anomalies[:10]:  # Limit to 10 for brevity
+        f.write(f"Anomalies detected: {len(anomalies_sorted)}\n\n")
+        if anomalies_sorted:
+            f.write("| Kind | Bucket | MAD Score |\n")
+            f.write("|------|--------|------------|\n")
+            for a in anomalies_sorted[:10]:  # Limit to 10 for brevity
                 f.write(f"| {a['kind']} | {a['bucket']} | {a.get('mad_score', 0):.2f} |\n")
+    
+    # Update golden files if requested
+    if args.update_golden:
+        import shutil
+        golden_dir = Path("tests/golden")
+        golden_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy(out_json_path, golden_dir / "ANOMALY_RADAR_case1.json")
+        shutil.copy(out_md_path, golden_dir / "ANOMALY_RADAR_case1.md")
+        print(f"[OK] Updated golden files: {golden_dir}/ANOMALY_RADAR_case1.{{json,md}}")
     
     sys.exit(0)

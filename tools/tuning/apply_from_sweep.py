@@ -48,9 +48,12 @@ def _simulate(config: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-if __name__ == "__main__":
+def main() -> int:
     """
     CLI entry point: reads PARAM_SWEEP.json and generates TUNING_REPORT.json
+    
+    Returns:
+        Exit code (0 for success, 1 for error)
     """
     # Find PARAM_SWEEP.json (check current dir and artifacts/)
     sweep_path = Path("artifacts/PARAM_SWEEP.json")
@@ -59,11 +62,15 @@ if __name__ == "__main__":
     
     if not sweep_path.exists():
         print("[ERROR] PARAM_SWEEP.json not found", flush=True)
-        exit(1)
+        return 1
     
     # Load sweep results
-    with open(sweep_path, 'r', encoding='utf-8') as f:
-        sweep = json.load(f)
+    try:
+        with open(sweep_path, 'r', encoding='utf-8') as f:
+            sweep = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[ERROR] Failed to load PARAM_SWEEP.json: {e}", flush=True)
+        return 1
     
     # Extract top3_by_net_bps_safe (or fallback to results[0])
     top3 = sweep.get("top3_by_net_bps_safe", [])
@@ -74,7 +81,7 @@ if __name__ == "__main__":
     
     if not top3:
         print("[ERROR] No results in PARAM_SWEEP.json", flush=True)
-        exit(1)
+        return 1
     
     # Select best candidate (first in top3)
     selected = top3[0]
@@ -105,10 +112,13 @@ if __name__ == "__main__":
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "TUNING_REPORT.json"
     
-    with open(out_path, 'w', encoding='utf-8') as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
-    
-    print(f"[OK] TUNING_REPORT.json written to {out_path}", flush=True)
+    try:
+        with open(out_path, 'w', encoding='utf-8') as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+        print(f"[OK] TUNING_REPORT.json written to {out_path}", flush=True)
+    except OSError as e:
+        print(f"[ERROR] Failed to write TUNING_REPORT.json: {e}", flush=True)
+        return 1
     
     # Write YAML overlay (tools/tuning/overlay_profile.yaml)
     yaml_dir = Path("tools") / "tuning"
@@ -120,7 +130,16 @@ if __name__ == "__main__":
     for key, val in params.items():
         yaml_lines.append(f"  {key}: {val}\n")
     
-    with open(yaml_path, 'w', encoding='utf-8') as f:
-        f.writelines(yaml_lines)
+    try:
+        with open(yaml_path, 'w', encoding='utf-8') as f:
+            f.writelines(yaml_lines)
+        print(f"[OK] overlay_profile.yaml written to {yaml_path}", flush=True)
+    except OSError as e:
+        print(f"[ERROR] Failed to write overlay_profile.yaml: {e}", flush=True)
+        return 1
     
-    print(f"[OK] overlay_profile.yaml written to {yaml_path}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    exit(main())

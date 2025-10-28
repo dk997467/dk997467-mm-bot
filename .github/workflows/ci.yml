@@ -141,10 +141,13 @@ jobs:
           python -m pytest tests/test_finops_exporter_unit.py -v --tb=short
           echo "=============================================="
 
-      - name: Run Unit Tests
-        # Unit tests: Fast, low memory, use -n 2 for speed
+      - name: Run Unit Tests (with coverage)
+        # Unit tests: Fast, low memory, with coverage check for tools/ module
+        # Target: ≥14% coverage on tools/* (P0.9 Complete - Observability)
+        # Roadmap: 10% (M1) → 11% (P0.5) → 12% (P0.6+P0.7) → 13% (P0.8) → 14% (P0.9) → 15% (M2) → 30% (M3) → 60% (M4)
+        # Note: P0.9 added ~500 SLOC (jsonlog, metrics, health_server) + integration hooks with 90-95% coverage
         run: |
-          python tools/ci/run_selected_unit.py
+          python tools/ci/run_selected_unit.py --cov=tools --cov-fail-under=14 --cov-report=term-missing
 
   # ===========================================================================
   # SMOKE TESTS: Fast soak validation (<2 min)

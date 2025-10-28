@@ -8,27 +8,90 @@ from datetime import datetime, timezone
 from collections import defaultdict
 
 
+def _aggregate_metrics(metrics: list) -> dict:
+    """
+    Aggregate metrics by averaging.
+    
+    Args:
+        metrics: List of metric dictionaries
+    
+    Returns:
+        Aggregated metrics dictionary
+    """
+    if not metrics:
+        return {
+            "fill_rate": 0.0,
+            "net_bps": 0.0,
+            "order_age_p95_ms": 0.0,
+            "taker_share_pct": 0.0
+        }
+    
+    return {
+        "fill_rate": sum(m.get("fill_rate", 0) for m in metrics) / len(metrics),
+        "net_bps": sum(m.get("net_bps", 0) for m in metrics) / len(metrics),
+        "order_age_p95_ms": sum(m.get("order_age_p95_ms", 0) for m in metrics) / len(metrics),
+        "taker_share_pct": sum(m.get("taker_share_pct", 0) for m in metrics) / len(metrics),
+    }
+
+
+def _find_best_window(windows: dict) -> str:
+    """
+    Find best window based on net_bps (highest) with latency tie-break (lowest).
+    
+    Args:
+        windows: Dictionary mapping window name to metrics
+    
+    Returns:
+        Best window name
+    """
+    if not windows:
+        raise ValueError("No windows provided")
+    
+    # Sort by net_bps desc, then by latency asc
+    return max(windows.items(), key=lambda x: (x[1]["net_bps"], -x[1]["order_age_p95_ms"]))[0]
+
+
+def _find_best_region(regions: dict) -> str:
+    """
+    Find best region using safe criteria with latency tie-break.
+    
+    Safe criteria: net_bps >= 2.50, order_age_p95_ms <= 350, taker_share_pct <= 15
+    Tie-break: For equal net_bps, lowest latency wins.
+    
+    Args:
+        regions: Dictionary mapping region name to metrics
+    
+    Returns:
+        Best region name
+    """
+    if not regions:
+        raise ValueError("No regions provided")
+    
+    # Filter safe regions
+    safe_regions = []
+    for region, data in regions.items():
+        if (data.get("net_bps", 0) >= 2.50 and 
+            data.get("order_age_p95_ms", float('inf')) <= 350 and 
+            data.get("taker_share_pct", float('inf')) <= 15):
+            safe_regions.append((region, data))
+    
+    # Pick best region: tie-break by lowest overall latency (for equal net_bps)
+    if safe_regions:
+        # Sort by net_bps desc, then by latency asc
+        safe_regions.sort(key=lambda x: (-x[1]["net_bps"], x[1]["order_age_p95_ms"]))
+        return safe_regions[0][0]
+    else:
+        # No safe regions, pick highest net_bps
+        return max(regions.items(), key=lambda x: x[1].get("net_bps", 0))[0]
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--regions", required=True)
     p.add_argument("--in", dest="input_file", required=True)
     p.add_argument("--out", required=True)
+    p.add_argument("--update-golden", action="store_true", help="Update golden file for tests")
     args = p.parse_args(argv)
-    
-    # GOLDEN-COMPAT MODE: For known fixture, use golden output
-    from pathlib import Path
-    input_path = Path(args.input_file).resolve()
-    golden_fixture = Path("tests/fixtures/region_canary_metrics.jsonl").resolve()
-    golden_json = Path("tests/golden/region_compare_case1.json")
-    golden_md = Path("tests/golden/region_compare_case1.md")
-    
-    if input_path == golden_fixture and golden_json.exists() and golden_md.exists():
-        # Copy golden files to output
-        import shutil
-        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(golden_json, args.out)
-        shutil.copy(golden_md, Path(args.out).with_suffix('.md'))
-        return 0
     
     # Load input JSONL and group by region and window
     regions_data = defaultdict(list)
@@ -49,49 +112,20 @@ def main(argv=None):
     # Aggregate per region
     regions = {}
     for region, metrics in regions_data.items():
-        regions[region] = {
-            "fill_rate": sum(m.get("fill_rate", 0) for m in metrics) / len(metrics),
-            "net_bps": sum(m.get("net_bps", 0) for m in metrics) / len(metrics),
-            "order_age_p95_ms": sum(m.get("order_age_p95_ms", 0) for m in metrics) / len(metrics),
-            "taker_share_pct": sum(m.get("taker_share_pct", 0) for m in metrics) / len(metrics),
-        }
+        regions[region] = _aggregate_metrics(metrics)
     
     # Aggregate per window
     windows = {}
     for window, metrics in windows_data.items():
-        windows[window] = {
-            "fill_rate": sum(m.get("fill_rate", 0) for m in metrics) / len(metrics),
-            "net_bps": sum(m.get("net_bps", 0) for m in metrics) / len(metrics),
-            "order_age_p95_ms": sum(m.get("order_age_p95_ms", 0) for m in metrics) / len(metrics),
-            "taker_share_pct": sum(m.get("taker_share_pct", 0) for m in metrics) / len(metrics),
-        }
+        windows[window] = _aggregate_metrics(metrics)
     
-    # Find best window (highest net_bps, tie-break by lowest latency)
-    best_window = max(windows.items(), key=lambda x: (x[1]["net_bps"], -x[1]["order_age_p95_ms"]))[0]
+    # Find best window and region
+    best_window = _find_best_window(windows)
+    best_region = _find_best_region(regions)
     
-    # Find best region using overall region aggregates with safe criteria
-    # Safe criteria: net_bps >= 2.50, order_age_p95_ms <= 350, taker_share_pct <= 15
-    safe_regions = []
-    for region, data in regions.items():
-        if (data["net_bps"] >= 2.50 and 
-            data["order_age_p95_ms"] <= 350 and 
-            data["taker_share_pct"] <= 15):
-            safe_regions.append((region, data))
-    
-    # Pick best region: tie-break by lowest overall latency (for equal net_bps)
-    if safe_regions:
-        # Sort by net_bps desc, then by latency asc
-        safe_regions.sort(key=lambda x: (-x[1]["net_bps"], x[1]["order_age_p95_ms"]))
-        best_region = safe_regions[0][0]
-    else:
-        best_region = max(regions.items(), key=lambda x: x[1]["net_bps"])[0]
-    
-    # Build output matching golden format
+    # Build output with deterministic timestamp
     import os
-    if os.environ.get('MM_FREEZE_UTC') == '1':
-        utc_iso = "1970-01-01T00:00:00Z"
-    else:
-        utc_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    utc_iso = os.environ.get('MM_FREEZE_UTC_ISO', datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
     
     report = {
         "regions": regions,
@@ -136,6 +170,15 @@ def main(argv=None):
         f.write("\n")
         f.write(f"Winner: {best_region} @ {best_window}\n")
     
+    # Update golden files if requested
+    if args.update_golden:
+        import shutil
+        golden_dir = Path("tests/golden")
+        golden_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy(args.out, golden_dir / "region_compare_case1.json")
+        shutil.copy(md_out, golden_dir / "region_compare_case1.md")
+        print(f"[OK] Updated golden files: {golden_dir}/region_compare_case1.{{json,md}}")
+
     return 0
 
 

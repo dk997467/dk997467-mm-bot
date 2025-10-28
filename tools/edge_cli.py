@@ -79,24 +79,58 @@ def main(argv=None):
     
     # Write MD output (for E2E test)
     md_out = Path(args.out).with_suffix('.md')
+    md_content = _render_md(report)
     with open(md_out, 'w', encoding='utf-8', newline='') as f:
-        f.write("# Edge Audit Report\n\n")
-        f.write(f"**Runtime:** {report['runtime']['utc']}\n\n")
-        
-        f.write("## Symbols\n\n")
-        f.write("| Symbol | Net BPS | Fills | Turnover USD |\n")
-        f.write("|--------|---------|-------|-------------|\n")
-        for sym, data in sorted(report['symbols'].items()):
-            f.write(f"| {sym} | {data.get('net_bps', 0):.2f} | {data.get('fills', 0):.0f} | {data.get('turnover_usd', 0):.2f} |\n")
-        
-        f.write("\n## Total\n\n")
-        tot = report['total']
-        f.write(f"- **Net BPS:** {tot.get('net_bps', 0):.2f}\n")
-        f.write(f"- **Fills:** {tot.get('fills', 0):.0f}\n")
-        f.write(f"- **Turnover USD:** {tot.get('turnover_usd', 0):.2f}\n")
-        f.write("\n")
+        f.write(md_content)
     
     return 0
+
+
+def _render_md(report: dict) -> str:
+    """
+    Render Edge Audit Report as Markdown.
+    
+    Args:
+        report: Report dictionary with 'runtime', 'symbols', and 'total' keys
+    
+    Returns:
+        Markdown string with trailing newline
+    
+    Example:
+        >>> report = {
+        ...     "runtime": {"utc": "2025-01-01T00:00:00Z"},
+        ...     "symbols": {
+        ...         "BTCUSDT": {"net_bps": 2.5, "fills": 10.0, "turnover_usd": 1000.0}
+        ...     },
+        ...     "total": {"net_bps": 2.5, "fills": 10.0, "turnover_usd": 1000.0}
+        ... }
+        >>> md = _render_md(report)
+        >>> "# Edge Audit Report" in md
+        True
+    """
+    lines = []
+    lines.append("# Edge Audit Report\n")
+    lines.append(f"**Runtime:** {report['runtime']['utc']}\n\n")
+    
+    lines.append("## Symbols\n\n")
+    lines.append("| Symbol | Net BPS | Fills | Turnover USD |\n")
+    lines.append("|--------|---------|-------|-------------|\n")
+    
+    # Sort symbols for deterministic output
+    for sym, data in sorted(report['symbols'].items()):
+        net_bps = data.get('net_bps', 0)
+        fills = data.get('fills', 0)
+        turnover_usd = data.get('turnover_usd', 0)
+        lines.append(f"| {sym} | {net_bps:.2f} | {fills:.0f} | {turnover_usd:.2f} |\n")
+    
+    lines.append("\n## Total\n\n")
+    tot = report['total']
+    lines.append(f"- **Net BPS:** {tot.get('net_bps', 0):.2f}\n")
+    lines.append(f"- **Fills:** {tot.get('fills', 0):.0f}\n")
+    lines.append(f"- **Turnover USD:** {tot.get('turnover_usd', 0):.2f}\n")
+    lines.append("\n")
+    
+    return "".join(lines)
 
 
 def _calc_totals(symbols_data):
