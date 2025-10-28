@@ -532,9 +532,9 @@ def generate_analysis_report(
         windows = windows_by_symbol[symbol]
 
         lines.append(f"## {symbol}")
-    lines.append("")
+        lines.append("")
         lines.append(f"**Windows:** {len(windows)}")
-    lines.append("")
+        lines.append("")
     
         # Extract metrics series
         metrics_series = {
@@ -587,7 +587,7 @@ def generate_analysis_report(
                 status = "🔴 CRIT"
             elif any(v["level"] == "WARN" for v in metric_violations):
                 status = "🟡 WARN"
-    else:
+            else:
                 status = "✅ OK"
 
             # Format values
@@ -610,7 +610,7 @@ def generate_analysis_report(
             lines.append(
                 f"| {metric_name} | {current_str} | {min_str} | {max_str} | {median_str} | {sparkline} | {trend_symbol} | {status} |")
 
-    lines.append("")
+        lines.append("")
     
         # List violations for this symbol
         if metric_violations := [
@@ -618,7 +618,7 @@ def generate_analysis_report(
             lines.append("**Violations:**")
             for v in metric_violations:
                 lines.append(f"- {v['level']}: {v['note']}")
-    lines.append("")
+        lines.append("")
     
     # Summary
     lines.append("---")
@@ -697,7 +697,7 @@ def generate_recommendations_report(
             symbol, metrics_series, symbol_violations)
 
         lines.append(f"## {symbol}")
-    lines.append("")
+        lines.append("")
     
         for rec in recommendations:
             lines.append(f"{rec}")
@@ -857,7 +857,7 @@ def generate_summary_json(
                 status = "CRIT"
             elif any(v["level"] == "WARN" for v in metric_violations):
                 status = "WARN"
-    else:
+            else:
                 status = "OK"
             
             symbol_metrics[metric_name] = {
