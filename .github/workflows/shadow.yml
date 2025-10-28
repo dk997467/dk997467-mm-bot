@@ -99,7 +99,7 @@ jobs:
             --duration ${{ inputs.duration || '60' }} \
             --profile ${{ inputs.profile || 'moderate' }} \
             --exchange ${{ inputs.exchange || 'bybit' }} \
-            --mock \
+            --source mock \
             --output artifacts/shadow/latest
           
           echo "✓ Shadow run completed"

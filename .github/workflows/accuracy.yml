@@ -384,7 +384,7 @@ jobs:
         shell: bash
         env:
           SANITY_MODE: ${{ github.event.inputs.sanity_mode || 'false' }}
-          ACC_EXIT_CODE: ${{ steps.run_shadow_baseline.outputs.acc_exit_code || '0' }}
+          ACC_EXIT_CODE: ${{ steps.run_shadow_baseline.outputs.acc_exit_code || '1' }}
         run: |
           echo "================================================"
           echo "ACCURACY GATE RESULT"

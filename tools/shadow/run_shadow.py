@@ -9,7 +9,7 @@ Supports per-symbol profiles and rich artifact metadata.
 
 Usage:
     python -m tools.shadow.run_shadow --iterations 6 --duration 60
-    python -m tools.shadow.run_shadow --profile aggressive --mock
+    python -m tools.shadow.run_shadow --profile aggressive --source mock
 """
 
 import argparse

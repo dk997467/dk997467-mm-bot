@@ -87,7 +87,7 @@ def run_shadow(
         cmd.append("--require_volume")
     
     if mock:
-        cmd.append("--mock")
+        cmd.extend(["--source", "mock"])
     
     try:
         result = subprocess.run(cmd, check=True, capture_output=False, text=True)
