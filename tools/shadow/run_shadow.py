@@ -573,6 +573,13 @@ def main():
         help="Redis connection URL for export (default: redis://localhost:6379)"
     )
     
+    # Back-compat: deprecated flag (no-op)
+    parser.add_argument(
+        "--mock",
+        action="store_true",
+        help="(deprecated) no-op; use --source mock instead"
+    )
+    
     args = parser.parse_args()
     
     # Load per-symbol profile (for first symbol, CLI overrides profile)

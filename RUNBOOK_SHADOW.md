@@ -1455,6 +1455,13 @@ If **NO-GO**: Document issues, fix root cause, restart smoke checklist from Day 
 | `MMBotNetBpsNegative` | **P2 Medium** | < 1h | Review execution quality, consider pause |
 | `MMBotFiltersFallback` | **P3 Low** | < 4h | Check exchange API status, verify connectivity |
 
+### CI/Accuracy Note
+
+**Deprecation Notice (2025-10-28)**:
+- `--mock` flag is deprecated for `tools/shadow/run_shadow.py`. Use `--source mock` instead.
+- Accuracy Gate now reads exit code from previous step output (`acc_exit_code` in workflow).
+- The `--mock` flag is still accepted for backward compatibility but is a no-op.
+
 ### References
 
 - [obs/prometheus/alerts_mm_bot.yml](obs/prometheus/alerts_mm_bot.yml) — Alert rules

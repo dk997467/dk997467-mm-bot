@@ -83,6 +83,7 @@ jobs:
           pip install -r requirements_ci.txt
       
       - name: Run Shadow Mode (mock, 24 iterations)
+        id: run_shadow_baseline
         shell: bash
         run: |
           echo "================================================"
@@ -96,10 +97,13 @@ jobs:
             --duration 60 \
             --profile moderate \
             --exchange bybit \
-            --mock \
+            --source mock \
             --output artifacts/shadow/latest
           
-          if [ $? -ne 0 ]; then
+          EXIT_CODE=$?
+          echo "acc_exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          
+          if [ $EXIT_CODE -ne 0 ]; then
             echo "❌ Shadow run failed"
             exit 1
           fi
@@ -378,44 +382,33 @@ jobs:
       - name: Check Accuracy Gate Result
         if: always()
         shell: bash
+        env:
+          SANITY_MODE: ${{ github.event.inputs.sanity_mode || 'false' }}
+          ACC_EXIT_CODE: ${{ steps.run_shadow_baseline.outputs.acc_exit_code || '0' }}
         run: |
-          SANITY_MODE="${{ github.event.inputs.sanity_mode }}"
-          
           echo "================================================"
           echo "ACCURACY GATE RESULT"
           echo "================================================"
           
+          SANITY_MODE="${SANITY_MODE:-false}"
+          EXIT_CODE="${ACC_EXIT_CODE:-1}"
+          
           if [ "$SANITY_MODE" = "true" ]; then
-            # Sanity mode - informational only, never fails
-            EXIT_CODE="${{ steps.sanity_check.outputs.exit_code }}"
-            
             if [ "$EXIT_CODE" = "0" ]; then
               echo "✅ Sanity Check PASSED"
-              echo "All edge case scenarios behaved as expected"
             else
-              echo "⚠️ Sanity Check: ATTENTION"
-              echo "Some scenarios need review (informational only)"
+              echo "⚠️ Sanity Check: informational only (exit=$EXIT_CODE)"
             fi
-            
-            echo ""
-            echo "Sanity mode is informational - not blocking"
             exit 0
           else
-            # Normal accuracy mode - can block PR
-            EXIT_CODE="${{ steps.accuracy_compare.outputs.exit_code }}"
-            
             if [ "$EXIT_CODE" = "0" ]; then
               echo "✅ Accuracy Gate PASSED"
-              echo "Shadow and Dry-Run KPIs are within acceptable thresholds"
               exit 0
             elif [ "$EXIT_CODE" = "2" ]; then
-              echo "🟡 Accuracy Gate WARN"
-              echo "Some soft thresholds violated - informational only"
+              echo "🟡 Accuracy Gate WARN (soft thresholds)"
               exit 0
             else
-              echo "🔴 Accuracy Gate FAILED"
-              echo "Critical thresholds violated - blocking PR"
-              echo ""
+              echo "🔴 Accuracy Gate FAILED (exit=$EXIT_CODE)"
               echo "Review ACCURACY_REPORT.md for details"
               exit 1
             fi
