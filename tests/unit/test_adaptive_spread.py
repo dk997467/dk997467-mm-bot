@@ -80,16 +80,18 @@ def test_low_liquidity_widens_spread():
         liquidity_sensitivity=1.0,  # Full weight
         latency_sensitivity=0.0,
         pnl_dev_sensitivity=0.0,
+        cooloff_ms=0,  # Disable cooloff for instant comparison
     )
-    estimator = AdaptiveSpreadEstimator(cfg)
     
-    # Low liquidity should widen spread
-    spread_low_liq = estimator.compute_spread_bps(
+    # Test with low liquidity
+    estimator_low = AdaptiveSpreadEstimator(cfg)
+    spread_low_liq = estimator_low.compute_spread_bps(
         liquidity_bid=1.0, liquidity_ask=1.0
     )
     
-    # High liquidity should keep spread tight
-    spread_high_liq = estimator.compute_spread_bps(
+    # Test with high liquidity (separate estimator)
+    estimator_high = AdaptiveSpreadEstimator(cfg)
+    spread_high_liq = estimator_high.compute_spread_bps(
         liquidity_bid=50.0, liquidity_ask=50.0
     )
     
