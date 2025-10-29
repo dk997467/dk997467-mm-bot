@@ -1,0 +1,104 @@
+================================================================================
+                    CI ARTIFACT V3->V4 MIGRATION - NEXT STEPS
+================================================================================
+
+STATUS: ✅ MIGRATION COMPLETED IN BRANCH fix/ci-artifact-v4
+
+WHAT WAS DONE:
+- All 18 workflow files migrated to actions/upload-artifact@v4
+- All 18 workflow files migrated to actions/download-artifact@v4  
+- Added lint-step to 17 workflows (anti-regression protection)
+- Changes committed and pushed to origin/fix/ci-artifact-v4
+- Created comprehensive report: CI_ARTIFACT_V4_MIGRATION_REPORT.md
+
+CRITICAL ISSUE:
+- testnet-smoke.yml in main branch STILL USES v3!
+- This is why CI continues to fail with "deprecated v3" error
+- GitHub Actions runs workflows from the BASE branch (main), not feature branch
+
+NEXT STEPS:
+
+1. CREATE PULL REQUEST:
+   
+   Option A (GitHub Web):
+   - Go to: https://github.com/dk997467/dk997467-mm-bot/compare/main...fix/ci-artifact-v4
+   - Click "Create Pull Request"
+   - Title: "ci: migrate artifact actions to v4 everywhere + anti-regression lint"
+   - Body: Copy content from CI_ARTIFACT_V4_MIGRATION_REPORT.md
+   
+   Option B (GitHub CLI, if installed):
+   gh pr create --title "ci: migrate artifact actions to v4 everywhere + anti-regression lint" \
+     --body-file CI_ARTIFACT_V4_MIGRATION_REPORT.md \
+     --base main --head fix/ci-artifact-v4
+
+2. MERGE PR:
+   - Review changes
+   - Approve
+   - Merge to main (recommended: Squash and merge)
+
+3. VERIFICATION (AFTER merge to main):
+   - Go to: https://github.com/dk997467/dk997467-mm-bot/actions/workflows/testnet-smoke.yml
+   - Click "Run workflow"
+   - Select branch "main"
+   - Run
+   
+   EXPECTED RESULT:
+   ✅ Stage "Prepare actions / Getting action download info" succeeds
+   ✅ NO error "deprecated version of actions/upload-artifact: v3"
+   ✅ All steps execute normally
+
+4. MONITORING:
+   - Watch CI runs for the next week
+   - Lint-step will automatically block any v3 regressions
+
+================================================================================
+
+KEY COMMITS:
+
+60db621 docs(ci): add comprehensive artifact v3->v4 migration report
+12b2ff7 fix(workflows): resolve 5 additional context access validation errors
+b13ee08 fix(workflows): resolve 10 context access validation errors
+52e6325 ci: migrate to actions/{upload,download}-artifact@v4
+ecda9d9 ci(workflows): bump artifact actions to v4 (fix deprecation blocker)
+
+================================================================================
+
+VERIFICATION:
+
+Current branch (fix/ci-artifact-v4):
+- 0 occurrences of v3 ✅
+
+Main branch:
+- 3 occurrences of v3 in testnet-smoke.yml ❌
+
+After merge:
+- 0 occurrences of v3 everywhere ✅
+
+================================================================================
+
+ANTI-REGRESSION PROTECTION:
+
+Every workflow now has a lint-step that:
+- Runs FIRST (before any other steps)
+- Scans all .github/ for v3 occurrences
+- Fails immediately (exit code 1) if v3 found
+- Blocks CI run before it starts
+
+Example:
+```yaml
+- name: Lint - forbid artifact v3
+  run: |
+    set -euo pipefail
+    if git grep -nE 'actions/(upload|download)-artifact\s*[@:]\s*v3(\b|[^0-9])' .github | tee /dev/stderr; then
+      echo "Found deprecated artifact actions v3 — must use @v4" >&2
+      exit 1
+    fi
+```
+
+================================================================================
+
+For detailed information, see:
+- CI_ARTIFACT_V4_MIGRATION_REPORT.md
+
+Good luck! 🚀
+
