@@ -52,7 +52,7 @@ def run_shadow(
     touch_dwell_ms: float,
     min_lot: float,
     require_volume: bool,
-    mock: bool,
+    source: str,
 ) -> bool:
     """
     Run shadow mode with given parameters.
@@ -70,7 +70,7 @@ def run_shadow(
     print(f"  touch_dwell_ms: {touch_dwell_ms}")
     print(f"  min_lot: {min_lot}")
     print(f"  require_volume: {require_volume}")
-    print(f"  mock: {mock}")
+    print(f"  source: {source}")
     print(f"{'=' * 80}\n")
     
     cmd = [
@@ -81,13 +81,11 @@ def run_shadow(
         "--iterations", str(iterations),
         "--touch_dwell_ms", str(touch_dwell_ms),
         "--min_lot", str(min_lot),
+        "--source", source,
     ]
     
     if require_volume:
         cmd.append("--require_volume")
-    
-    if mock:
-        cmd.extend(["--source", "mock"])
     
     try:
         result = subprocess.run(cmd, check=True, capture_output=False, text=True)
@@ -329,9 +327,10 @@ def main():
         help="Require volume check (default: True)"
     )
     parser.add_argument(
-        "--mock",
-        action="store_true",
-        help="Use mock data (default: False, use real feed)"
+        "--source",
+        default="ws",
+        choices=["mock", "ws", "redis"],
+        help="Data source: mock (synthetic), ws (WebSocket), redis (Redis Streams) (default: ws for baseline)"
     )
     
     args = parser.parse_args()
@@ -343,7 +342,7 @@ def main():
     print(f"Symbols: {', '.join(args.symbols)}")
     print(f"Profile: {args.profile}")
     print(f"Iterations: {args.iterations}")
-    print(f"Mock mode: {args.mock}")
+    print(f"Source: {args.source}")
     print("=" * 80)
     print()
     
@@ -366,7 +365,7 @@ def main():
             touch_dwell_ms=preset["touch_dwell_ms"],
             min_lot=preset["min_lot"],
             require_volume=args.require_volume,
-            mock=args.mock,
+            source=args.source,
         )
         
         if not success:
