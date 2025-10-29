@@ -4,6 +4,41 @@
 
 P0.1 Execution Engine provides a deterministic shadow trading system for testing execution logic without real exchange connectivity. Built with pure stdlib (no external dependencies), it integrates with `RuntimeRiskMonitor` for pre-trade risk checks and position limits.
 
+## Installation
+
+### Basic Installation (Shadow/Soak/CI)
+
+For shadow mode, soak tests, and CI workflows, install the base package:
+
+```bash
+pip install -e .
+```
+
+This installs all core dependencies **without** exchange SDKs.
+
+### Live Trading Installation
+
+For live trading with real exchange connectivity, install with the `[live]` extras:
+
+```bash
+pip install -e .[live]
+```
+
+Or install live dependencies separately:
+
+```bash
+pip install -r requirements_live.txt
+```
+
+**What's included in `[live]`:**
+- `bybit-connector>=3.0.0` - Bybit exchange SDK
+- (Future: Additional exchange SDKs)
+
+**Why separate?**
+- Keeps CI lightweight (no SDK bloat)
+- Exchange SDKs may have platform-specific requirements
+- Clear separation between shadow/testing and live trading
+
 ## Architecture
 
 ```

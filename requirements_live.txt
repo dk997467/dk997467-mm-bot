@@ -1,0 +1,8 @@
+# Live trading dependencies (exchange SDKs)
+# Install for local live trading: pip install -r requirements_live.txt
+#
+# Note: In production, use: pip install -e .[live]
+# This file exists for convenience during local development
+
+bybit-connector>=3.0.0
+
