@@ -39,15 +39,29 @@ jobs:
             exit 1
           fi
       
+      - name: Lint - forbid base requirements.txt in this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nP '^[ \t\-]*[^"#\n]*\bpip([ \t]+|-3[ \t]+)?install[^|#\n]*\B-r[ \t]+requirements\.txt\b' .github/workflows/testnet-smoke.yml | tee /dev/stderr; then
+            echo "::error::Found forbidden 'pip install -r requirements.txt' in testnet-smoke.yml. Use requirements_ci.txt." >&2
+            exit 1
+          fi
+      
       - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
       
-      - name: Install dependencies
+      - name: Install deps (CI-safe)
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -e .
+          if [ -f requirements_ci.txt ]; then
+            pip install -r requirements_ci.txt
+          fi
       
       - name: Run fast shadow unit tests
         run: |
@@ -85,15 +99,29 @@ jobs:
             exit 1
           fi
       
+      - name: Lint - forbid base requirements.txt in this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nP '^[ \t\-]*[^"#\n]*\bpip([ \t]+|-3[ \t]+)?install[^|#\n]*\B-r[ \t]+requirements\.txt\b' .github/workflows/testnet-smoke.yml | tee /dev/stderr; then
+            echo "::error::Found forbidden 'pip install -r requirements.txt' in testnet-smoke.yml. Use requirements_ci.txt." >&2
+            exit 1
+          fi
+      
       - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
       
-      - name: Install dependencies
+      - name: Install deps (CI-safe)
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -e .
+          if [ -f requirements_ci.txt ]; then
+            pip install -r requirements_ci.txt
+          fi
       
       - name: Run exec_demo with testnet flags (dry-run, no real creds)
         run: |
