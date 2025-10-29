@@ -3,6 +3,10 @@
 #
 # Note: In production, use: pip install -e .[live]
 # This file exists for convenience during local development
-
+#
+# Exchange SDKs (removed from base requirements.txt)
 bybit-connector>=3.0.0
+
+# Optional: Additional live-only dependencies
+# redis>=5.0.0  (if not in base requirements)
 
