@@ -27,6 +27,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Lint - forbid base requirements.txt in CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nE "pip(\s+|-3\s+)install(\s+-r|\s+.*-r)\s+requirements\.txt" .github | tee /dev/stderr; then
+            echo "::error::Found forbidden 'pip install -r requirements.txt' in CI workflows. Use requirements_ci.txt or extras." >&2
+            exit 1
+          fi
+
       - name: Show event and inputs
         shell: bash
         run: |
@@ -43,7 +52,8 @@ jobs:
         shell: bash
         run: |
           python -m pip install -U pip || true
-          pip install -q -r requirements.txt || true
+          pip install -e . || true
+          pip install -q -r requirements_ci.txt || true
 
       - name: Shadow export (smoke)
         shell: bash
