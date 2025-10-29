@@ -33,7 +33,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git grep -nE "pip(\s+|-3\s+)install(\s+-r|\s+.*-r)\s+requirements\.txt" .github | tee /dev/stderr; then
+          # Ищем только реальные команды, исключая echo/quotes и комментарии
+          if git grep -nP '^[ \t\-]*[^"#\n]*\bpip([ \t]+|-3[ \t]+)?install[^|#\n]*\B-r[ \t]+requirements\.txt\b' .github/workflows | tee /dev/stderr; then
             echo "::error::Found forbidden 'pip install -r requirements.txt' in CI workflows. Use requirements_ci.txt or extras." >&2
             exit 1
           fi
