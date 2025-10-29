@@ -1,6 +1,9 @@
-# Core dependencies
-# NOTE: Exchange SDKs moved to [live] extras (see pyproject.toml)
-# Install with: pip install -e .[live]
+# CI-safe dependencies (no exchange SDKs)
+# Generated from requirements.txt with exchange SDKs removed
+# Used in CI workflows to avoid installation issues with platform-specific SDKs
+#
+# Exchange SDKs are in [live] extras (see pyproject.toml)
+# For live trading, use: pip install -e .[live]
 websockets>=11.0.3
 pydantic>=2.5.0
 pyyaml>=6.0.1
