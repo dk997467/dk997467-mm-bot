@@ -30,6 +30,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
+      - name: Lint - forbid artifact v3
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nE 'actions/(upload|download)-artifact\s*[@:]\s*v3(\b|[^0-9])' .github | tee /dev/stderr; then
+            echo "::error::Found deprecated artifact actions v3 — must use @v4"
+            exit 1
+          fi
+      
       - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
@@ -50,7 +59,7 @@ jobs:
       
       - name: Upload shadow test results
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: shadow-test-results
           path: |
@@ -66,6 +75,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      
+      - name: Lint - forbid artifact v3
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nE 'actions/(upload|download)-artifact\s*[@:]\s*v3(\b|[^0-9])' .github | tee /dev/stderr; then
+            echo "::error::Found deprecated artifact actions v3 — must use @v4"
+            exit 1
+          fi
       
       - name: Set up Python 3.11
         uses: actions/setup-python@v4
@@ -143,7 +161,7 @@ jobs:
       
       - name: Upload testnet smoke artifacts
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: testnet-smoke-artifacts
           path: |
@@ -160,7 +178,7 @@ jobs:
     
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: testnet-smoke-artifacts
       
