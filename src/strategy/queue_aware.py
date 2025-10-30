@@ -4,6 +4,7 @@ Queue-aware quoting for optimal queue positioning.
 Estimates queue position based on order book depth and dynamically
 micro-adjusts prices to improve fill probability without crossing spread.
 """
+import math
 import time
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
@@ -53,16 +54,17 @@ def estimate_queue_position(book: Dict[str, Any], side: str, price: float,
     # Limit analysis to depth_levels
     levels = levels[:depth_levels]
     
-    # Find our price level
+    # Calculate total quantity across all levels first
+    total_qty = sum(float(level[1]) for level in levels)
+    
+    # Find our price level and ahead qty
     our_level = -1
     ahead_qty = 0.0
-    total_qty = 0.0
     at_best = False
     
     for i, level in enumerate(levels):
         level_price = float(level[0])
         level_qty = float(level[1])
-        total_qty += level_qty
         
         if side == 'bid':
             if level_price > price:
@@ -114,7 +116,7 @@ def estimate_queue_position(book: Dict[str, Any], side: str, price: float,
     
     # Calculate percentile (0=best, 100=worst)
     if total_qty > 0:
-        percentile = (ahead_qty / total_qty) * 100.0
+        percentile = round((ahead_qty / total_qty) * 100.0, 1)
     else:
         percentile = 0.0
     
@@ -194,24 +196,23 @@ class QueueAwareRepricer:
             return None
         
         # Calculate nudge direction and amount
+        # Round max_delta to avoid FP precision issues
+        max_delta = round(quote.price * self.cfg.max_reprice_bps / 10000.0, 10)
+        
         if quote.side == 'bid':
             # For bids, nudge up (more aggressive)
-            nudge_direction = 1
             best_price = float(book.get('bids', [[0]])[0][0]) if book.get('bids') else quote.price
+            # Calculate new price with max_reprice_bps (use additive form for precision)
+            new_price = quote.price + max_delta
+            # But don't exceed best price
+            new_price = min(new_price, best_price)
         else:
             # For asks, nudge down (more aggressive)
-            nudge_direction = -1
             best_price = float(book.get('asks', [[0]])[0][0]) if book.get('asks') else quote.price
-        
-        # Calculate max nudge in absolute price
-        max_nudge_bps = self.cfg.max_reprice_bps
-        max_nudge = (max_nudge_bps / 10000.0) * quote.price
-        
-        # Nudge towards best price, but not beyond
-        if quote.side == 'bid':
-            new_price = min(quote.price + max_nudge, best_price)
-        else:
-            new_price = max(quote.price - max_nudge, best_price)
+            # Calculate new price with max_reprice_bps (use additive form for precision)
+            new_price = quote.price - max_delta
+            # But don't go below best price
+            new_price = max(new_price, best_price)
         
         # Check fair value constraint
         if fair_value is not None:
@@ -228,6 +229,24 @@ class QueueAwareRepricer:
         price_delta = abs(new_price - quote.price)
         if price_delta < (0.01 / 10000.0) * quote.price:  # < 0.01 bps
             return None
+        
+        # Final clamp to avoid FP drift exceeding max_reprice_bps
+        delta_bps = (new_price - quote.price) / quote.price * 10000.0
+        if abs(delta_bps) > self.cfg.max_reprice_bps:
+            # Re-compute new_price from exact max_reprice_bps using additive form
+            max_delta = round(quote.price * self.cfg.max_reprice_bps / 10000.0, 10)
+            if quote.side == 'bid':
+                new_price = quote.price + max_delta
+            else:
+                new_price = quote.price - max_delta
+        
+        # Round in appropriate direction to avoid exceeding max_reprice_bps
+        # For bids: round down (floor) to ensure delta_bps <= max
+        # For asks: round up (ceil) to ensure delta_bps <= max  
+        if quote.side == 'bid':
+            new_price = math.floor(new_price * 100) / 100
+        else:
+            new_price = math.ceil(new_price * 100) / 100
         
         # Record nudge time
         self.last_nudge_ms[symbol] = now_ms

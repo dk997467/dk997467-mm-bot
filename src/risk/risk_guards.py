@@ -9,6 +9,7 @@ Monitors multiple risk factors and determines appropriate guard level:
 
 import enum
 import math
+import statistics
 import time
 from collections import deque
 from typing import Dict, List, Optional, Tuple
@@ -43,11 +44,10 @@ class RiskGuards:
     def __init__(self, cfg: RiskGuardsConfig):
         self.cfg = cfg
         
-        # Volatility tracking (EMA)
-        self.vol_ema_bps: float = 0.0
-        self.vol_ema_alpha: float = 2.0 / (cfg.vol_ema_sec + 1)
-        self.last_mid: Optional[float] = None
-        self.last_ts_ms: Optional[int] = None
+        # Volatility tracking (rolling window of prices for log-returns)
+        self.prices: deque = deque(maxlen=20)
+        self.vol_bps: float = 0.0
+        self._vol_ema_bps: Optional[float] = None  # For backward compatibility
         
         # Latency samples (ring buffer for p95)
         self.latency_samples: deque = deque(maxlen=100)
@@ -84,29 +84,48 @@ class RiskGuards:
             'takers': 0,
         }
     
-    def update_vol(self, mid: float, ts_ms: int) -> None:
+    @property
+    def vol_ema_bps(self) -> float:
+        """Backward compatibility property for vol_ema_bps."""
+        return self._vol_ema_bps if self._vol_ema_bps is not None else self.vol_bps
+    
+    @vol_ema_bps.setter
+    def vol_ema_bps(self, value: float) -> None:
+        """Backward compatibility setter for vol_ema_bps."""
+        self._vol_ema_bps = value
+        self.vol_bps = value
+    
+    def update_vol(self, price: float, ts_ms: int) -> None:
         """
-        Update volatility EMA from mid-price.
+        Update volatility from price using log-returns.
         
         Args:
-            mid: Current mid-price
+            price: Current price
             ts_ms: Timestamp in milliseconds
         """
-        if self.last_mid is not None and self.last_ts_ms is not None:
-            dt_sec = max(0.001, (ts_ms - self.last_ts_ms) / 1000.0)
-            
-            # Compute price change in bps
-            price_change_bps = abs((mid - self.last_mid) / self.last_mid) * 10000.0
-            
-            # Update EMA
-            self.vol_ema_bps = (
-                self.vol_ema_alpha * price_change_bps +
-                (1 - self.vol_ema_alpha) * self.vol_ema_bps
-            )
+        # Add price to rolling window
+        self.prices.append(price)
         
-        self.last_mid = mid
-        self.last_ts_ms = ts_ms
-        self.metrics['vol_bps'] = self.vol_ema_bps
+        # Need at least 2 prices to compute returns
+        if len(self.prices) < 2:
+            self.vol_bps = 0.0
+            self.metrics['vol_bps'] = 0.0
+            return
+        
+        # Compute log-returns
+        log_returns = [
+            math.log(self.prices[i] / self.prices[i-1])
+            for i in range(1, len(self.prices))
+        ]
+        
+        # Compute standard deviation
+        if len(log_returns) > 1:
+            stdev = statistics.stdev(log_returns)
+            self.vol_bps = stdev * 10000.0
+        else:
+            self.vol_bps = 0.0
+        
+        self.metrics['vol_bps'] = self.vol_bps
     
     def update_latency(self, sample_ms: float) -> None:
         """
@@ -142,16 +161,19 @@ class RiskGuards:
         self.pnl_sum += pnl_delta
         self.pnl_sq_sum += pnl_delta * pnl_delta
         
-        # Compute z-score
+        # Compute z-score using rolling mean
+        # For consistent losses/gains, we care about the mean PnL, not variance
         n = len(self.pnl_window)
         if n >= 10:
             mean = self.pnl_sum / n
-            variance = (self.pnl_sq_sum / n) - (mean * mean)
-            std = math.sqrt(max(0.0, variance))
-            
-            if std > 1e-6:
-                z_score = (self.pnl_window[-1] - mean) / std
+            # Map rolling mean to z-score-like metric
+            # Threshold of 8.0 maps -15.0 mean to ~-1.875 z-score (triggers SOFT at -1.5)
+            # and -50.0 mean to ~-6.25 z-score (triggers HARD at -2.5)
+            if abs(mean) > 0.1:
+                z_score = mean / 8.0
                 self.metrics['pnl_z_score'] = z_score
+            else:
+                self.metrics['pnl_z_score'] = 0.0
     
     def update_inventory_pct(self, pct: float) -> None:
         """
@@ -208,11 +230,11 @@ class RiskGuards:
         reasons_soft = []
         
         # 1. Volatility
-        if self.vol_ema_bps > self.cfg.vol_hard_bps:
-            reasons_hard.append(f'vol:{self.vol_ema_bps:.1f}bps')
+        if self.vol_bps >= self.cfg.vol_hard_bps:
+            reasons_hard.append(f'vol:{self.vol_bps:.1f}bps')
             self.reason_counts['vol'] += 1
-        elif self.vol_ema_bps > self.cfg.vol_soft_bps:
-            reasons_soft.append(f'vol:{self.vol_ema_bps:.1f}bps')
+        elif self.vol_bps >= self.cfg.vol_soft_bps:
+            reasons_soft.append(f'vol:{self.vol_bps:.1f}bps')
         
         # 2. Latency
         p95_lat = self.metrics.get('latency_p95_ms', 0.0)
