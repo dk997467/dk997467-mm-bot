@@ -59,9 +59,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           pip install -e .
-          if [ -f requirements_ci.txt ]; then
-            pip install -r requirements_ci.txt
-          fi
+          pip install -r requirements_ci.txt
       
       - name: Run fast shadow unit tests
         run: |
@@ -119,9 +117,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           pip install -e .
-          if [ -f requirements_ci.txt ]; then
-            pip install -r requirements_ci.txt
-          fi
+          pip install -r requirements_ci.txt
       
       - name: Run exec_demo with testnet flags (dry-run, no real creds)
         run: |

@@ -1,5 +1,6 @@
 # Core dependencies
-bybit-connector>=3.0.0
+# NOTE: Exchange SDKs moved to [live] extras (see pyproject.toml)
+# Install with: pip install -e .[live]
 websockets>=11.0.3
 pydantic>=2.5.0
 pyyaml>=6.0.1

@@ -48,6 +48,16 @@ jobs:
         with:
           lfs: true
       
+      - name: Lint - forbid base requirements.txt in CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Ищем только реальные команды, исключая echo/quotes и комментарии
+          if git grep -nP '^[ \t\-]*[^"#\n]*\bpip([ \t]+|-3[ \t]+)?install[^|#\n]*\B-r[ \t]+requirements\.txt\b' .github/workflows | tee /dev/stderr; then
+            echo "::error::Found forbidden 'pip install -r requirements.txt' in CI workflows. Use requirements_ci.txt or extras." >&2
+            exit 1
+          fi
+      
       - name: Setup Python
         uses: actions/setup-python@v5
         with:

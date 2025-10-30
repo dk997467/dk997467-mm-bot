@@ -1,5 +1,42 @@
 [![CI](https://github.com/dk997467/dk997467-mm-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/dk997467/dk997467-mm-bot/actions/workflows/ci.yml)
 
+## Installation
+
+### CI / Development / Shadow Mode
+
+For CI, local development, shadow mode, and soak tests (no exchange SDKs):
+
+```bash
+# Install base package (no exchange SDKs)
+pip install -e .
+
+# Or with CI-safe requirements
+pip install -r requirements_ci.txt
+```
+
+### Live Trading
+
+For live trading with real exchange connectivity (includes exchange SDKs):
+
+```bash
+# Install with [live] extras (includes bybit-connector)
+pip install -e .[live]
+
+# Or use requirements_live.txt
+pip install -r requirements_live.txt
+```
+
+**Why separate?**
+- Exchange SDKs (like `bybit-connector`) are only needed for live trading
+- Keeps CI lightweight and avoids platform-specific installation issues
+- Clear separation between testing/shadow and live trading environments
+
+**What's in `[live]`:**
+- `bybit-connector>=3.0.0` - Bybit exchange SDK
+- (Future: Additional exchange SDKs)
+
+---
+
 [OPS One-Pager](docs/OPS_ONE_PAGER.md) ? ?????????? ???????? ? ???????. ??????? ????? ?? ?????????? ? ??????: [OPS Quickstart](docs/OPS_QUICKSTART.md).
 
 ### One-click ????
