@@ -404,6 +404,23 @@ class ExecutionLoop:
                 metrics.ORDERS_PLACED.inc(symbol=symbol)
                 metrics.ORDER_LATENCY.observe(latency_ms, symbol=symbol)
                 
+                # Create order in store if using InMemoryOrderStore
+                if not self.enable_idempotency and hasattr(self.order_store, "_orders"):
+                    # InMemoryOrderStore path: create order entry directly
+                    from tools.live.order_store import Order
+                    order = Order(
+                        client_order_id=client_order_id,
+                        symbol=symbol,
+                        side=side.value,
+                        qty=qty,
+                        price=price,
+                        state=OrderState.OPEN,
+                        created_at_ms=timestamp_ms,
+                        updated_at_ms=self._clock(),
+                        order_id=getattr(resp, "order_id", None),
+                    )
+                    self.order_store._orders[client_order_id] = order
+                
                 # Update state if using durable store
                 if self.enable_idempotency and hasattr(self.order_store, "update_order_state"):
                     idem_key = f"state:{client_order_id}:open:v1"
@@ -427,6 +444,22 @@ class ExecutionLoop:
                     reason=resp.message,
                 )
                 metrics.ORDERS_REJECTED.inc(symbol=symbol)
+                
+                # Create rejected order in store if using InMemoryOrderStore
+                if not self.enable_idempotency and hasattr(self.order_store, "_orders"):
+                    from tools.live.order_store import Order
+                    order = Order(
+                        client_order_id=client_order_id,
+                        symbol=symbol,
+                        side=side.value,
+                        qty=qty,
+                        price=price,
+                        state=OrderState.REJECTED,
+                        created_at_ms=timestamp_ms,
+                        updated_at_ms=self._clock(),
+                        message=resp.message,
+                    )
+                    self.order_store._orders[client_order_id] = order
 
         except Exception as e:
             self.stats["orders_rejected"] += 1
@@ -533,23 +566,50 @@ class ExecutionLoop:
             return
         
         # Fallback: non-idempotent cancel
-        open_orders = self.exchange.get_open_orders()
+        # For InMemoryOrderStore, get orders from store; otherwise from exchange
+        if not self.enable_idempotency and hasattr(self.order_store, "get_open_orders"):
+            open_orders = self.order_store.get_open_orders()
+        else:
+            open_orders = self.exchange.get_open_orders()
+        
         canceled_count = 0
         for order in open_orders:
             try:
-                # Try different cancel method names
-                if hasattr(self.exchange, "cancel_order"):
-                    resp = self.exchange.cancel_order(order.client_order_id, order.symbol)
-                elif hasattr(self.exchange, "cancel"):
-                    resp = self.exchange.cancel(order.client_order_id, order.symbol)
-                else:
-                    logger.warning(f"Exchange {type(self.exchange)} has no cancel method, skipping")
-                    continue
-                    
-                if resp.status == OrderStatus.CANCELED:
+                # For InMemoryOrderStore, cancel directly in store (no exchange call needed for shadow mode)
+                if not self.enable_idempotency and hasattr(self.order_store, "update_state"):
+                    # Shadow mode with InMemoryOrderStore: just update state
+                    self.order_store.update_state(
+                        client_order_id=order.client_order_id,
+                        state=OrderState.CANCELED,
+                        timestamp_ms=self._clock(),
+                    )
                     self.stats["orders_canceled"] += 1
                     canceled_count += 1
                     logger.info(f"Canceled: {order.client_order_id}")
+                else:
+                    # Live mode or DurableOrderStore: call exchange
+                    exchange_type = type(self.exchange).__name__
+                    success = False
+                    
+                    if exchange_type == "FakeExchangeClient":
+                        # FakeExchangeClient.cancel(order_id) -> bool
+                        success = self.exchange.cancel(order.client_order_id)
+                    elif hasattr(self.exchange, "cancel_order"):
+                        # Signature: cancel_order(client_order_id, symbol) -> OrderResponse
+                        resp = self.exchange.cancel_order(order.client_order_id, order.symbol)
+                        success = resp.status == OrderStatus.CANCELED
+                    elif hasattr(self.exchange, "cancel"):
+                        # Generic cancel method - try with just client_order_id
+                        result = self.exchange.cancel(order.client_order_id)
+                        success = result if isinstance(result, bool) else (result.status == OrderStatus.CANCELED)
+                    else:
+                        logger.warning(f"Exchange {type(self.exchange)} has no cancel method, skipping")
+                        continue
+                        
+                    if success:
+                        self.stats["orders_canceled"] += 1
+                        canceled_count += 1
+                        logger.info(f"Canceled: {order.client_order_id}")
             except Exception as e:
                 logger.error(f"Failed to cancel order {order.client_order_id}: {e}")
         

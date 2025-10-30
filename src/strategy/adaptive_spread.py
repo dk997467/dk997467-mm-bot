@@ -110,8 +110,8 @@ class AdaptiveSpreadEstimator:
     
     def compute_spread_bps(
         self,
-        liquidity_bid: float = 1.0,
-        liquidity_ask: float = 1.0,
+        liquidity_bid: float = 10.0,
+        liquidity_ask: float = 10.0,
         now_ms: Optional[int] = None,
     ) -> float:
         """
@@ -137,7 +137,16 @@ class AdaptiveSpreadEstimator:
         lat_score = self._compute_lat_score()
         pnl_score = self._compute_pnl_score()
         
-        # Weighted combination
+        # Start with base spread
+        spread = self.cfg.base_spread_bps
+        
+        # Add individual terms (additive, not multiplicative)
+        spread += vol_score * self.cfg.vol_sensitivity * 1.5  # Up to +1.5 bps per 1.0 vol_score
+        spread += liq_score * self.cfg.liquidity_sensitivity * 1.0  # Up to +1.0 bps per 1.0 liq_score
+        spread += lat_score * self.cfg.latency_sensitivity * 0.8  # Up to +0.8 bps per 1.0 lat_score
+        spread += pnl_score * self.cfg.pnl_dev_sensitivity * 1.2  # Up to +1.2 bps per 1.0 pnl_score
+        
+        # Compute total score for metrics
         total_score = (
             self.cfg.vol_sensitivity * vol_score +
             self.cfg.liquidity_sensitivity * liq_score +
@@ -145,29 +154,29 @@ class AdaptiveSpreadEstimator:
             self.cfg.pnl_dev_sensitivity * pnl_score
         )
         
-        # Target spread = base * (1 + score)
-        target_spread = self.cfg.base_spread_bps * (1.0 + total_score)
-        
-        # Clamp to min/max
-        target_spread = max(self.cfg.min_spread_bps, min(self.cfg.max_spread_bps, target_spread))
-        
-        # Apply step limit (smooth transitions)
-        delta = target_spread - self.last_spread_bps
-        if abs(delta) > self.cfg.clamp_step_bps:
-            target_spread = self.last_spread_bps + math.copysign(self.cfg.clamp_step_bps, delta)
+        # Hard clamp to min/max
+        spread = max(self.cfg.min_spread_bps, min(self.cfg.max_spread_bps, spread))
         
         # Cooloff: if we just changed recently, don't change again
         if self.last_change_ts_ms is not None:
             cooloff_remaining_ms = self.cfg.cooloff_ms - (now_ms - self.last_change_ts_ms)
             if cooloff_remaining_ms > 0:
                 # Still in cooloff, return previous spread
-                target_spread = self.last_spread_bps
+                spread = self.last_spread_bps
+        
+        # Apply step limit (smooth transitions) AFTER cooloff check
+        delta = spread - self.last_spread_bps
+        if abs(delta) > self.cfg.clamp_step_bps:
+            spread = self.last_spread_bps + math.copysign(self.cfg.clamp_step_bps, delta)
         
         # Update state
-        if abs(target_spread - self.last_spread_bps) > 0.001:
+        if abs(spread - self.last_spread_bps) > 0.001:
+            self.last_change_ts_ms = now_ms
+        elif self.last_change_ts_ms is None:
+            # Initialize timestamp on first call
             self.last_change_ts_ms = now_ms
         
-        self.last_spread_bps = target_spread
+        self.last_spread_bps = spread
         
         # Update metrics
         self.metrics['vol_score'] = vol_score
@@ -175,13 +184,13 @@ class AdaptiveSpreadEstimator:
         self.metrics['lat_score'] = lat_score
         self.metrics['pnl_score'] = pnl_score
         self.metrics['total_score'] = total_score
-        self.metrics['target_spread_bps'] = target_spread
-        self.metrics['final_spread_bps'] = target_spread
+        self.metrics['target_spread_bps'] = spread
+        self.metrics['final_spread_bps'] = spread
         
         # Log
         self._log_computation()
         
-        return target_spread
+        return spread
     
     def _compute_vol_score(self) -> float:
         """
@@ -192,9 +201,9 @@ class AdaptiveSpreadEstimator:
             - If vol_ema >= hard threshold: 1.0
             - Linear interpolation in between
         """
-        # Use soft/hard thresholds from risk guards (approx 15/25 bps)
-        soft_bps = 10.0
-        hard_bps = 20.0
+        # Lower thresholds to be more sensitive to volatility
+        soft_bps = 0.5  # Very low threshold
+        hard_bps = 5.0  # Moderate threshold
         
         if self.vol_ema_bps <= soft_bps:
             return 0.0
@@ -215,14 +224,17 @@ class AdaptiveSpreadEstimator:
         # Average liquidity (both sides)
         avg_liq = (liquidity_bid + liquidity_ask) / 2.0
         
-        # Typical baseline (configurable, here assume 10.0 as "normal")
-        baseline_liq = 10.0
+        # Typical baseline (assume 10.0 as "good liquidity", 1.0 as "poor")
+        good_liq = 10.0
+        poor_liq = 1.0
         
-        if avg_liq >= baseline_liq:
+        if avg_liq >= good_liq:
             return 0.0
+        elif avg_liq <= poor_liq:
+            return 1.0
         else:
-            # Linear: liq=0 → score=1, liq=baseline → score=0
-            return max(0.0, 1.0 - (avg_liq / baseline_liq))
+            # Linear: liq=1 → score=1.0, liq=10 → score=0
+            return (good_liq - avg_liq) / (good_liq - poor_liq)
     
     def _compute_lat_score(self) -> float:
         """
@@ -253,35 +265,33 @@ class AdaptiveSpreadEstimator:
     
     def _compute_pnl_score(self) -> float:
         """
-        Compute PnL deviation score (0..1) based on rolling z-score.
+        Compute PnL deviation score (0..1) based on rolling mean.
         
         Logic:
-            - z-score >= 0 → 0.0 (profit, no issue)
-            - z-score <= -2.0 → 1.0 (significant drawdown)
+            - mean >= 0 → 0.0 (profit, no issue)
+            - mean <= -10 → 1.0 (significant loss)
             - Linear in between
         """
         n = len(self.pnl_window)
         if n < 10:
             return 0.0
         
-        # Compute mean and std
+        # Compute mean
         mean = self.pnl_sum / n
-        variance = (self.pnl_sq_sum / n) - (mean * mean)
-        std = math.sqrt(max(0.0, variance))
         
-        if std < 1e-6:
+        # If mean is positive (profits), no adjustment needed
+        if mean >= 0.0:
             return 0.0
         
-        # Z-score of most recent PnL
-        z_score = (self.pnl_window[-1] - mean) / std
-        
-        # Map z-score to score
-        if z_score >= 0.0:
-            return 0.0
-        elif z_score <= -2.0:
+        # If mean is negative (losses), scale linearly
+        # mean=-10 or worse → score=1.0
+        # mean=0 → score=0.0
+        threshold = -10.0
+        if mean <= threshold:
             return 1.0
         else:
-            return -z_score / 2.0
+            # Linear: mean=0 → 0, mean=-10 → 1.0
+            return abs(mean) / abs(threshold)
     
     def _log_computation(self) -> None:
         """Log spread computation details."""

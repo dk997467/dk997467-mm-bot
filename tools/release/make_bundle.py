@@ -19,7 +19,7 @@ import sys
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 
 def calculate_sha256(file_path: Path) -> str:
@@ -101,9 +101,27 @@ def collect_files() -> List[Dict[str, str]]:
     return files
 
 
-def create_manifest(files: List[Dict[str, str]], version: str, utc: str) -> Dict[str, Any]:
-    """Create manifest with SHA256 hashes."""
-    manifest = {
+def _now_utc_z() -> str:
+    """Get current UTC timestamp in ISO 8601 format with Z suffix."""
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def create_manifest(files: List[Dict[str, str]], version: str, utc: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Create manifest with SHA256 hashes.
+    
+    Args:
+        files: List of file dictionaries with path, dest, and desc
+        version: Version string for the bundle
+        utc: Optional UTC timestamp. If None, uses current UTC time with Z suffix
+    
+    Returns:
+        Manifest dictionary with bundle metadata and file entries
+    """
+    if utc is None:
+        utc = _now_utc_z()
+    
+    manifest: Dict[str, Any] = {
         "bundle": {
             "version": version,
             "utc": utc
