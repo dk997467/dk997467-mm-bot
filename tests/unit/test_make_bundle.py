@@ -55,14 +55,22 @@ def test_create_manifest():
             "desc": "Test file"
         }]
         
+        # Test without explicit UTC (uses default)
         manifest = create_manifest(files, "1.0.0")
         
-        assert manifest["version"] == "1.0.0"
-        assert "created_at" in manifest
+        assert manifest["bundle"]["version"] == "1.0.0"
+        assert "utc" in manifest["bundle"]
+        assert manifest["bundle"]["utc"].endswith("Z")  # ISO format with Z suffix
+        assert manifest["result"] in ("READY", "PARTIAL")
         assert len(manifest["files"]) == 1
         assert manifest["files"][0]["path"] == "test.txt"
         assert "sha256" in manifest["files"][0]
         assert manifest["files"][0]["size"] > 0
+        
+        # Test with explicit UTC
+        manifest2 = create_manifest(files, "2.0.0", "2025-01-01T00:00:00Z")
+        assert manifest2["bundle"]["version"] == "2.0.0"
+        assert manifest2["bundle"]["utc"] == "2025-01-01T00:00:00Z"
     
     print("✓ Manifest creation test passed")
 
