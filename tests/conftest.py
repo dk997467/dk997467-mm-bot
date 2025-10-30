@@ -298,3 +298,26 @@ class FakeWS:
         """Close connection."""
         self.connected = False
         self.subscriptions.clear()
+
+
+# ==============================================================================
+# ASYNCIO CLEANUP FIXTURE (pytest-asyncio strict mode compatible)
+# ==============================================================================
+
+@pytest.fixture
+def cleanup_tasks():
+    """
+    Sync fixture compatible with pytest-asyncio strict mode.
+    Marker fixture for tests that need task cleanup.
+    
+    The actual cleanup is handled by pytest-asyncio's event loop management.
+    This fixture exists to satisfy the test signature in strict mode.
+    
+    Usage in tests:
+        @pytest.mark.asyncio
+        async def test_something(cleanup_tasks):
+            # test code...
+            pass
+    """
+    yield
+    # No explicit cleanup needed - pytest-asyncio handles it
