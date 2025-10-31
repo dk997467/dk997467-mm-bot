@@ -13,6 +13,15 @@ if _repo_root not in sys.path:
 
 from src.common.redact import DEFAULT_PATTERNS
 
+# Treat runs of asterisks as masking, not secrets
+MASK_RE = re.compile(r'\*{4,}')
+
+# Exclude noisy/generated trees from scanning
+EXCLUDE_GLOBS = [
+    'tools/tuning/golden/**',
+    'artifacts/**',
+    'reports/**',
+]
 
 TARGET_DIRS = ['src', 'cli', 'tools']  # Only scan source code for secrets
 EXCLUDE_DIRS = {'venv', '.git', '__pycache__', 'tests/fixtures', 'artifacts', 'dist', 'logs', 'data', 'config'}
@@ -32,6 +41,22 @@ TEST_CREDENTIALS_WHITELIST = {
 
 # Path to custom allowlist file (one pattern per line)
 ALLOWLIST_FILE = os.path.join(_repo_root, 'tools', 'ci', 'allowlist.txt')
+
+
+def _excluded(path: Path) -> bool:
+    """Check if path matches any exclusion glob."""
+    rel = str(path).replace('\\', '/')
+    # Also check if path starts with any excluded base
+    for glob_pat in EXCLUDE_GLOBS:
+        # Handle simple directory prefix matching
+        if glob_pat.endswith('/**'):
+            prefix = glob_pat[:-3]
+            if rel.startswith(prefix):
+                return True
+        # Full glob matching
+        if fnmatch.fnmatch(rel, glob_pat):
+            return True
+    return False
 
 
 def _is_text_file(path: str) -> bool:
@@ -142,6 +167,12 @@ def _scan_file(path: str, patterns: List[str], custom_allowlist: Set[str]) -> Tu
             for i, line in enumerate(f, start=1):
                 s = line.rstrip('\n')
                 
+                # Skip lines containing masked tokens (****) entirely
+                # These are redacted placeholders, not actual secrets
+                mask_match = MASK_RE.search(s)
+                if mask_match:
+                    continue
+                
                 # Check if line matches any pattern
                 matched = False
                 for pat in patterns:
@@ -221,10 +252,26 @@ def main(argv=None) -> int:
         if not os.path.exists(root):
             continue
         for dirpath, dirnames, filenames in os.walk(root):
-            # prune excludes
-            dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
+            # prune excluded dirs early
+            pruned_dirs = []
+            for d in list(dirnames):
+                d_path = Path(dirpath) / d
+                rel_path = str(d_path.relative_to(_repo_root)).replace('\\', '/')
+                if d in EXCLUDE_DIRS or _excluded(Path(rel_path)):
+                    pruned_dirs.append(d)
+            for d in pruned_dirs:
+                dirnames.remove(d)
+            
             for name in sorted(filenames):
                 path = os.path.join(dirpath, name)
+                # Skip excluded files
+                try:
+                    rel_path = str(Path(path).relative_to(_repo_root)).replace('\\', '/')
+                    if _excluded(Path(rel_path)):
+                        continue
+                except ValueError:
+                    pass  # Not under repo root, check anyway
+                
                 if not _is_text_file(path):
                     continue
                 try:
