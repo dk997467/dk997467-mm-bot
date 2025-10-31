@@ -109,8 +109,12 @@ def _is_whitelisted(line: str, file_path: str, custom_allowlist: Set[str]) -> bo
         if test_value in line:
             return True
     
-    # Normalize file path for matching
+    # Normalize file path for matching (get relative path from repo root)
     normalized_path = file_path.replace('\\', '/')
+    try:
+        rel_path = str(Path(file_path).relative_to(_repo_root)).replace('\\', '/')
+    except ValueError:
+        rel_path = normalized_path  # If not under repo root, use as-is
     
     # Check custom allowlist (supports regex, glob, and plain strings)
     for pattern in custom_allowlist:
@@ -118,12 +122,17 @@ def _is_whitelisted(line: str, file_path: str, custom_allowlist: Set[str]) -> bo
         is_path_pattern = '/' in pattern or pattern.endswith('/**') or pattern.startswith('**/') or pattern.endswith('.py') or pattern.endswith('.json') or pattern.endswith('.yaml')
         
         if is_path_pattern:
-            # This is a path glob pattern
+            # This is a path glob pattern - match against relative path
             try:
-                if fnmatch.fnmatch(normalized_path, pattern):
+                # Try matching relative path
+                if fnmatch.fnmatch(rel_path, pattern):
                     return True
+                # Also try with **/ prepended for patterns like "cli/**"
+                if not pattern.startswith('**/'):
+                    if fnmatch.fnmatch(rel_path, '**/' + pattern):
+                        return True
                 # Also try matching against basename
-                if fnmatch.fnmatch(os.path.basename(normalized_path), pattern):
+                if fnmatch.fnmatch(os.path.basename(rel_path), pattern):
                     return True
             except:
                 pass
@@ -167,30 +176,26 @@ def _scan_file(path: str, patterns: List[str], custom_allowlist: Set[str]) -> Tu
             for i, line in enumerate(f, start=1):
                 s = line.rstrip('\n')
                 
-                # Skip lines containing masked tokens (****) entirely
-                # These are redacted placeholders, not actual secrets
-                mask_match = MASK_RE.search(s)
-                if mask_match:
-                    continue
-                
                 # Check if line matches any pattern
-                matched = False
                 for pat in patterns:
                     try:
-                        if re.search(pat, s):
-                            matched = True
+                        matches = re.finditer(pat, s)
+                        for m in matches:
+                            secret = m.group(0)
+                            
+                            # Skip if matched secret is just a mask (****+)
+                            if MASK_RE.fullmatch(secret):
+                                continue
+                            
+                            # Check if finding is allowlisted
+                            if _is_whitelisted(s, path, custom_allowlist):
+                                allowlisted_hits.append((i, s))
+                            else:
+                                real_hits.append((i, s))
+                            # Only report each line once
                             break
                     except re.error:
                         continue
-                
-                if not matched:
-                    continue
-                
-                # Check if finding is allowlisted
-                if _is_whitelisted(s, path, custom_allowlist):
-                    allowlisted_hits.append((i, s))
-                else:
-                    real_hits.append((i, s))
     except Exception:
         return ([], [])
     
