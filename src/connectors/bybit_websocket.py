@@ -244,7 +244,7 @@ class BybitWebSocketConnector:
         - Base delay doubles with each attempt (exponential growth)
         - Jitter adds randomness to prevent synchronized reconnects (thundering herd)
         - Max delay cap prevents excessive wait times
-        - Max attempts prevents infinite retry loops
+        - Max attempts prevents infinite retry loops (unless delay is capped)
         
         Formula: delay = min(base * 2^attempt + jitter, max_delay)
         where jitter = random(0, delay * 0.3) to add 30% variance
@@ -264,8 +264,15 @@ class BybitWebSocketConnector:
         - Attempt 6: ~32s (1 * 2^5 + jitter)
         - Attempt 7+: ~60s (capped at max_delay)
         """
-        # Check if max attempts reached
-        if self._reconnect_attempts >= self.max_reconnect_attempts:
+        # Calculate exponential backoff
+        exponential_delay = self.base_reconnect_delay * (2 ** self._reconnect_attempts)
+        
+        # Check if delay is capped (hit max_reconnect_delay)
+        # If capped, continue retrying (don't enforce max_attempts limit)
+        delay_capped = exponential_delay > self.max_reconnect_delay
+        
+        # Check if max attempts reached (only if NOT capped)
+        if not delay_capped and self._reconnect_attempts >= self.max_reconnect_attempts:
             print(f"[CRITICAL] {ws_type.upper()} WebSocket: max reconnect attempts ({self.max_reconnect_attempts}) reached")
             if self.metrics:
                 self.metrics.ws_max_reconnect_reached_total.labels(
@@ -273,9 +280,6 @@ class BybitWebSocketConnector:
                     ws_type=ws_type
                 ).inc()
             return True  # Signal caller to stop
-        
-        # Calculate exponential backoff
-        exponential_delay = self.base_reconnect_delay * (2 ** self._reconnect_attempts)
         
         # Add jitter (30% of delay) to prevent thundering herd
         # This spreads out reconnects from multiple instances

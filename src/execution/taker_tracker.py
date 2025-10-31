@@ -122,7 +122,7 @@ class TakerTracker:
                 - maker_count: Number of maker fills in window
                 - total_count: Total fills in window
                 - taker_share_pct: Taker share as percentage
-                - can_take: Whether taker fills are currently allowed
+                - can_take: Whether taker fills are currently allowed (based on current share)
         """
         if timestamp_ms is None:
             timestamp_ms = int(time.time() * 1000)
@@ -136,7 +136,18 @@ class TakerTracker:
         
         taker_share_pct = (taker_count / total_count * 100.0) if total_count > 0 else 0.0
         
-        can_take, reason = self.can_take_liquidity(timestamp_ms=timestamp_ms)
+        # Check if current taker share exceeds limit
+        # can_take = taker_share_pct <= max_taker_share_pct
+        can_take = taker_share_pct <= self.max_taker_share_pct
+        
+        # Also check absolute count limit
+        if taker_count >= self.max_taker_fills:
+            can_take = False
+            reason = f"taker_count_exceeded (limit={self.max_taker_fills})"
+        elif not can_take:
+            reason = f"taker_share_exceeded (current={taker_share_pct:.1f}%, limit={self.max_taker_share_pct:.1f}%)"
+        else:
+            reason = None
         
         return {
             'taker_count': taker_count,
@@ -144,7 +155,7 @@ class TakerTracker:
             'total_count': total_count,
             'taker_share_pct': taker_share_pct,
             'can_take': can_take,
-            'block_reason': reason if not can_take else None,
+            'block_reason': reason,
         }
     
     def reset(self) -> None:

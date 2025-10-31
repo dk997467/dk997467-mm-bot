@@ -214,6 +214,10 @@ def main(argv=None) -> int:
         scan_dirs.append(str(artifacts_root))
     
     for root in scan_dirs:
+        # Convert relative paths to absolute paths relative to _repo_root
+        if not os.path.isabs(root):
+            root = os.path.join(_repo_root, root)
+        
         if not os.path.exists(root):
             continue
         for dirpath, dirnames, filenames in os.walk(root):
