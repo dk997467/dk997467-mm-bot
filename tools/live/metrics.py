@@ -419,6 +419,12 @@ class LiveExecutionMetrics:
                 lines.append(metric.to_prometheus())
             lines.append("")
         
+        # Add global mm_freeze_events_total
+        lines.append("# HELP mm_freeze_events_total Total number of freeze events")
+        lines.append("# TYPE mm_freeze_events_total counter")
+        lines.append(f"mm_freeze_events_total {_mm_freeze_events_total}")
+        lines.append("")
+        
         return "\n".join(lines)
     
     def reset(self) -> None:
@@ -439,6 +445,26 @@ class LiveExecutionMetrics:
 
 # Global metrics instance (singleton pattern for convenience)
 _global_metrics: Optional[LiveExecutionMetrics] = None
+
+# Global freeze events counter (for /metrics endpoint)
+_mm_freeze_events_total: int = 0
+
+
+def inc_freeze_events() -> None:
+    """Increment mm_freeze_events_total counter."""
+    global _mm_freeze_events_total
+    _mm_freeze_events_total += 1
+
+
+def get_freeze_events_total() -> int:
+    """Get current value of mm_freeze_events_total."""
+    return _mm_freeze_events_total
+
+
+def reset_freeze_events() -> None:
+    """Reset mm_freeze_events_total (for testing)."""
+    global _mm_freeze_events_total
+    _mm_freeze_events_total = 0
 
 
 def get_global_metrics() -> LiveExecutionMetrics:

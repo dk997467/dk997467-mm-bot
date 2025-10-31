@@ -378,6 +378,17 @@ def get_registry() -> MetricsRegistry:
 
 def render_prometheus() -> str:
     """Render all registered metrics in Prometheus text format."""
+    # Sync freeze events from live metrics (if available)
+    try:
+        from tools.live import metrics as live_metrics
+        freeze_count = live_metrics.get_freeze_events_total()
+        # Set the value directly in the counter (no labels, so key is empty tuple)
+        if hasattr(FREEZE_EVENTS, "_values") and hasattr(FREEZE_EVENTS, "_lock"):
+            with FREEZE_EVENTS._lock:
+                FREEZE_EVENTS._values[()] = float(freeze_count)
+    except Exception:
+        pass  # Don't break if live metrics unavailable
+    
     return _REGISTRY.render_prometheus()
 
 

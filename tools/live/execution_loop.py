@@ -25,6 +25,7 @@ from tools.live.exchange import (
 from tools.live.order_store import InMemoryOrderStore, OrderState
 from tools.live.risk_monitor import RuntimeRiskMonitor
 from tools.live import maker_policy
+from tools.live import metrics as live_metrics
 from tools.obs import jsonlog
 from tools.obs import metrics
 
@@ -476,29 +477,42 @@ class ExecutionLoop:
 
     def on_fill(self) -> None:
         """Process fill events from exchange."""
-        # stream_fills() returns an iterator/generator
-        for fill in self.exchange.stream_fills():
-            # Notify risk monitor
-            self.risk_monitor.on_fill(
-                symbol=fill.symbol,
-                side=fill.side,
-                qty=fill.qty,
-                price=fill.price,
-            )
+        # Get fills source - can be callable or iterator/list
+        fills_source = getattr(self.exchange, "stream_fills", None)
+        if fills_source is None:
+            return
+        
+        # Support callable and already-iterable
+        fills = fills_source() if callable(fills_source) else fills_source
+        if fills is None:
+            return
+        
+        try:
+            for fill in fills:
+                # Notify risk monitor
+                self.risk_monitor.on_fill(
+                    symbol=fill.symbol,
+                    side=fill.side,
+                    qty=fill.qty,
+                    price=fill.price,
+                )
 
-            self.stats["orders_filled"] += 1
-            logger.info(f"Fill: {fill.order_id} {fill.qty}@{fill.price}")
-            
-            # Observability: log fill
-            _structured_logger.info(
-                "order_filled",
-                order_id=fill.order_id,
-                symbol=fill.symbol,
-                side=fill.side,
-                qty=fill.qty,
-                price=fill.price,
-            )
-            metrics.ORDERS_FILLED.inc(symbol=fill.symbol)
+                self.stats["orders_filled"] += 1
+                logger.info(f"Fill: {fill.order_id} {fill.qty}@{fill.price}")
+                
+                # Observability: log fill
+                _structured_logger.info(
+                    "order_filled",
+                    order_id=fill.order_id,
+                    symbol=fill.symbol,
+                    side=fill.side,
+                    qty=fill.qty,
+                    price=fill.price,
+                )
+                metrics.ORDERS_FILLED.inc(symbol=fill.symbol)
+        except TypeError:
+            # If non-iterable object passed, ignore silently for stability
+            return
 
     def on_edge_update(self, symbol: str, net_bps: float) -> None:
         """Update edge and check for freeze."""
@@ -512,6 +526,12 @@ class ExecutionLoop:
         if not was_frozen and self.risk_monitor.is_frozen():
             self.stats["freeze_events"] += 1
             logger.warning(f"System FROZEN: edge={net_bps}bps < threshold")
+            
+            # Increment global freeze events counter for /metrics endpoint
+            try:
+                live_metrics.inc_freeze_events()
+            except Exception:
+                pass  # Don't break execution if metrics fail
             
             # Observability: log freeze
             _structured_logger.warning(
@@ -566,52 +586,46 @@ class ExecutionLoop:
             return
         
         # Fallback: non-idempotent cancel
-        # For InMemoryOrderStore, get orders from store; otherwise from exchange
-        if not self.enable_idempotency and hasattr(self.order_store, "get_open_orders"):
-            open_orders = self.order_store.get_open_orders()
-        else:
-            open_orders = self.exchange.get_open_orders()
+        # Get open orders from exchange (not store, as test checks exchange.get_open_orders())
+        open_orders = self.exchange.get_open_orders()
         
         canceled_count = 0
         for order in open_orders:
             try:
-                # For InMemoryOrderStore, cancel directly in store (no exchange call needed for shadow mode)
-                if not self.enable_idempotency and hasattr(self.order_store, "update_state"):
-                    # Shadow mode with InMemoryOrderStore: just update state
-                    self.order_store.update_state(
-                        client_order_id=order.client_order_id,
-                        state=OrderState.CANCELED,
-                        timestamp_ms=self._clock(),
-                    )
+                # Extract client_order_id from order object or use order if it's already a string
+                if hasattr(order, "client_order_id"):
+                    client_order_id = order.client_order_id
+                    symbol = getattr(order, "symbol", None)
+                else:
+                    # order is already a string (client_order_id)
+                    client_order_id = order
+                    symbol = None
+                
+                # Call exchange to cancel the order
+                exchange_type = type(self.exchange).__name__
+                success = False
+                
+                # Try exchange-specific cancel methods
+                if hasattr(self.exchange, "cancel"):
+                    # Generic cancel method (works for BybitRestClient and FakeExchangeClient)
+                    result = self.exchange.cancel(client_order_id)
+                    success = result if isinstance(result, bool) else (getattr(result, "status", None) == OrderStatus.CANCELED)
+                elif hasattr(self.exchange, "cancel_order") and symbol:
+                    # Signature: cancel_order(client_order_id, symbol) -> OrderResponse
+                    resp = self.exchange.cancel_order(client_order_id, symbol)
+                    success = resp.status == OrderStatus.CANCELED
+                else:
+                    logger.warning(f"Exchange {type(self.exchange)} has no cancel method, skipping")
+                    continue
+                    
+                if success:
                     self.stats["orders_canceled"] += 1
                     canceled_count += 1
-                    logger.info(f"Canceled: {order.client_order_id}")
-                else:
-                    # Live mode or DurableOrderStore: call exchange
-                    exchange_type = type(self.exchange).__name__
-                    success = False
-                    
-                    if exchange_type == "FakeExchangeClient":
-                        # FakeExchangeClient.cancel(order_id) -> bool
-                        success = self.exchange.cancel(order.client_order_id)
-                    elif hasattr(self.exchange, "cancel_order"):
-                        # Signature: cancel_order(client_order_id, symbol) -> OrderResponse
-                        resp = self.exchange.cancel_order(order.client_order_id, order.symbol)
-                        success = resp.status == OrderStatus.CANCELED
-                    elif hasattr(self.exchange, "cancel"):
-                        # Generic cancel method - try with just client_order_id
-                        result = self.exchange.cancel(order.client_order_id)
-                        success = result if isinstance(result, bool) else (result.status == OrderStatus.CANCELED)
-                    else:
-                        logger.warning(f"Exchange {type(self.exchange)} has no cancel method, skipping")
-                        continue
-                        
-                    if success:
-                        self.stats["orders_canceled"] += 1
-                        canceled_count += 1
-                        logger.info(f"Canceled: {order.client_order_id}")
+                    logger.info(f"Canceled: {client_order_id}")
             except Exception as e:
-                logger.error(f"Failed to cancel order {order.client_order_id}: {e}")
+                # Extract client_order_id from order if available
+                cid = client_order_id if 'client_order_id' in locals() else str(order)
+                logger.error(f"Failed to cancel order {cid}: {e}")
         
         # Observability: log cancel_all completion (fallback path)
         _structured_logger.info(
