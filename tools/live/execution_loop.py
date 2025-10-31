@@ -546,7 +546,7 @@ class ExecutionLoop:
             self._cancel_all_open_orders(reason="edge_below_threshold")
 
     def _cancel_all_open_orders(self, reason: str = "freeze") -> None:
-        """Cancel all open orders (triggered by freeze) - idempotent."""
+        """Cancel all open orders on exchange (best-effort) and ALWAYS cancel locally."""
         # Generate idempotency key for this freeze event
         if not self._freeze_idem_key:
             freeze_ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -586,51 +586,75 @@ class ExecutionLoop:
             return
         
         # Fallback: non-idempotent cancel
-        # Get open orders from exchange (not store, as test checks exchange.get_open_orders())
-        open_orders = self.exchange.get_open_orders()
+        # Get open orders from order_store (source of truth for local state)
+        open_orders = list(self.order_store.get_open_orders())
         
-        canceled_count = 0
-        for order in open_orders:
-            try:
-                # Extract client_order_id from order object or use order if it's already a string
-                if hasattr(order, "client_order_id"):
-                    client_order_id = order.client_order_id
-                    symbol = getattr(order, "symbol", None)
-                else:
-                    # order is already a string (client_order_id)
-                    client_order_id = order
-                    symbol = None
-                
-                # Call exchange to cancel the order
-                exchange_type = type(self.exchange).__name__
-                success = False
-                
-                # Try exchange-specific cancel methods
-                if hasattr(self.exchange, "cancel"):
-                    # Generic cancel method (works for BybitRestClient and FakeExchangeClient)
-                    result = self.exchange.cancel(client_order_id)
-                    success = result if isinstance(result, bool) else (getattr(result, "status", None) == OrderStatus.CANCELED)
-                elif hasattr(self.exchange, "cancel_order") and symbol:
-                    # Signature: cancel_order(client_order_id, symbol) -> OrderResponse
-                    resp = self.exchange.cancel_order(client_order_id, symbol)
-                    success = resp.status == OrderStatus.CANCELED
-                else:
-                    logger.warning(f"Exchange {type(self.exchange)} has no cancel method, skipping")
-                    continue
-                    
-                if success:
-                    self.stats["orders_canceled"] += 1
-                    canceled_count += 1
-                    logger.info(f"Canceled: {client_order_id}")
-            except Exception as e:
-                # Extract client_order_id from order if available
-                cid = client_order_id if 'client_order_id' in locals() else str(order)
-                logger.error(f"Failed to cancel order {cid}: {e}")
+        canceled = 0
+        
+        # Best-effort: попробовать отменить на бирже
+        # Try generic cancel() first (works for FakeExchangeClient and BybitRestClient)
+        cancel_generic = getattr(self.exchange, "cancel", None)
+        cancel_one = getattr(self.exchange, "cancel_order", None)
+        cancel_all_bulk = getattr(self.exchange, "cancel_all_open_orders", None)
+        
+        try:
+            if callable(cancel_all_bulk):
+                # Если есть пакетная отмена — используем
+                symbols = sorted({o.symbol for o in open_orders})
+                if symbols:
+                    cancel_all_bulk(symbols=symbols)
+                    logger.info(f"Bulk cancel on exchange for symbols: {symbols}")
+            elif callable(cancel_generic):
+                # Generic cancel(client_order_id) - works for most exchanges
+                for o in open_orders:
+                    try:
+                        cancel_generic(o.client_order_id)
+                    except Exception as e:
+                        # ignore exchange cancel errors — локальная консистентность важнее
+                        logger.debug(f"Exchange cancel failed for {o.client_order_id}: {e}")
+            elif callable(cancel_one):
+                for o in open_orders:
+                    try:
+                        # cancel_order signature: (client_order_id, symbol)
+                        cancel_one(o.client_order_id, o.symbol)
+                    except Exception as e:
+                        # ignore exchange cancel errors — локальная консистентность важнее
+                        logger.debug(f"Exchange cancel failed for {o.client_order_id}: {e}")
+        except Exception as e:
+            # ignore exchange errors entirely
+            logger.debug(f"Exchange cancel_all failed: {e}")
+        
+        # Локальная отмена — обязательна
+        for o in open_orders:
+            did_cancel = False
+            
+            # Try cancel() first (changes state to CANCELED, order remains in store)
+            if hasattr(self.order_store, "cancel"):
+                try:
+                    self.order_store.cancel(o.client_order_id)
+                    did_cancel = True
+                except Exception as e:
+                    logger.debug(f"Failed to cancel {o.client_order_id}: {e}")
+            
+            # If cancel failed, try remove() (physically removes order)
+            if not did_cancel and hasattr(self.order_store, "remove"):
+                try:
+                    self.order_store.remove(o.client_order_id)
+                    did_cancel = True
+                except Exception as e:
+                    logger.debug(f"Failed to remove {o.client_order_id}: {e}")
+            
+            if did_cancel:
+                canceled += 1
+        
+        self.stats["orders_canceled"] = self.stats.get("orders_canceled", 0) + canceled
+        
+        logger.info(f"cancel_all_done: trigger={reason}, canceled={canceled}")
         
         # Observability: log cancel_all completion (fallback path)
         _structured_logger.info(
             "cancel_all_done",
-            canceled_count=canceled_count,
+            canceled_count=canceled,
             trigger=reason,
             mode="fallback",
         )
