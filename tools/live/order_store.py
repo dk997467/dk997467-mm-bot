@@ -173,6 +173,17 @@ class InMemoryOrderStore:
             counts[state_str] = counts.get(state_str, 0) + 1
         return counts
 
+    def cancel(self, client_order_id: str) -> None:
+        """Cancel an order by changing its state to CANCELED."""
+        if client_order_id in self._orders:
+            self._orders[client_order_id].state = OrderState.CANCELED
+            self._orders[client_order_id].updated_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    def remove(self, client_order_id: str) -> None:
+        """Physically remove an order from the store."""
+        if client_order_id in self._orders:
+            del self._orders[client_order_id]
+
     def reset(self) -> None:
         """Reset store (for testing)."""
         self._orders.clear()

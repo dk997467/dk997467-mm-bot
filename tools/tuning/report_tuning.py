@@ -171,7 +171,7 @@ def main(argv=None):
         golden_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy(out_json, golden_dir / "TUNING_REPORT_case1.json")
         shutil.copy(out_md, golden_dir / "TUNING_REPORT_case1.md")
-        print(f"[OK] Updated golden files: {golden_dir}/TUNING_REPORT_case1.{{json,md}}")
+        print(f"[OK] Updated golden files: {golden_dir}/*.{{json,md}}")
     
     return 0
 
