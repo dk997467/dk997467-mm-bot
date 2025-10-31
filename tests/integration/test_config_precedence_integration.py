@@ -19,8 +19,8 @@ import sys
 from pathlib import Path
 import pytest
 
+# PROJECT_ROOT and sys.path bootstrap now handled by tests/integration/conftest.py
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
 
 
 @pytest.mark.integration
