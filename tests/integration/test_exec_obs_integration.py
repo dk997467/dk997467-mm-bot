@@ -41,6 +41,13 @@ class FakeClock:
 
 def test_exec_loop_with_observability():
     """Test ExecutionLoop with observability enabled."""
+    # Reset freeze events counter for test isolation
+    from tools.obs import metrics as obs_metrics
+    try:
+        obs_metrics.FREEZE_EVENTS._values[()] = 0.0
+    except Exception:
+        pass
+    
     clock = FakeClock()
     
     # Create components
