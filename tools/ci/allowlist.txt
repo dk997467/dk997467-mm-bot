@@ -1,64 +1,33 @@
 # Secrets Scanner Allowlist
-# Patterns to ignore (glob and regex supported)
+# One pattern per line (glob and regex supported)
+# Lines starting with # are comments
 
 # Masked secrets (common placeholders)
 ****
 \*\*\*\*
+^[*]{4,}$
+^X{4,}$
+^-{4,}$
 PLACEHOLDER
 DUMMY
 REDACTED
 EXAMPLE
 TEST_SECRET
-test_secret
-dummy_key
-placeholder_key
 
-# Test/example paths (glob patterns)
-tests/**
-test_*
-**/test_*.py
-**/test_*.json
-docs/**
-examples/**
-artifacts/**
-temp_*/**
-dummy/**
-
-# Tuning/sweep paths (synthetic configs)
-tools/**
-sweep/**
-*.sweep.yaml
-*_sweep.yaml
-
-# Source code with redacted names (security measure)
-src/**
-cli/**
-
-# CI test credentials (non-real)
+# CI test credentials (intentionally fake)
 test_api_key_for_ci_only
 test_api_secret_for_ci_only
 test_pg_password_for_ci_only
 
-# Common false positives
+# Common test/example values
+dummy_key
+placeholder_key
 lorem_ipsum
 sample_data
 demo_key
 example_token
+test_secret
 
-# Git/build artifacts
-.git/**
-.pytest_cache/**
-__pycache__/**
-*.pyc
-node_modules/**
-dist/**
-build/**
-
-# Documentation examples
+# Documentation examples (regex patterns)
 Example:.*
 Sample:.*
-
-# Regex patterns for masked values (must start with ^ or end with $)
-^[*]{4,}$
-^X{4,}$
-^-{4,}$
