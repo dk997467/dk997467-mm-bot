@@ -7,6 +7,7 @@ Public API:
 """
 from __future__ import annotations
 from typing import Callable
+import math
 
 from tools.obs import jsonlog, metrics
 
@@ -81,6 +82,9 @@ class RuntimeRiskMonitor:
         self.freezes_total = 0
         self.last_freeze_reason: str | None = None
         self.last_freeze_symbol: str | None = None
+        
+        # Risk ratio p95 tracking
+        self._risk_samples: list[float] = []
     
     def check_before_order(
         self,
@@ -161,6 +165,9 @@ class RuntimeRiskMonitor:
         qty_signed = qty if side.lower() == "buy" else -qty
         current_pos = self._positions.get(symbol, 0.0)
         self._positions[symbol] = current_pos + qty_signed
+        
+        # Record risk ratio for p95 tracking
+        self._record_risk_snapshot()
     
     def on_edge_update(self, symbol: str, net_bps: float) -> None:
         """
@@ -216,6 +223,40 @@ class RuntimeRiskMonitor:
         self.last_freeze_reason = reason
         self.last_freeze_symbol = symbol
     
+    def _record_risk_snapshot(self) -> None:
+        """
+        Record current risk ratio for p95 tracking.
+        
+        Risk ratio = total_notional / max_total_notional
+        """
+        try:
+            # Calculate total notional
+            total_notional = 0.0
+            for symbol, qty in self._positions.items():
+                mark_price = self.get_mark_price(symbol)
+                total_notional += abs(qty * mark_price)
+            
+            # Calculate risk ratio (0.0 to 1.0+)
+            if self.max_total_notional_usd > 0:
+                ratio = total_notional / self.max_total_notional_usd
+                if 0.0 <= ratio <= 1.0:
+                    self._risk_samples.append(ratio)
+        except Exception:
+            pass  # Never break on metrics
+    
+    def risk_ratio_p95(self) -> float:
+        """
+        Compute 95th percentile of risk ratio samples.
+        
+        Returns:
+            95th percentile risk ratio (0.0 to 1.0, or 0.0 if no samples)
+        """
+        if not self._risk_samples:
+            return 0.0
+        xs = sorted(self._risk_samples)
+        k = max(0, int(math.ceil(0.95 * len(xs)) - 1))
+        return float(xs[k])
+    
     def reset(self) -> None:
         """
         Reset risk monitor state (for testing).
@@ -224,7 +265,7 @@ class RuntimeRiskMonitor:
         - Frozen state
         - Positions
         - Freeze reason and symbol
-        - Does NOT reset metrics (blocks_total, freezes_total)
+        - Does NOT reset metrics (blocks_total, freezes_total, risk_samples)
         """
         self._frozen = False
         self._positions.clear()

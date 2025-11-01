@@ -24,6 +24,7 @@ from tools.live.exchange import (
 )
 from tools.live.order_store import InMemoryOrderStore, OrderState
 from tools.live.risk_monitor import RuntimeRiskMonitor
+from tools.live.latency_collector import LatencyCollector
 from tools.live import maker_policy
 from tools.live import metrics as live_metrics
 from tools.obs import jsonlog
@@ -163,6 +164,9 @@ class ExecutionLoop:
         
         # Capture start timestamp for deterministic reporting
         self._start_ms = self._clock()
+        
+        # Latency tracking for p95 metrics
+        self._latency = LatencyCollector()
         
         # Set maker-only gauge
         metrics.MAKER_ONLY_ENABLED.set(1.0 if maker_only else 0.0)
@@ -402,6 +406,9 @@ class ExecutionLoop:
             else:
                 raise AttributeError(f"Exchange client {type(self.exchange)} has no place order method")
             latency_ms = self._clock() - place_start_ms
+            
+            # Record latency for p95 tracking
+            self._latency.record_ms(latency_ms)
 
             if resp.status == OrderStatus.OPEN:
                 self.stats["orders_placed"] += 1
@@ -782,15 +789,20 @@ class ExecutionLoop:
         status = "pass" if failed_count == 0 else "fail"
         
         # Calculate KPIs
-        total_orders = passed_count + failed_count
+        # maker_fill_rate = fills / (fills + placed_not_filled), excluding rejects
+        placed_orders = self.stats["orders_placed"]
+        filled_orders = self.stats["orders_filled"]
+        # Orders that were placed but not filled
+        unfilled_orders = placed_orders - filled_orders if placed_orders >= filled_orders else 0
+        # Total maker operations (filled + unfilled placed)
+        total_maker_ops = filled_orders + unfilled_orders
         maker_fill_rate = (
-            float(self.stats["orders_filled"]) / float(total_orders)
-            if total_orders > 0 else 0.0
+            float(filled_orders) / float(total_maker_ops)
+            if total_maker_ops > 0 else 0.0
         )
-        risk_ratio_p95 = (
-            float(total_notional) / float(params.max_total_notional_usd)
-            if params.max_total_notional_usd > 0 else 0.0
-        )
+        
+        # Get p95 from risk monitor (computed from samples)
+        risk_ratio_p95 = self.risk_monitor.risk_ratio_p95()
         
         # Use provided start_ms for deterministic reporting, or fall back to instance start time
         timestamp_ms = start_ms if start_ms is not None else self._start_ms
@@ -813,7 +825,7 @@ class ExecutionLoop:
                 "warnings": self.stats["freeze_events"],
                 "maker_fill_rate": round(maker_fill_rate, 4),
                 "risk_ratio_p95": round(risk_ratio_p95, 4),
-                "latency_p95_ms": 0.0,  # TODO: Add latency tracking
+                "latency_p95_ms": round(self._latency.p95(), 2),
             },
             "execution": {
                 "iterations": params.iterations,

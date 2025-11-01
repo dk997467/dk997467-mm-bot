@@ -294,6 +294,17 @@ jobs:
               if isinstance(div, int) and div > 0:
                   print(f"⚠️ Recon divergences detected: {div}")
           
+          # 4b) Warn if p95 metrics are zero when network is enabled
+          network_enabled = bool((r.get("execution") or {}).get("network_enabled", True))
+          s = r.get("summary", {})
+          latency_p95 = s.get("latency_p95_ms", 0.0)
+          risk_p95 = s.get("risk_ratio_p95", 0.0)
+          if network_enabled:
+              if latency_p95 == 0.0:
+                  print("⚠️ latency_p95_ms is zero while network_enabled=True — check instrumentation")
+              if risk_p95 == 0.0:
+                  print("⚠️ risk_ratio_p95 is zero while network_enabled=True — check instrumentation")
+          
           # 5) Write back normalized JSON so artifacts are canonical
           with open(PATH, "w", encoding="utf-8") as f:
               json.dump(r, f, ensure_ascii=False, indent=2, sort_keys=True)
