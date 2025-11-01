@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\_utils\constants.py
+# hypothesis_version: 6.140.2
+
+[127, 1000, 1970, 3600, 86400, 1000000, 1000000000]

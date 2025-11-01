@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\_utils\construction\dataframe.py
+# hypothesis_version: 6.140.2
+
+[1000, 1000000, 'F_CONTIGUOUS', '__annotations__', '__slots__', 'col', 'data', 'first_element', 'in-memory', 'infer_schema_length', 'int', 'nan_to_null', 'orient', 'python', 'row', 'schema', 'schema_overrides', 'strict']

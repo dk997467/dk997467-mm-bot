@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\execnet\gateway_bootstrap.py
+# hypothesis_version: 6.140.2
+
+[b'1', 255, 'except NameError:', 'import socket', 'import sys', 'remoteaddress', 'sys.stdout.flush()', 'try: execmodel', 'utf-8']

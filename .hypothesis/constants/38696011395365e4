@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\database\_arrow_registry.py
+# hypothesis_version: 6.140.2
+
+['0.3.2', 'adbc_.*', 'arrow_odbc_proxy', 'databricks', 'duckdb', 'exact_batch_size', 'fetch_all', 'fetch_arrow_all', 'fetch_arrow_batches', 'fetch_arrow_table', 'fetch_batches', 'fetch_record_batch', 'fetch_record_batches', 'fetchall_arrow', 'fetchallarrow', 'fetcharrowbatches', 'fetchmany_arrow', 'get_as_pl', 'kuzu', 'minimum_version', 'repeat_batch_calls', 'snowflake', 'turbodbc']

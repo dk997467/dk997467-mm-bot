@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\execnet\rsync_remote.py
+# hypothesis_version: 6.140.2
+
+[448, '__channelexec__', 'ack', 'delete', 'done', 'link', 'linkbase', 'links', 'list_done', 'rb', 'send', 'wb']

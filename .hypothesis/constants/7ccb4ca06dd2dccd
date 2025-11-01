@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\numba\core\extending.py
+# hypothesis_version: 6.140.2
+
+['%s_CallableTemplate', '<intrinsic {0}>', 'BoundLiteralArgs', '_SentryLiteralArgs', '__name__', 'inline', 'literal_args', 'never', 'no_cpython_wrapper', 'nopython', 'prefer_literal', 'pysig']

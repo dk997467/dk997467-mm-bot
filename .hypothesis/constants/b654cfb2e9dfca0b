@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\_utils.py
+# hypothesis_version: 6.140.2
+
+['*', '-lossy', '?', 'BytesIO', 'StringIO', '[', '^(ht|f)tps?://', 'bytes', 'encoding', 'errors', 'file', 'protocol', 'replace', 'strict', 'utf8', 'utf8-lossy']

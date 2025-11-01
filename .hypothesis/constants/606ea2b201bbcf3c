@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\expr\expr.py
+# hypothesis_version: 6.140.2
+
+[0.0, 1e-09, 1.0, 2.0, 10.0, '0.20.11', '1.0.0', '1.21.0', 'P', 'T', '__call__', 'any', 'arr', 'average', 'backward', 'bin', 'binary', 'both', 'by', 'cat', 'count', 'descending', 'dt', 'expr', 'forward', 'group_to_rows', 'half_to_even', 'ignore', 'json', 'linear', 'list', 'meta', 'min_periods', 'min_samples', 'name', 'nearest', 'nulls_last', 'proportion', 'return_dtype', 'reverse', 'right', 'signature', 'str', 'struct', 'thread_local', 'threading', 'x', '{}']

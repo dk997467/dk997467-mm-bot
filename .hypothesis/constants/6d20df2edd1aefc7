@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\numba\np\ufunc\ufuncbuilder.py
+# hypothesis_version: 6.140.2
+
+['No definition', 'boundscheck', 'debuginfo', 'enable_looplift', 'enable_pyobject', 'fastmath', 'forceobj', 'ignore', 'nopython', 'npyufunc', 'nrt', 'numpy', 'reorderable', 'targetoptions', 'ufunc', 'writable_args']

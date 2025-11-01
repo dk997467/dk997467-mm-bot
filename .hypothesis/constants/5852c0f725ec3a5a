@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\mm-bot\src\common\di.py
+# hypothesis_version: 6.140.2
+
+['BybitRESTConnector', 'Metrics', 'OrderManager', 'OrderReconciler', 'PnLAttributor', 'PortfolioAllocator', 'PortfolioTarget', 'ResearchRecorder', 'VolatilityManager']

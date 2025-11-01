@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\functions\aggregation\__init__.py
+# hypothesis_version: 6.140.2
+
+['all', 'all_horizontal', 'any', 'any_horizontal', 'cum_sum', 'cum_sum_horizontal', 'max', 'max_horizontal', 'mean_horizontal', 'min', 'min_horizontal', 'sum', 'sum_horizontal']

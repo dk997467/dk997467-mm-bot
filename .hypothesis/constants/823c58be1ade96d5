@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\_utils\various.py
+# hypothesis_version: 6.140.2
+
+[0.5, 12.0, 16.0, 1000, 1024, 3600, 1000000, 1000000000, '$1', '$2', '%H:%M:%S.%9f', '%Y-%m-%d', '%file%', '([+-]?\\d+)(\\D+)', '+inf', '-Nshape=box', '-T', '-inf', '.', '.000000000', '.svg', '000000000', '1', '<no_default>', 'ANSICON', 'BUILDING_SPHINX_DOCS', 'IPKernelApp', 'NO_DEFAULT', 'NS', 'P', 'PYCHARM_HOSTED', 'T', 'TERM', 'TERM_PROGRAM', 'WT_SESSION', '[A-Z ]+$', '[^\\d+-]', '[^eE\\d]', '[eE]', '\\D', '\\\\\\1', '^(.*)\\D(\\d*)$', '^[+-]?\\d*$', 'b', 'builtins', 'bytes', 'co_qualname', 'd', 'dot', 'f_back', 'false', 'gb', 'gigabytes', 'h', 'inf', 'isatty', 'kb', 'kilobytes', 'm', 'matplotlib', 'mb', 'megabytes', 'ms', 'nan', 'ns', 'off', 'png', 'polars.', 's', 'singledispatch.', 'svg', 'tb', 'terabytes', 'time_zone', 'true', 'us', 'vscode', 'w', 'win32', 'xterm-256color', 'µs']

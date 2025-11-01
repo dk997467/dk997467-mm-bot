@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\sql\operators.py
+# hypothesis_version: 6.140.2
+
+[-100, 100, '%', '/', '_', '_FN', '_T', '__sa_operate__', 'custom_op', 'eager_grouping', 'is_comparison', 'opstring', 'precedence', 'python_impl', 'return_type']

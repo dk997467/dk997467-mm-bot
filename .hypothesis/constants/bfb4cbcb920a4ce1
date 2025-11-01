@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\csv\__init__.py
+# hypothesis_version: 6.140.2
+
+['BatchedCsvReader', 'read_csv', 'read_csv_batched', 'scan_csv']

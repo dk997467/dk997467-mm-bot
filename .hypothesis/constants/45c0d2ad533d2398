@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\sql\context.py
+# hypothesis_version: 6.140.2
+
+['"', '0.20.31', 'SQLContext', '\\b', '\\bFROM\\b', '^("[^"]+")$', '_tables_scope_stack', 'eager', 'eager_execution']

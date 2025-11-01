@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\parquet\functions.py
+# hypothesis_version: 6.140.2
+
+['0.20.4', '1.30.0', 'auto', 'ignore', 'insert', 'pyarrow.parquet', 'raise', 'row_count_name', 'row_count_offset', 'row_index_name', 'row_index_offset', 'scan_parquet']

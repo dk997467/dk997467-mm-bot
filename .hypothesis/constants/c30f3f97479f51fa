@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\mm-bot\src\strategy\quoting.py
+# hypothesis_version: 6.140.2
+
+[0.0, 0.001, 0.1, 0.2, 0.5, 0.8, 1.0, 2.0, 30.0, 10000.0, 100, 800, 1000, 10000, '0', '0.001', '0.02', '0.5', '0.8', '1.0', '1.2', 'Buy', 'Sell', 'Strategy state reset', 'active_quotes', 'base_bps', 'edge_bps', 'fair_value', 'fill_rate', 'imb_10', 'inventory', 'inventory_skew', 'inventory_update', 'k_imb', 'k_vola', 'last_quote_times', 'maker_fee_bps', 'max_quote_levels', 'max_skew_bps', 'new_inventory', 'num_quotes', 'performance', 'post_only', 'price', 'qty', 'quantity', 'quote_generation', 'quote_refresh_ms', 'realized_pnl', 'risk_buffer_bps', 'side', 'skew_k', 'spread_bps', 'spread_calculation', 'symbol', 't_imb', 'taker_fee_bps', 'time_in_force', 'timestamp', 'total_pnl', 'total_trades', 'trade_pnl', 'unrealized_pnl', 'vola_5m_bps', 'volatility']

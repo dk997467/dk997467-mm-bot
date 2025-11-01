@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\numpy\_typing\_dtype_like.py
+# hypothesis_version: 6.140.2
+
+['_DTypeT_co', '_ScalarT']

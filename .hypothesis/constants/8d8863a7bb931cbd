@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\convert\general.py
+# hypothesis_version: 6.140.2
+
+['#. ', '#> ', '$1', '([┌╭].*?[┘╯])', '---', '...', '0.20.17', '1.23', 'NULL', '[', '[│┆|]', ']', '^"(.*)"$', '^[\\W+]*│', '^\\W*[╞]', '_name', 'col', 'data', 'null', 'tbl', '…', '│ ', '├[╌┼]+┤']

@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\functions\lazy.py
+# hypothesis_version: 6.140.2
+
+[1000000, '*', '0.20.5', '1.17.0', '1.21.0', '_pyexpr', 'auto', 'count', 'cum_fold', 'cum_reduce', 'd', 'descending', 'exprs', 'index', 'min_periods', 'min_samples', 'nearest', 'nulls_last', 'pearson', 'return_dtype', 's', 'spearman', 'streaming', 'us']

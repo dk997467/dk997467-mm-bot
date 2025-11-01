@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\numba\core\rewrites\static_getitem.py
+# hypothesis_version: 6.140.2
+
+['after-inference', 'before-inference', 'getitem']

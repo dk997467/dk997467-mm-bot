@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\numba\core\tracing.py
+# hypothesis_version: 6.140.2
+
+[320, ' -> ', '%s=%r', '(', '()', ')', ', ', '.', '...', '<< ', '== ', '>> ', '__main__', '__module__', '__name__', '__self__', 'cls', 'recursive', 'self', 'trace']

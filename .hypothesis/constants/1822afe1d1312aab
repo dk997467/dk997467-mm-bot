@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\spreadsheet\functions.py
+# hypothesis_version: 6.140.2
+
+[16384, '%f', ',', '0.20.31', '0.20.6', '0.20.7', '0.7.0', '\\1', '_duplicated_(\\d+)', 'b', 'boolean', 'calamine', 'close', 'column_names', 'columns', 'dtypes', 'duration', 'engine_options', 'fastexcel', 'float', 'floatformat', 'has_header', 'header_row', 'id', 'ignore', 'in-mem', 'index', 'infer_schema_length', 'int', 'name', 'openpyxl', 'read_csv_options', 'read_options', 'schema_overrides', 'schema_sample_rows', 'skip_empty_lines', 'skip_hidden_rows', 'string', 'tables', 'time_unit', 'time_zone', 'use_columns', 'vertical_relaxed', 'xlsx2csv', 'xlsx2csv_options']

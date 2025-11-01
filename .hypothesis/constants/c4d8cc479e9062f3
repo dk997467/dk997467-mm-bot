@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\exceptions.py
+# hypothesis_version: 6.140.2
+
+['ChronoFormatWarning', 'ColumnNotFoundError', 'ComputeError', 'CustomUFuncWarning', 'DuplicateError', 'NoDataError', 'NoRowsReturnedError', 'OutOfBoundsError', 'PanicException', 'PerformanceWarning', 'PolarsError', 'PolarsWarning', 'RowsError', 'SQLInterfaceError', 'SQLSyntaxError', 'SchemaError', 'ShapeError', 'UnstableWarning', 'UnsuitableSQLError']

@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\pydantic\_internal\_fields.py
+# hypothesis_version: 6.140.2
+
+['_', '__', '__annotations__', '__args__', '__pydantic_fields__', 'final', 'model_config', 'origin', 'root']

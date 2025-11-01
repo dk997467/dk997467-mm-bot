@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\expr\string.py
+# hypothesis_version: 6.140.2
+
+['-', '.%f', '1.20.0', 'NFC', 'base64', 'hex', 'raise', 'self', 'str', 'time_unit', 'time_zone']

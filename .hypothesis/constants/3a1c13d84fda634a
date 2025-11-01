@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\mm-bot\src\risk\risk_manager.py
+# hypothesis_version: 6.140.2
+
+[100, '0.5', '2', 'Order allowed', 'avg_price', 'can_cancel_orders', 'can_place_orders', 'cancel_count', 'cancel_counts', 'cancel_event', 'daily_max_loss', 'daily_pnl', 'duration_ms', 'kill_switch_reason', 'max_cancels_per_min', 'max_drawdown', 'max_position_limit', 'paused_until', 'peak_pnl', 'pnl_update', 'position_update', 'positions', 'previous_reason', 'realized_pnl', 'reason', 'risk_paused', 'risk_resumed', 'risk_warning', 'risk_warnings', 'side', 'size', 'symbol', 'timestamp', 'total_exposure', 'unrealized_pnl', 'value', 'warning']

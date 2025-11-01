@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\prometheus_client\openmetrics\exposition.py
+# hypothesis_version: 6.140.2
+
+[55296, 57343, ' # {} {}', ' # {} {} {}', '"', '"{}"', '# EOF\n', '# HELP {} {}\n', ',', ',negative_spans:[{}]', ',positive_spans:[{}]', '.', '0', '1.0.0', '9', ':', 'A', 'U__', 'Z', '\\', '\\"', '\\\\', '\\n', '_', '_FFFD_', '__', '_bucket', '_dot_', '_total', 'a', 'allow-utf-8', 'counter', 'dots', 'escaping', 'gaugehistogram', 'histogram', 'underscores', 'utf-8', 'values', 'x', 'z', '{', '{{{0}}}', '{} {}{}{}\n', '{}="{}"', '{}{} {}{}{}\n', '}', '}}']

@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\numpy\random\_pickle.py
+# hypothesis_version: 6.140.2
+
+['MT19937', 'PCG64', 'PCG64DXSM', 'Philox', 'SFC64']

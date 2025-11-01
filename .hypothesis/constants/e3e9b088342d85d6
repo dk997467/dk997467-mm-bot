@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\execnet\rsync.py
+# hypothesis_version: 6.140.2
+
+['/', 'Unknown command %s', '\\\\?\\', 'ack', 'delete', 'done', 'link', 'linkbase', 'links', 'list', 'list_done', 'ntpath', 'rb', 'send', 'x']

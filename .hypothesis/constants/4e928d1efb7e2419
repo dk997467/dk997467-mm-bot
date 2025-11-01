@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\ipc\__init__.py
+# hypothesis_version: 6.140.2
+
+['read_ipc', 'read_ipc_schema', 'read_ipc_stream', 'scan_ipc']

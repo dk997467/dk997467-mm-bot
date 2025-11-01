@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\database\_executor.py
+# hypothesis_version: 6.140.2
+
+['.', '/\\*(.|[\\r\\n])*?\\*/', 'ALTER', 'ANALYZE', 'CREATE', 'DELETE', 'DROP', 'INSERT', 'REPLACE', 'UPDATE', 'UPSERT', 'USE', 'VACUUM', '\\w{3,}', '__version__', '_metadata', 'arrow_odbc_proxy', 'close', 'cursor', 'databricks', 'description', 'duckdb', 'duckdb_engine', 'exact_batch_size', 'exec_driver_sql', 'execute', 'fetch_all', 'fetch_batches', 'fetchall', 'minimum_version', 'parameters', 'params', 'repeat_batch_calls', 'row', 'sqlalchemy', 'surrealdb', 'version']

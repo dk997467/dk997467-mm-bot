@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\ipc\functions.py
+# hypothesis_version: 6.140.2
+
+['0.20.4', '1', 'POLARS_FORCE_ASYNC', 'auto', 'hf://', 'pyarrow.feather', 'pyarrow.ipc', 'row_count_name', 'row_count_offset', 'row_index_name', 'row_index_offset', 'scan_parquet']

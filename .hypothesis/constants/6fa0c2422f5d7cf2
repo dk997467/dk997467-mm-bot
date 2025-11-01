@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\mm-bot\src\common\models.py
+# hypothesis_version: 6.140.2
+
+[10000, 'Buy', 'Canceled', 'FOK', 'Filled', 'GTC', 'IOC', 'Limit', 'Market', 'New', 'PartiallyFilled', 'Pending', 'Rejected', 'Sell', 'asks', 'bids']

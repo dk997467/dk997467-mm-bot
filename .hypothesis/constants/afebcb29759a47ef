@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\database\_inference.py
+# hypothesis_version: 6.140.2
+
+[128, '(', ',', '16', '32', '<', '>', 'ARRAY', 'BIG', 'BINARY', 'BLOB', 'BOOL', 'BPCHAR', 'BYTEA', 'BYTES', 'CARDINAL', 'CHAR', 'CLOB', 'DATE', 'DATETIME', 'DECIMAL', 'DOUBLE', 'DURATION', 'FLOAT', 'FLOAT4', 'HUGEINT', 'INT', 'INT2', 'INT4', 'INT8', 'INTEGER', 'INTERVAL', 'LARGE', 'LIST', 'LONG', 'LONGLONG', 'MEDIUM', 'NCHAR', 'NULL', 'NUMBER', 'NUMERIC', 'REAL', 'ROWID', 'SERIAL', 'SHORT', 'SMALL', 'STR', 'STRING', 'TEXT', 'TIME', 'TIMEDELTA', 'TIMESTAMP', 'TIMEZONE', 'TINY', 'TYPE', 'TZ', 'U', 'UINT', 'UINT2', 'UINT4', 'UNICODE', 'UNSIGNED', 'UTF', 'VARCHAR', 'WITHOUT', '[', '[D]', '[MS]', '[NS]', '[S]', '[US]', '[]', '\\([\\w,: ]+\\)$', '\\W', '\\WOF\\W', '\\[[\\w,\\]\\[: ]+]$', '\\d', '^\\D+', '_UTF16', '_UTF32', '_UTF8', 'ms', 'ns', 's', 'us']

@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\pydantic_settings\sources\providers\env.py
+# hypothesis_version: 6.140.2
+
+['EnvSettingsSource', 'env_nested_delimiter', 'env_nested_max_split']

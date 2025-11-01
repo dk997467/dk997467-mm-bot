@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\_utils\construction\__init__.py
+# hypothesis_version: 6.140.2
+
+['arrow_to_pydf', 'arrow_to_pyseries', 'coerce_arrow', 'dataframe_to_pydf', 'dict_to_pydf', 'iterable_to_pydf', 'iterable_to_pyseries', 'numpy_to_pydf', 'numpy_to_pyseries', 'pandas_to_pydf', 'pandas_to_pyseries', 'sequence_to_pydf', 'sequence_to_pyseries', 'series_to_pydf', 'series_to_pyseries']

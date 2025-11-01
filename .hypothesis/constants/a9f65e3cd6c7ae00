@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\selectors.py
+# hypothesis_version: 6.140.2
+
+['$', '*', '.*', '.*$', '0-9', 'Selector', '[0-9]', '\\d', '\\p{Alphabetic}', '^', '^.*', 'a-zA-Z', 'all', 'alpha', 'alphanumeric', 'array', 'binary', 'boolean', 'by_dtype', 'by_index', 'by_name', 'categorical', 'contains', 'date', 'datetime', 'decimal', 'digit', 'duration', 'ends_with', 'enum', 'exclude', 'expand_selector', 'first', 'float', 'integer', 'is_selector', 'last', 'list', 'matches', 'ms', 'nested', 'ns', 'numeric', 'signed_integer', 'starts_with', 'string', 'struct', 'temporal', 'time', 'unsigned_integer', 'us', '|']

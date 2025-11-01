@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\mm-bot\src\metrics\intraday_caps.py
+# hypothesis_version: 6.140.2
+
+[0.0, 'breached', 'intraday_caps_pnl', 'intraday_caps_vol', 'pnl', 'turnover', 'vol']

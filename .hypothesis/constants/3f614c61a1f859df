@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\meta\__init__.py
+# hypothesis_version: 6.140.2
+
+['build_info', 'get_index_type', 'show_versions', 'thread_pool_size', 'threadpool_size']

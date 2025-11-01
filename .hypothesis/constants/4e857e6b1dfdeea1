@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\mm-bot\src\metrics\fee_tier.py
+# hypothesis_version: 6.140.2
+
+[0.0, 'distance_usd', 'fee_tier_level', 'level', 'maker_bps', 'taker_bps']

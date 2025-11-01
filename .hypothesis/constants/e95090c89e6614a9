@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\datatypes\convert.py
+# hypothesis_version: 6.140.2
+
+['\'" ', ',', 'M', 'S', 'U', '[', '^(\\w+)(?:\\[(.+)\\])?$', 'b', 'binary', 'bool', 'categorical', 'date', 'datetime', 'decimal', 'duration', 'f', 'f32', 'f64', 'i', 'i128', 'i16', 'i32', 'i64', 'i8', 'list', 'm', 'object', 'str', 'struct', 'time', 'time_unit', 'u', 'u16', 'u32', 'u64', 'u8', 'us', 'μs']

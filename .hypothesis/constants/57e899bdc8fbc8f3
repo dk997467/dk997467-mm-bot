@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\mm-bot\src\common\price_ticks.py
+# hypothesis_version: 6.140.2
+
+['0.01', '1', '1e-10', 'Price cannot be NaN']

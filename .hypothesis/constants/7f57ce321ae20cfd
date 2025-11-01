@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\iceberg\dataset.py
+# hypothesis_version: 6.140.2
+
+['*', 'None', 'REDACTED', 'iceberg', 'ignore', 'insert', 'metadata_path', 'native', 'pyiceberg', 'reader_override', 's', 'snapshot_id']

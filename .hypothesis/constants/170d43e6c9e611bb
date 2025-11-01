@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\dotenv\__init__.py
+# hypothesis_version: 6.140.2
+
+['dotenv', 'dotenv_values', 'find_dotenv', 'get_cli_string', 'get_key', 'load_dotenv', 'set_key', 'unset_key']

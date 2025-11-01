@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\dataframe\plotting.py
+# hypothesis_version: 6.140.2
+
+['color', 'order', 'size', 'tooltip', 'x', 'y']

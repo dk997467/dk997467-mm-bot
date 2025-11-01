@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\catalog\unity\client.py
+# hypothesis_version: 6.140.2
+
+['/', '1', 'Authorization', 'Catalog.scan_table', 'Catalog.write_table', 'Config', 'DELTA', 'DELTASHARING', 'DefaultCredentials', 'POLARS_VERBOSE', 'append', 'auto', 'databricks-sdk', 'databricks.sdk', 'databricks.sdk.core', 'error', 'https://', 'ignore', 'merge', 'overwrite', 'scan table']

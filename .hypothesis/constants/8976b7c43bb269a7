@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\__init__.py
+# hypothesis_version: 6.140.2
+
+['BasePartitionContext', 'KeyedPartition', 'PartitionByKey', 'PartitionMaxSize', 'PartitionParted', 'ScanCastOptions', 'defer', 'read_avro', 'read_clipboard', 'read_csv', 'read_csv_batched', 'read_database', 'read_database_uri', 'read_delta', 'read_excel', 'read_ipc', 'read_ipc_schema', 'read_ipc_stream', 'read_json', 'read_ndjson', 'read_ods', 'read_parquet', 'read_parquet_schema', 'scan_csv', 'scan_delta', 'scan_iceberg', 'scan_ipc', 'scan_ndjson', 'scan_parquet', 'scan_pyarrow_dataset']

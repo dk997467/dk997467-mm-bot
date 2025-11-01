@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\cloud\credential_provider\_builder.py
+# hypothesis_version: 6.140.2
+
+['account_name', 'allow_http', 'authority_id', 'auto', 'aws_default_region', 'aws_endpoint', 'aws_endpoint_url', 'aws_profile', 'aws_region', 'azure_authority_id', 'azure_tenant_id', 'azure_use_azure_cli', 'bearer_token', 'bucket', 'bucket_name', 'connect_timeout', 'default_content_type', 'default_region', 'endpoint', 'endpoint_url', 'google_bucket', 'google_bucket_name', 'http1_only', 'http2_max_frame_size', 'http2_only', 'pool_idle_timeout', 'profile', 'proxy_ca_certificate', 'proxy_excludes', 'proxy_url', 'region', 'tenant_id', 'timeout', 'token', 'use_azure_cli', 'user_agent']

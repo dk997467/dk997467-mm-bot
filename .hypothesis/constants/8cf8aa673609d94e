@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\meta\versions.py
+# hypothesis_version: 6.140.2
+
+['<invalid install>', '<not installed>', 'Azure CLI', 'Index type', 'LTS CPU', 'Platform', 'Polars', 'Python', '__version__', 'adbc_driver_manager', 'altair', 'azure.identity', 'boto3', 'cloudpickle', 'connectorx', 'deltalake', 'fastexcel', 'fsspec', 'gevent', 'google.auth', 'great_tables', 'matplotlib', 'numpy', 'openpyxl', 'pandas', 'polars_cloud', 'pyarrow', 'pydantic', 'pyiceberg', 'sqlalchemy', 'torch', 'xlsx2csv', 'xlsxwriter']

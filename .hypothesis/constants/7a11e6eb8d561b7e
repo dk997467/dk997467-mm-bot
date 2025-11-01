@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\_utils\construction\series.py
+# hypothesis_version: 6.140.2
+
+[1000000, 'inner', 'num_chunks', 'row', 'time_unit', 'time_zone', 'us']

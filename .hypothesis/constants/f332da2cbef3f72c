@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\scan_options\cast_options.py
+# hypothesis_version: 6.140.2
+
+['convert-timezone', 'downcast', 'forbid', 'ignore', 'insert', 'nanosecond-downcast', 'raise', 'upcast']

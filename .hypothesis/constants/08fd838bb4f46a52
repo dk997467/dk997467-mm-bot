@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\functions\lit.py
+# hypothesis_version: 6.140.2
+
+['UTC', 'datetime64[', 'dtype', 'earliest', 'latest', 'literal', 'seconds', 'time_unit', 'time_zone', 'timedelta64[', 'us', 'utcoffset']

@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\pydantic\plugin\__init__.py
+# hypothesis_version: 6.140.2
+
+['BaseModel', 'NewSchemaReturns', 'SchemaKind', 'SchemaTypePath', 'TypeAdapter', 'create_model', 'dataclass', 'validate_call']

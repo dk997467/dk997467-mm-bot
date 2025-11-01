@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\llvmlite\binding\value.py
+# hypothesis_version: 6.140.2
+
+['argument', 'big', 'block', 'call', 'function', 'global', 'instruction', 'invoke', 'little', 'module', 'operand', 'phi']

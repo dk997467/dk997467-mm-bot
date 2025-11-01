@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\convert\__init__.py
+# hypothesis_version: 6.140.2
+
+['from_arrow', 'from_dataframe', 'from_dict', 'from_dicts', 'from_numpy', 'from_pandas', 'from_records', 'from_repr', 'from_torch', 'json_normalize']

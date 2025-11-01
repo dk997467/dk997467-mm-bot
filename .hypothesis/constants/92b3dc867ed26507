@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\numba\core\rewrites\registry.py
+# hypothesis_version: 6.140.2
+
+['REWRITING (%s):', '_', 'after-inference', 'before-inference', 'invalid kind %r']

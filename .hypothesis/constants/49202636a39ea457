@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\string_cache.py
+# hypothesis_version: 6.140.2
+
+['StringCache', 'disable_string_cache', 'enable_string_cache', 'using_string_cache']

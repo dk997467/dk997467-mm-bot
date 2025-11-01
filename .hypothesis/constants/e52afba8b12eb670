@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\numba\core\typing\builtins.py
+# hypothesis_version: 6.140.2
+
+['IndexValue(%f, %f)', 'IndexValueType({})', '__class__', 'complex.conjugate', 'getiter', 'index', 'iternext', 'kws not supported', 'not in', 'ns', 'number.item', 'pair_first', 'pair_second', 'print_item', 'pysig', 'slice.indices', 'static_getitem', 'underlying_float', 'value']

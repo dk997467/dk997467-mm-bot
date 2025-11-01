@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\mm-bot\src\execution\reconcile.py
+# hypothesis_version: 6.140.2
+
+[0.1, 100, 1000, 'Cancelled', 'Filled', 'New', 'PartiallyFilled', 'close', 'close_orphan', 'createdTime', 'cumExecQty', 'list', 'mark_canceled', 'mark_cancelled', 'mark_filled', 'metrics', 'orderId', 'orderLinkId', 'orderStatus', 'pause_quoting', 'price', 'qty', 'reattach_fill', 'reconcile', 'result', 'resume_quoting', 'retCode', 'side', 'stage', 'symbol', 'update_state', 'updatedTime']

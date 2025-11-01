@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\numba\cloudpickle\__init__.py
+# hypothesis_version: 6.140.2
+
+['3.1.1', 'CloudPickler', 'Pickler', '__version__', 'dump', 'dumps', 'load', 'loads']

@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\iceberg\_utils.py
+# hypothesis_version: 6.140.2
+
+[1000, 'eval', 'field', 'is_nan', 'is_null', 'isin', 'scalar', 'to_py_date', 'to_py_datetime']

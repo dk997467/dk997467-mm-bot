@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\lazyframe\opt_flags.py
+# hypothesis_version: 6.140.2
+
+['P', 'T', '_check_order', '_eager', '_type_check', 'check_order_observe', 'cluster_with_columns', 'collapse_joins', 'comm_subexpr_elim', 'comm_subplan_elim', 'no_optimization', 'optimizations', 'predicate_pushdown', 'projection_pushdown', 'simplify_expression', 'slice_pushdown', 'type_check', 'type_coercion']

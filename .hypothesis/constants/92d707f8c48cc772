@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\csv\functions.py
+# hypothesis_version: 6.140.2
+
+[1024, 8192, 50000, '"', ',', '0.20.31', '0.20.4', '1', 'Empty CSV', 'POLARS_FORCE_ASYNC', 'auto', 'column_', 'dtypes', 'eol_char', 'hf://', 'quote_char', 'row_count_name', 'row_count_offset', 'row_index_name', 'row_index_offset', 'scan_csv', 'schema_overrides', 'separator', 'utf8', 'utf8-lossy']

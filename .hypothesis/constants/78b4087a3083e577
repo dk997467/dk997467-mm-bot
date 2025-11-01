@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\aiohttp\resolver.py
+# hypothesis_version: 6.140.2
+
+['A', 'AAAA', 'AI_MASK', 'AsyncResolver', 'DNS lookup failed', 'DefaultResolver', 'ThreadedResolver', '_DNSResolverManager', 'aiodns.DNSResolver', 'ascii', 'family', 'flags', 'getaddrinfo', 'gethostbyname', 'host', 'hostname', 'port', 'proto']

@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\_utils\convert.py
+# hypothesis_version: 6.140.2
+
+[256, 1000, '-', '2000-01-01T00:00:00', 'ms', 'ns', 'us']

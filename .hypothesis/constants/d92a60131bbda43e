@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\_utils\construction\utils.py
+# hypothesis_version: 6.140.2
+
+['__annotations__', '__module__', '_field_defaults', '_fields', '_replace', 'bool', 'datetime64[ms]', 'datetime64[ns]', 'datetime64[us]', 'float32', 'float64', 'int16', 'int32', 'int64', 'int8', 'object', 'sqlalchemy.', 'timedelta64[ms]', 'timedelta64[ns]', 'timedelta64[us]', 'uint16', 'uint32', 'uint64', 'uint8']

@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\llvmlite\binding\executionengine.py
+# hypothesis_version: 6.140.2
+
+['aarch64', 'arm64', 'ascii', 'buf_len', 'buf_ptr', 'module_ptr']

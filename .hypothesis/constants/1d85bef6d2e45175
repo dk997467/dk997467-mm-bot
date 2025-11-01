@@ -1,0 +1,4 @@
+# file: C:\Users\dimak\AppData\Roaming\Python\Python313\site-packages\polars\io\ndjson.py
+# hypothesis_version: 6.140.2
+
+[1024, '0.20.4', 'auto', 'read_ndjson', 'row_count_name', 'row_count_offset', 'row_index_name', 'row_index_offset', 'scan_ndjson']
