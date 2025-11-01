@@ -11,6 +11,12 @@ import math
 
 from tools.obs import jsonlog, metrics
 
+# Import histogram support (optional dependency)
+try:
+    from tools.live import prometheus_histograms
+except ImportError:
+    prometheus_histograms = None
+
 # Structured logger for observability
 _structured_logger = jsonlog.get_logger("mm.risk", default_ctx={"component": "risk_monitor"})
 
@@ -227,6 +233,7 @@ class RuntimeRiskMonitor:
         """
         Record current risk ratio for p95 tracking.
         
+        Also exports to Prometheus histogram if available.
         Risk ratio = total_notional / max_total_notional
         """
         try:
@@ -241,6 +248,10 @@ class RuntimeRiskMonitor:
                 ratio = total_notional / self.max_total_notional_usd
                 if 0.0 <= ratio <= 1.0:
                     self._risk_samples.append(ratio)
+                    
+                    # Export to Prometheus histogram
+                    if prometheus_histograms is not None:
+                        prometheus_histograms.observe_risk_ratio(ratio)
         except Exception:
             pass  # Never break on metrics
     

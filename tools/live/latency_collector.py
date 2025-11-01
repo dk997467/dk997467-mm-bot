@@ -2,11 +2,18 @@
 Latency collector for p95/p99 tracking.
 
 Records per-operation latencies and computes percentiles on demand.
+Also exports to Prometheus histograms for true p95/p99 computation.
 """
 from __future__ import annotations
 
 from typing import List
 import math
+
+# Import histogram support (optional dependency)
+try:
+    from tools.live import prometheus_histograms
+except ImportError:
+    prometheus_histograms = None
 
 
 class LatencyCollector:
@@ -30,6 +37,8 @@ class LatencyCollector:
         """
         Record a latency sample in milliseconds.
         
+        Also exports to Prometheus histogram if available.
+        
         Args:
             value: Latency in milliseconds (non-negative)
         """
@@ -39,6 +48,10 @@ class LatencyCollector:
             v = float(value)
             if v >= 0:
                 self._samples_ms.append(v)
+                
+                # Export to Prometheus histogram
+                if prometheus_histograms is not None:
+                    prometheus_histograms.observe_latency_ms(v)
         except Exception:
             pass
     

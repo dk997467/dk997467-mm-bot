@@ -88,7 +88,7 @@ def robust_kpi_extract(data: dict, iter_idx: int) -> dict:
     
     Returns dict with keys:
         iter, net_bps, risk_ratio, slippage_p95, adverse_p95,
-        latency_p95_ms, maker_taker_ratio
+        latency_p95_ms, maker_taker_ratio, gross_bps, fees_bps, gross_imputed
     """
     summary = data.get("summary", {})
     
@@ -121,6 +121,29 @@ def robust_kpi_extract(data: dict, iter_idx: int) -> dict:
         summary.get("p95") or summary.get("latency_p95")
     )
     
+    # gross_bps (NEW)
+    gross_bps_raw = summary.get("gross_bps")
+    gross_bps = safe_float(gross_bps_raw) if gross_bps_raw is not None else None
+    
+    # fees_bps (NEW)
+    fees_bps_raw = summary.get("fees_bps")
+    fees_bps = safe_float(fees_bps_raw) if fees_bps_raw is not None else 0.0
+    
+    # If gross_bps not present or NaN, impute from formula: gross = net + adverse + slippage + fees
+    gross_imputed = False
+    is_nan = lambda x: x is None or (pd.isna(x) if HAS_PANDAS else (x != x))
+    
+    if is_nan(gross_bps) or gross_bps == 0.0:
+        if not is_nan(net_bps) and (not is_nan(adverse_p95) or not is_nan(slippage_p95)):
+            gross_bps = net_bps if not is_nan(net_bps) else 0.0
+            if not is_nan(adverse_p95):
+                gross_bps += adverse_p95
+            if not is_nan(slippage_p95):
+                gross_bps += slippage_p95
+            if not is_nan(fees_bps):
+                gross_bps += fees_bps
+            gross_imputed = True
+    
     # maker_taker_ratio
     mt_ratio = summary.get("maker_taker_ratio") or summary.get("maker_ratio")
     if mt_ratio is None:
@@ -141,6 +164,9 @@ def robust_kpi_extract(data: dict, iter_idx: int) -> dict:
         "adverse_p95": adverse_p95,
         "latency_p95_ms": latency_p95_ms,
         "maker_taker_ratio": maker_taker_ratio,
+        "gross_bps": gross_bps,
+        "fees_bps": fees_bps if fees_bps is not None else 0.0,
+        "gross_imputed": gross_imputed,
     }
 
 
@@ -259,7 +285,9 @@ def audit_artifacts(base_dir: str = "artifacts/soak/latest", generate_plots: boo
     
     # ----- 2. Load ITER_SUMMARY files -----
     print("[2/11] Loading ITER_SUMMARY files...")
-    iter_files = sorted(base_path.glob("ITER_SUMMARY_*.json"))
+    # Use robust numeric sorting (not lexicographic: 1,2,...,10,11 not 1,10,11,2)
+    iter_files_unsorted = list(base_path.glob("ITER_SUMMARY_*.json"))
+    iter_files = sorted(iter_files_unsorted, key=lambda p: extract_iter_index(p.name) or 0)
     
     if len(iter_files) < 16:
         puts(f"{sym('warn')} WARNING: Only {len(iter_files)} ITER_SUMMARY files found (expected >= 16)")
