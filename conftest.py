@@ -184,6 +184,15 @@ def pytest_configure(config):
         pass
 
 @pytest.fixture(autouse=True)
+def _fast_test_env(monkeypatch):
+    """Set fast timeouts for integration tests."""
+    monkeypatch.setenv("HEARTBEAT_INTERVAL_MS", "10")
+    monkeypatch.setenv("RETRY_BASE_MS", "5")
+    monkeypatch.setenv("RETRY_MAX_MS", "50")
+    monkeypatch.setenv("REBALANCE_PERIOD_S", "1")
+    yield
+
+@pytest.fixture(autouse=True)
 def _deny_network_calls(monkeypatch):
     original_connect = _socket.socket.connect
     original_create_connection = _socket.create_connection

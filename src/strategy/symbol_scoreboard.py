@@ -95,7 +95,7 @@ class SymbolScoreboard:
         
         # Per-symbol metrics
         self._metrics: Dict[str, SymbolMetrics] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # Reentrant lock to allow nested get_score() calls
         
         print(f"[SCOREBOARD] Initialized: window={rolling_window_sec}s, ema_alpha={ema_alpha}, min_samples={min_samples}")
     

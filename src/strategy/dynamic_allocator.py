@@ -91,7 +91,7 @@ class DynamicAllocator:
         
         # Allocations
         self._allocations: Dict[str, SymbolAllocation] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # Reentrant lock for nested method calls
         
         # Rebalance tracking
         self._last_rebalance_ms = 0
