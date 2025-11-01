@@ -219,6 +219,10 @@ def _scan_file(path: str, patterns: List[str], custom_allowlist: Set[str]) -> Tu
     real_hits: List[Tuple[int, str]] = []
     allowlisted_hits: List[Tuple[int, str]] = []
     
+    # Skip scanning the scanner itself to avoid false positives on pattern definitions
+    if path.endswith('scan_secrets.py') or 'scan_secrets.py' in path:
+        return ([], [])
+    
     try:
         with open(path, 'r', encoding='ascii', errors='ignore') as f:
             for i, line in enumerate(f, start=1):
