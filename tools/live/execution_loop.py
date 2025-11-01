@@ -161,6 +161,9 @@ class ExecutionLoop:
         # Freeze state tracking (for metrics)
         self._was_frozen = False
         
+        # Capture start timestamp for deterministic reporting
+        self._start_ms = self._clock()
+        
         # Set maker-only gauge
         metrics.MAKER_ONLY_ENABLED.set(1.0 if maker_only else 0.0)
 
@@ -711,6 +714,9 @@ class ExecutionLoop:
         
         Returns deterministic JSON report.
         """
+        # Capture timestamp at start for deterministic reporting
+        start_ms = self._clock()
+        
         logger.info(f"Starting shadow run: {params.iterations} iterations")
 
         for iteration in range(params.iterations):
@@ -744,13 +750,17 @@ class ExecutionLoop:
         # P0.10: Final recon before generating report
         self._run_recon_if_due(params.symbols)
         
-        # Generate final report
-        return self._generate_report(params)
+        # Generate final report (pass start_ms for deterministic timestamp)
+        return self._generate_report(params, start_ms=start_ms)
 
-    def _generate_report(self, params: ExecutionParams) -> dict[str, Any]:
-        """Generate deterministic JSON report with canonical structure."""
-        import time
+    def _generate_report(self, params: ExecutionParams, start_ms: int | None = None) -> dict[str, Any]:
+        """Generate deterministic JSON report with canonical structure.
         
+        Args:
+            params: Execution parameters
+            start_ms: Timestamp captured at run start (for deterministic reporting).
+                      If None, uses self._clock() for deterministic fallback.
+        """
         positions = self.risk_monitor.get_positions()
         
         # Calculate net position value
@@ -782,9 +792,12 @@ class ExecutionLoop:
             if params.max_total_notional_usd > 0 else 0.0
         )
         
+        # Use provided start_ms for deterministic reporting, or fall back to instance start time
+        timestamp_ms = start_ms if start_ms is not None else self._start_ms
+        
         # Build canonical report structure
         report = {
-            "timestamp_ms": int(time.time() * 1000),
+            "timestamp_ms": timestamp_ms,
             "params": {
                 "network": "testnet" if self.testnet else "mainnet",
                 "symbols": sorted(params.symbols),
@@ -919,12 +932,29 @@ def run_shadow_demo(
     fill_rate: float = 0.7,
     reject_rate: float = 0.05,
     latency_ms: int = 100,
+    clock: Callable[[], int] | None = None,
 ) -> str:
     """
     Run shadow demo and return JSON report.
     
     This is the main entry point for CLI and tests.
+    
+    Args:
+        clock: Optional fixed clock for deterministic testing.
+               If None, uses default clock (respects MM_FREEZE_UTC_ISO).
     """
+    # For deterministic testing, use a fixed clock if not provided
+    if clock is None:
+        # Use fixed timestamp for deterministic demo mode (unless env var set)
+        freeze_iso = os.getenv("MM_FREEZE_UTC_ISO")
+        if freeze_iso:
+            dt = datetime.fromisoformat(freeze_iso.replace("Z", "+00:00"))
+            fixed_ms = int(dt.timestamp() * 1000)
+        else:
+            # Default fixed timestamp for deterministic demo runs
+            fixed_ms = 1710000000000  # 2024-03-09 16:00:00 UTC
+        clock = lambda: fixed_ms
+    
     # Create components
     exchange = FakeExchangeClient(
         fill_rate=fill_rate,
@@ -945,6 +975,7 @@ def run_shadow_demo(
         exchange=exchange,
         order_store=order_store,
         risk_monitor=risk_monitor,
+        clock=clock,
     )
 
     # Run simulation
