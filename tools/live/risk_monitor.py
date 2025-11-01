@@ -211,7 +211,7 @@ class RuntimeRiskMonitor:
                 symbol=symbol,
                 freezes_total=self.freezes_total,
             )
-            metrics.FREEZE_EVENTS.inc()
+            # Note: FREEZE_EVENTS is incremented in execution_loop.py to avoid double-counting
         
         self.last_freeze_reason = reason
         self.last_freeze_symbol = symbol

@@ -58,7 +58,16 @@ class Quote:
     symbol: str
     bid: float
     ask: float
-    timestamp_ms: int
+    timestamp_ms: int = 0
+    # Back-compat aliases used by integration tests:
+    timestamp: int | None = None
+    bid_qty: float | None = None
+    ask_qty: float | None = None
+    
+    def __post_init__(self):
+        """Map 'timestamp' → 'timestamp_ms' if provided."""
+        if self.timestamp_ms == 0 and self.timestamp is not None:
+            self.timestamp_ms = int(self.timestamp)
 
 
 @dataclass
@@ -148,6 +157,9 @@ class ExecutionLoop:
         
         # Idempotency tracking
         self._freeze_idem_key: str | None = None
+        
+        # Freeze state tracking (for metrics)
+        self._was_frozen = False
         
         # Set maker-only gauge
         metrics.MAKER_ONLY_ENABLED.set(1.0 if maker_only else 0.0)
@@ -527,12 +539,6 @@ class ExecutionLoop:
             self.stats["freeze_events"] += 1
             logger.warning(f"System FROZEN: edge={net_bps}bps < threshold")
             
-            # Increment global freeze events counter for /metrics endpoint
-            try:
-                live_metrics.inc_freeze_events()
-            except Exception:
-                pass  # Don't break execution if metrics fail
-            
             # Observability: log freeze
             _structured_logger.warning(
                 "freeze_triggered",
@@ -541,7 +547,11 @@ class ExecutionLoop:
                 threshold_bps=self.risk_monitor.edge_freeze_threshold_bps,
                 reason="edge_below_threshold",
             )
-            metrics.FREEZE_EVENTS.inc()
+            
+            # Increment freeze events metric exactly once per transition to frozen
+            if not self._was_frozen:
+                self._was_frozen = True
+                metrics.inc_freeze_event()
             
             self._cancel_all_open_orders(reason="edge_below_threshold")
 

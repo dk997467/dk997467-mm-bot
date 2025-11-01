@@ -270,7 +270,9 @@ def test_exec_loop_with_idempotency_freeze():
         
         # Simulate single step (would place orders)
         # For this test, manually place order to simulate
-        order = store.place_order("BTCUSDT", Side.BUY, 0.001, 50000.0, idem_key="exec_place_1")
+        result = store.place_order("BTCUSDT", Side.BUY, 0.001, 50000.0, idem_key="exec_place_1")
+        assert result.success
+        order = result.order
         store.update_order_state(order.client_order_id, OrderState.OPEN, idem_key="exec_open_1")
         
         # Trigger freeze (simulate risk breach)
