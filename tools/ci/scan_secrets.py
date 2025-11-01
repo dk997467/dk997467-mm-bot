@@ -1,3 +1,9 @@
+"""
+Secret scanner for CI pipeline.
+
+Scans source code for hardcoded credentials using focused patterns.
+Exports module-level constants for backward-compatibility with tests.
+"""
 import os
 import re
 import sys
@@ -10,6 +16,10 @@ from pathlib import Path
 _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
+
+
+# Public exports (for backward-compatibility with tests)
+__all__ = ['DEFAULT_PATTERNS', 'TARGET_DIRS', 'ALLOWLIST_FILE', 'main']
 
 
 # Target directories for scanning (source code only)
@@ -73,6 +83,10 @@ FOCUSED_SECRET_PATTERNS = [
     r'(?i)(?:secret_key|secret-key|secretkey)\s*[=:]\s*["\']([A-Za-z0-9_\-]{16,})["\']',
     r'(?i)(?:auth_token|auth-token|authtoken)\s*[=:]\s*["\']([A-Za-z0-9_.\-]{20,})["\']',
 ]
+
+# Backward-compatibility: Export as DEFAULT_PATTERNS for tests that monkeypatch
+# This must be a module-level list (not a property) so monkeypatch can replace it
+DEFAULT_PATTERNS = FOCUSED_SECRET_PATTERNS
 
 # Whitelist of known test/dummy values that should be ignored
 # These are intentionally fake credentials used in CI/tests
@@ -255,8 +269,8 @@ def main(argv=None) -> int:
     # Check for strict mode from env or CLI
     strict_mode = args.strict or os.environ.get('CI_STRICT_SECRETS') == '1'
     
-    # Use focused patterns (not redact.DEFAULT_PATTERNS which has high false-positive rate)
-    patterns = FOCUSED_SECRET_PATTERNS
+    # Use DEFAULT_PATTERNS (can be monkeypatched by tests)
+    patterns = DEFAULT_PATTERNS
     
     # Load custom allowlist
     custom_allowlist = _load_custom_allowlist()
