@@ -1,0 +1,10 @@
+{
+  "execution": {
+    "iterations": 10
+  },
+  "orders": {
+    "placed": 5,
+    "rejected": 1,
+    "filled": 4
+  }
+}

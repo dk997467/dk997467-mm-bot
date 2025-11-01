@@ -1,0 +1,145 @@
+================================================================================
+                    MAIN BRANCH v3 FIX COMPLETE
+================================================================================
+
+COMMIT:    11249aa ci: migrate artifact actions to v4 on main + add v3-lint
+BRANCH:    fix/main-artifact-v4 -> main
+STATUS:    Ready for PR
+
+================================================================================
+FOUND & FIXED IN MAIN BRANCH
+================================================================================
+
+FILE: .github/workflows/testnet-smoke.yml
+
+FOUND 3 INSTANCES OF v3:
+  Line  53: uses: actions/upload-artifact@v3    -> v4 (FIXED)
+  Line 146: uses: actions/upload-artifact@v3    -> v4 (FIXED)
+  Line 163: uses: actions/download-artifact@v3  -> v4 (FIXED)
+
+ADDED LINT-STEPS (2 jobs):
+  - Job: smoke-shadow        -> lint-step added after checkout
+  - Job: smoke-testnet-sim   -> lint-step added after checkout
+
+================================================================================
+STATISTICS
+================================================================================
+
+Files changed:     1
+Lines added:      +21 (lint-steps + version updates)
+Lines removed:    -3  (old v3 references)
+Remaining v3:     0   (ALL REMOVED)
+
+================================================================================
+VERIFICATION
+================================================================================
+
+BEFORE (main branch):
+  $ git grep -nE 'actions/(upload|download)-artifact\s*[@:]\s*v3(\b|[^0-9])' -- .github
+  .github/workflows/testnet-smoke.yml:53:        uses: actions/upload-artifact@v3
+  .github/workflows/testnet-smoke.yml:146:        uses: actions/upload-artifact@v3
+  .github/workflows/testnet-smoke.yml:163:        uses: actions/download-artifact@v3
+
+AFTER (fix/main-artifact-v4):
+  $ git grep -nE 'actions/(upload|download)-artifact\s*[@:]\s*v3(\b|[^0-9])' -- .github
+  (no output - ALL v3 REMOVED)
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. CREATE PULL REQUEST:
+   
+   URL: https://github.com/dk997467/dk997467-mm-bot/pull/new/fix/main-artifact-v4
+   
+   OR use GitHub CLI:
+   $ gh pr create --title "ci: migrate to actions/{upload,download}-artifact@v4 on main" \
+                  --body-file PR_BODY.md \
+                  --base main \
+                  --head fix/main-artifact-v4
+
+2. AFTER MERGE TO MAIN:
+   
+   a) Run Testnet Smoke workflow manually:
+      https://github.com/dk997467/dk997467-mm-bot/actions/workflows/testnet-smoke.yml
+   
+   b) Verify:
+      - "Prepare actions" stage succeeds (no deprecation error)
+      - Artifacts upload/download successfully
+      - Lint-step passes (no v3 detected)
+      - No errors in workflow logs
+   
+   c) If all OK -> CI UNBLOCKED!
+
+================================================================================
+DOCUMENTATION
+================================================================================
+
+  MAIN_V3_FIX_REPORT.md - Detailed migration report with diffs
+  PR_BODY.md            - Pull request body (ready to use)
+  MAIN_V3_FIX_SUMMARY.txt - This file (quick reference)
+
+================================================================================
+ANTI-REGRESSION PROTECTION
+================================================================================
+
+LINT-STEP CODE (added to 2 jobs):
+
+  - name: Lint - forbid artifact v3
+    shell: bash
+    run: |
+      set -euo pipefail
+      if git grep -nE 'actions/(upload|download)-artifact\s*[@:]\s*v3(\b|[^0-9])' .github | tee /dev/stderr; then
+        echo "::error::Found deprecated artifact actions v3 — must use @v4"
+        exit 1
+      fi
+
+This step:
+  - Runs immediately after checkout
+  - Scans entire .github/ directory
+  - Fails workflow if any v3 is detected
+  - Prevents future reintroduction of deprecated actions
+
+================================================================================
+ACCEPTANCE CRITERIA
+================================================================================
+
+BEFORE MERGE:
+  [x] All v3 references replaced with v4
+  [x] Lint-steps added to all jobs with artifacts
+  [x] git grep returns no v3 matches
+  [x] YAML syntax validated
+  [x] Diff reviewed
+  [x] Reports generated
+
+AFTER MERGE:
+  [ ] Testnet Smoke workflow runs successfully from main
+  [ ] "Prepare actions" stage completes without errors
+  [ ] Artifacts upload/download work correctly
+  [ ] Lint-step passes validation
+
+================================================================================
+COMMIT MESSAGE
+================================================================================
+
+ci: migrate artifact actions to v4 on main + add v3-lint in workflows
+
+Why:
+- GitHub blocks v3 (deprecation), failing workflows on main branch
+- Root cause: testnet-smoke.yml using v3 in 3 locations
+
+Changes:
+- testnet-smoke.yml: replace all upload/download-artifact@v3 -> @v4 (3 fixes)
+- testnet-smoke.yml: add lint-step to 2 jobs (anti-regression protection)
+
+Verification:
+- grep for v3 -> none found
+- lint-step validates .github/ recursively
+- all workflows syntax-valid (YAML)
+
+Fixes: CI blocker on main branch
+
+================================================================================
+                           END OF SUMMARY
+================================================================================
+
