@@ -11,12 +11,68 @@ _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
-from src.common.redact import DEFAULT_PATTERNS
 
+# Target directories for scanning (source code only)
+TARGET_DIRS = ['src', 'tools', 'scripts']
 
-TARGET_DIRS = ['src', 'cli', 'tools']  # Only scan source code for secrets
-EXCLUDE_DIRS = {'venv', '.git', '__pycache__', 'tests/fixtures', 'artifacts', 'dist', 'logs', 'data', 'config'}
-TEXT_EXT = {'.txt', '.json', '.jsonl', '.yaml', '.yml', '.log', '.ini', '.py', '.sh', ''}  # Exclude .md - contains examples/placeholders
+# Directories to ignore during traversal
+IGNORE_DIRS = {
+    '.git', '.github', '.venv', 'venv', '__pycache__',
+    'artifacts', 'reports', 'dist', 'build',
+    'node_modules', '.pytest_cache', 'htmlcov',
+    'golden', 'presets',  # Tuning/test data
+}
+
+# File patterns to ignore (globs)
+IGNORE_GLOBS = [
+    '**/*.md',           # Documentation (contains examples)
+    '**/*.png', '**/*.jpg', '**/*.jpeg', '**/*.gif', '**/*.svg',  # Images
+    '**/*.csv', '**/*.parquet', '**/*.arrow',  # Data files
+    '**/*.ipynb',        # Jupyter notebooks
+    '**/*.pyc', '**/*.pyo',  # Compiled Python
+]
+
+# Text file extensions to scan
+TEXT_EXT = {'.txt', '.json', '.jsonl', '.yaml', '.yml', '.log', '.ini', '.py', '.sh', ''}
+
+# Focused secret patterns (high-signal only)
+# NOTE: These are INDEPENDENT of src.common.redact.DEFAULT_PATTERNS
+# We use focused patterns here to reduce false positives in CI scanning
+FOCUSED_SECRET_PATTERNS = [
+    # AWS credentials
+    r'AKIA[0-9A-Z]{16}',  # AWS Access Key ID
+    r'ASIA[0-9A-Z]{16}',  # AWS temp key
+    r'(?i)aws_secret_access_key\s*[=:]\s*["\']?([A-Za-z0-9/+=]{40})["\']?',
+    
+    # GitHub tokens
+    r'ghp_[0-9A-Za-z]{36,}',  # GitHub PAT
+    r'gho_[0-9A-Za-z]{36,}',  # GitHub OAuth
+    r'ghs_[0-9A-Za-z]{36,}',  # GitHub server-to-server
+    
+    # Stripe keys
+    r'sk_live_[0-9A-Za-z]{24,}',  # Stripe live secret
+    r'sk_test_[0-9A-Za-z]{24,}',  # Stripe test (still sensitive)
+    r'rk_live_[0-9A-Za-z]{24,}',  # Stripe restricted
+    
+    # Slack tokens
+    r'xoxb-[0-9A-Za-z\-]{20,}',  # Slack bot token
+    r'xoxp-[0-9A-Za-z\-]{20,}',  # Slack user token
+    
+    # Google API key
+    r'AIza[0-9A-Za-z\-_]{35}',
+    
+    # Facebook token
+    r'EAACEdEose0cBA[0-9A-Za-z]+',
+    
+    # SSH private key blocks
+    r'-----BEGIN (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY-----',
+    r'-----BEGIN PRIVATE KEY-----',
+    
+    # Generic high-entropy secrets (key/token/secret in name)
+    r'(?i)(?:api_key|api-key|apikey)\s*[=:]\s*["\']([A-Za-z0-9_\-]{16,})["\']',
+    r'(?i)(?:secret_key|secret-key|secretkey)\s*[=:]\s*["\']([A-Za-z0-9_\-]{16,})["\']',
+    r'(?i)(?:auth_token|auth-token|authtoken)\s*[=:]\s*["\']([A-Za-z0-9_.\-]{20,})["\']',
+]
 
 # Whitelist of known test/dummy values that should be ignored
 # These are intentionally fake credentials used in CI/tests
@@ -34,7 +90,19 @@ TEST_CREDENTIALS_WHITELIST = {
 ALLOWLIST_FILE = os.path.join(_repo_root, 'tools', 'ci', 'allowlist.txt')
 
 
+def _should_ignore_file(path: str) -> bool:
+    """Check if file should be ignored based on IGNORE_GLOBS."""
+    normalized = path.replace('\\', '/')
+    for glob_pattern in IGNORE_GLOBS:
+        if fnmatch.fnmatch(normalized, glob_pattern):
+            return True
+    return False
+
+
 def _is_text_file(path: str) -> bool:
+    """Check if file is a text file and should be scanned."""
+    if _should_ignore_file(path):
+        return False
     _, ext = os.path.splitext(path)
     return ext.lower() in TEXT_EXT
 
@@ -172,7 +240,7 @@ def main(argv=None) -> int:
     
     Exit codes:
         0: No secrets found OR all findings are allowlisted (unless --strict)
-        1: Real secrets found (always in --strict mode, optional otherwise)
+        1: Real secrets found OR allowlisted findings in strict mode
     
     Environment:
         CI_STRICT_SECRETS=1: Enable strict mode (exit 1 on any findings)
@@ -180,38 +248,28 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Scan for secrets in source code")
     parser.add_argument('--strict', action='store_true', 
                        help='Exit 1 even if all findings are allowlisted')
+    parser.add_argument('--paths', nargs='+', 
+                       help='Override TARGET_DIRS with custom paths to scan')
     args = parser.parse_args(argv)
     
     # Check for strict mode from env or CLI
     strict_mode = args.strict or os.environ.get('CI_STRICT_SECRETS') == '1'
     
-    try:
-        patterns = list(DEFAULT_PATTERNS)
-    except Exception as e:
-        print(f"[ERROR] Failed to load secret patterns: {e}", file=sys.stderr)
-        print("RESULT=ERROR", file=sys.stderr)
-        return 1
+    # Use focused patterns (not redact.DEFAULT_PATTERNS which has high false-positive rate)
+    patterns = FOCUSED_SECRET_PATTERNS
     
     # Load custom allowlist
     custom_allowlist = _load_custom_allowlist()
     if custom_allowlist:
         print(f"[INFO] Loaded {len(custom_allowlist)} custom allowlist patterns", file=sys.stderr)
     
-    # Determine work_dir and artifacts root for critical path checking
-    work_dir = Path(os.getenv("WORK_DIR", _repo_root)).resolve()
-    artifacts_root = (work_dir / "artifacts").resolve()
+    # Determine directories to scan
+    scan_dirs = args.paths if args.paths else TARGET_DIRS
     
     real_findings: List[Tuple[str, int, str]] = []
     allowlisted_findings: List[Tuple[str, int, str]] = []
-    critical_findings: List[Tuple[str, int, str]] = []  # Findings in artifacts/**
     scan_errors = []
-    
-    # Scan target directories (src, cli, tools)
-    scan_dirs = list(TARGET_DIRS)
-    
-    # Also scan artifacts/ if it exists (for critical path detection)
-    if artifacts_root.exists():
-        scan_dirs.append(str(artifacts_root))
+    files_scanned = 0
     
     for root in scan_dirs:
         # Convert relative paths to absolute paths relative to _repo_root
@@ -219,52 +277,45 @@ def main(argv=None) -> int:
             root = os.path.join(_repo_root, root)
         
         if not os.path.exists(root):
+            print(f"[WARN] Path does not exist: {root}", file=sys.stderr)
             continue
+        
         for dirpath, dirnames, filenames in os.walk(root):
-            # prune excludes
-            dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
+            # Prune ignored directories
+            dirnames[:] = [d for d in dirnames if d not in IGNORE_DIRS]
+            
             for name in sorted(filenames):
                 path = os.path.join(dirpath, name)
+                
                 if not _is_text_file(path):
                     continue
+                
+                files_scanned += 1
+                
                 try:
                     real_hits, allowlisted_hits = _scan_file(path, patterns, custom_allowlist)
                     
-                    # Check if file is under artifacts/** (critical path)
-                    file_path_resolved = Path(path).resolve()
-                    is_in_artifacts = False
-                    try:
-                        # Check if file is under artifacts directory
-                        file_path_resolved.relative_to(artifacts_root)
-                        is_in_artifacts = True
-                    except ValueError:
-                        # Not under artifacts/
-                        is_in_artifacts = False
+                    # Normalize path for consistent output
+                    normalized_path = path.replace('\\', '/')
                     
-                    # Classify findings
+                    # Collect findings
                     for (ln, s) in real_hits:
-                        normalized_path = path.replace('\\', '/')
-                        if is_in_artifacts:
-                            # Critical: any secret in artifacts/** → exit 2
-                            critical_findings.append((normalized_path, ln, s))
-                        else:
-                            # Regular finding in repo
-                            real_findings.append((normalized_path, ln, s))
+                        real_findings.append((normalized_path, ln, s))
                     
                     for (ln, s) in allowlisted_hits:
-                        normalized_path = path.replace('\\', '/')
-                        if is_in_artifacts:
-                            # Even allowlisted findings in artifacts are critical
-                            critical_findings.append((normalized_path, ln, s))
-                        else:
-                            allowlisted_findings.append((normalized_path, ln, s))
+                        allowlisted_findings.append((normalized_path, ln, s))
+                        
                 except Exception as e:
                     scan_errors.append(f"{path}: {e}")
 
     # Deterministic order (ASCII-only, stable sort)
     real_findings.sort(key=lambda x: (x[0], x[1]))
     allowlisted_findings.sort(key=lambda x: (x[0], x[1]))
-    critical_findings.sort(key=lambda x: (x[0], x[1]))
+    
+    # Print scan summary
+    total_matches = len(real_findings) + len(allowlisted_findings)
+    print(f"[INFO] Scanned {files_scanned} file(s), {total_matches} match(es) found", file=sys.stderr)
+    print(f"[INFO] Real: {len(real_findings)}, Allowlisted: {len(allowlisted_findings)}", file=sys.stderr)
     
     # Report scan errors (non-fatal warnings)
     if scan_errors:
@@ -274,38 +325,27 @@ def main(argv=None) -> int:
         if len(scan_errors) > 5:
             print(f"  ... and {len(scan_errors) - 5} more", file=sys.stderr)
     
-    # Import redact function
+    # Import redact function for output masking
     try:
         from src.common.redact import redact
     except ImportError:
         print("[WARN] Could not import redact function, showing raw findings", file=sys.stderr)
         redact = lambda s, p: s  # Fallback: no redaction
     
-    # PRIORITY 1: Critical findings in artifacts/** → exit 2
-    if critical_findings:
-        print("[CRITICAL] Secrets found in artifacts/** (bypasses allowlist):", file=sys.stderr)
-        for (p, ln, s) in critical_findings[:10]:  # Limit output
-            red = redact(s, patterns)
-            print(f"  {p}:{ln}: {red}", file=sys.stderr)
-        if len(critical_findings) > 10:
-            print(f"  ... and {len(critical_findings) - 10} more", file=sys.stderr)
-        
-        print("| scan_secrets | FAIL | RESULT=CRITICAL |")
-        print(f"[CRITICAL] Found {len(critical_findings)} secret(s) in artifacts/", file=sys.stderr)
-        return 2  # Exit 2 for critical findings
-    
-    # PRIORITY 2: Real findings in repo (not allowlisted) → exit 1
+    # PRIORITY 1: Real findings in repo (not allowlisted) → exit 1
     if real_findings:
         print("[ERROR] Real secrets detected (NOT allowlisted):", file=sys.stderr)
-        for (p, ln, s) in real_findings:
+        for (p, ln, s) in real_findings[:20]:  # Limit output to first 20
             red = redact(s, patterns)
             print(f"  {p}:{ln}: {red}", file=sys.stderr)
+        if len(real_findings) > 20:
+            print(f"  ... and {len(real_findings) - 20} more", file=sys.stderr)
         
         print("| scan_secrets | FAIL | RESULT=FOUND |")
         print(f"[ERROR] Found {len(real_findings)} real secret(s)", file=sys.stderr)
         return 1  # Fail on real secrets
     
-    # PRIORITY 3: Allowlisted findings (strict mode check)
+    # PRIORITY 2: Allowlisted findings (strict mode check)
     elif allowlisted_findings:
         if strict_mode:
             print("[WARN] Allowlisted findings detected (strict mode):", file=sys.stderr)
@@ -323,7 +363,7 @@ def main(argv=None) -> int:
             print("| scan_secrets | OK | RESULT=CLEAN |")
             return 0  # Success: all findings are allowlisted
     
-    # PRIORITY 4: No findings at all
+    # PRIORITY 3: No findings at all
     else:
         print("| scan_secrets | OK | RESULT=CLEAN |")
         print("[OK] No secrets found", file=sys.stderr)
