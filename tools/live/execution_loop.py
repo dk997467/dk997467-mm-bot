@@ -565,7 +565,7 @@ class ExecutionLoop:
         # If using DurableOrderStore with idempotency
         if self.enable_idempotency and hasattr(self.order_store, "cancel_all_open"):
             result = self.order_store.cancel_all_open(
-                timestamp_ms=self._clock(),
+                timestamp_ms=int(self._clock() * 1000),
                 idem_key=self._freeze_idem_key,
             )
             
@@ -834,10 +834,10 @@ class ExecutionLoop:
                 {
                     "client_order_id": o.client_order_id,
                     "symbol": o.symbol,
-                    "side": o.side,
+                    "side": getattr(o.side, "value", str(o.side)),
                     "qty": o.qty,
                     "price": o.price,
-                    "state": o.state.value,
+                    "state": getattr(o.state, "value", str(o.state)),
                 }
                 for o in open_orders
             ],
