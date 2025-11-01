@@ -48,7 +48,7 @@ def test_idempotent_place_order():
         store = DurableOrderStore(redis_client=redis, snapshot_dir=snapshot_dir, clock=clock)
         
         # Place order with idempotency key
-        order1 = store.place_order(
+        result1 = store.place_order(
             symbol="BTCUSDT",
             side=Side.BUY,
             qty=0.001,
@@ -56,12 +56,15 @@ def test_idempotent_place_order():
             idem_key="place_001"
         )
         
+        assert result1.success
+        assert not result1.was_duplicate
+        order1 = result1.order
         assert order1 is not None
         assert order1.symbol == "BTCUSDT"
         assert order1.state == OrderState.PENDING
         
         # Retry with same idem_key -> should return same order, no new order created
-        order2 = store.place_order(
+        result2 = store.place_order(
             symbol="BTCUSDT",
             side=Side.BUY,
             qty=0.001,
@@ -69,12 +72,15 @@ def test_idempotent_place_order():
             idem_key="place_001"
         )
         
+        assert result2.success
+        assert result2.was_duplicate  # This should be a duplicate
+        order2 = result2.order
         assert order2 is not None
         assert order2.client_order_id == order1.client_order_id
         assert order2.symbol == order1.symbol
         
         # Verify only one order exists
-        all_orders = store.get_all_orders()
+        all_orders = store.get_orders_by_symbol("BTCUSDT")
         assert len(all_orders) == 1
         assert all_orders[0].client_order_id == order1.client_order_id
 
@@ -89,41 +95,44 @@ def test_idempotent_update_order_state():
         store = DurableOrderStore(redis_client=redis, snapshot_dir=snapshot_dir, clock=clock)
         
         # Place order
-        order = store.place_order(
+        result = store.place_order(
             symbol="BTCUSDT",
             side=Side.BUY,
             qty=0.001,
             price=50000.0,
             idem_key="place_001"
         )
+        assert result.success
+        order = result.order
         
         # Update state with idempotency key
         clock.advance(1.0)
-        success1 = store.update_order_state(
+        result1 = store.update_order_state(
             order.client_order_id,
             OrderState.OPEN,
             idem_key="update_001"
         )
-        assert success1 is True
+        assert result1.success
         
         updated = store.get_order(order.client_order_id)
         assert updated is not None
         assert updated.state == OrderState.OPEN
-        first_updated_ts = updated.updated_at
+        first_updated_ts = updated.updated_at_ms
         
         # Retry with same idem_key -> should be no-op
         clock.advance(1.0)
-        success2 = store.update_order_state(
+        result2 = store.update_order_state(
             order.client_order_id,
             OrderState.OPEN,
             idem_key="update_001"
         )
-        assert success2 is True
+        assert result2.success
+        assert result2.was_duplicate  # Should be idempotent
         
         # Verify timestamp didn't change (idempotent)
         retry_updated = store.get_order(order.client_order_id)
         assert retry_updated is not None
-        assert retry_updated.updated_at == first_updated_ts
+        assert retry_updated.updated_at_ms == first_updated_ts
 
 
 def test_idempotent_update_fill():
@@ -136,24 +145,26 @@ def test_idempotent_update_fill():
         store = DurableOrderStore(redis_client=redis, snapshot_dir=snapshot_dir, clock=clock)
         
         # Place and open order
-        order = store.place_order(
+        result = store.place_order(
             symbol="BTCUSDT",
             side=Side.BUY,
             qty=0.001,
             price=50000.0,
             idem_key="place_001"
         )
+        assert result.success
+        order = result.order
         store.update_order_state(order.client_order_id, OrderState.OPEN, idem_key="open_001")
         
         # Update fill with idempotency key
         clock.advance(1.0)
-        success1 = store.update_fill(
+        result1 = store.update_fill(
             order.client_order_id,
             filled_qty=0.001,
             avg_fill_price=50000.0,
             idem_key="fill_001"
         )
-        assert success1 is True
+        assert result1.success
         
         filled = store.get_order(order.client_order_id)
         assert filled is not None
@@ -162,13 +173,14 @@ def test_idempotent_update_fill():
         
         # Retry with same idem_key -> should be no-op (no double fill)
         clock.advance(1.0)
-        success2 = store.update_fill(
+        result2 = store.update_fill(
             order.client_order_id,
             filled_qty=0.001,
             avg_fill_price=50000.0,
             idem_key="fill_001"
         )
-        assert success2 is True
+        assert result2.success
+        assert result2.was_duplicate  # Should be idempotent
         
         # Verify still only filled once
         retry_filled = store.get_order(order.client_order_id)
@@ -186,34 +198,40 @@ def test_idempotent_cancel_all_open():
         store = DurableOrderStore(redis_client=redis, snapshot_dir=snapshot_dir, clock=clock)
         
         # Place multiple orders
-        order1 = store.place_order("BTCUSDT", Side.BUY, 0.001, 50000.0, idem_key="p1")
-        order2 = store.place_order("ETHUSDT", Side.SELL, 0.01, 3000.0, idem_key="p2")
+        result1 = store.place_order("BTCUSDT", Side.BUY, 0.001, 50000.0, idem_key="p1")
+        result2 = store.place_order("ETHUSDT", Side.SELL, 0.01, 3000.0, idem_key="p2")
+        assert result1.success
+        assert result2.success
+        order1 = result1.order
+        order2 = result2.order
         
         store.update_order_state(order1.client_order_id, OrderState.OPEN, idem_key="o1")
         store.update_order_state(order2.client_order_id, OrderState.OPEN, idem_key="o2")
         
         # Cancel all with idempotency key
         clock.advance(1.0)
-        canceled_ids1 = store.cancel_all_open(idem_key="cancel_all_001")
-        assert len(canceled_ids1) == 2
-        assert order1.client_order_id in canceled_ids1
-        assert order2.client_order_id in canceled_ids1
+        result1 = store.cancel_all_open(idem_key="cancel_all_001")
+        assert result1.success
+        assert not result1.was_duplicate
+        assert "2" in result1.message  # "Canceled 2 open orders"
         
         # Verify canceled
         o1 = store.get_order(order1.client_order_id)
         o2 = store.get_order(order2.client_order_id)
         assert o1.state == OrderState.CANCELED
         assert o2.state == OrderState.CANCELED
-        first_cancel_ts = o1.updated_at
+        first_cancel_ts = o1.updated_at_ms
         
         # Retry with same idem_key -> should be no-op (no repeated cancels)
         clock.advance(1.0)
-        canceled_ids2 = store.cancel_all_open(idem_key="cancel_all_001")
-        assert len(canceled_ids2) == 2  # Returns cached result
+        result2 = store.cancel_all_open(idem_key="cancel_all_001")
+        assert result2.success
+        assert result2.was_duplicate  # Should be idempotent
+        assert "2" in result2.message  # Cached: "Canceled 2 open orders"
         
         # Verify timestamps unchanged (idempotent)
         retry_o1 = store.get_order(order1.client_order_id)
-        assert retry_o1.updated_at == first_cancel_ts
+        assert retry_o1.updated_at_ms == first_cancel_ts
 
 
 def test_exec_loop_with_idempotency_freeze():
@@ -224,8 +242,12 @@ def test_exec_loop_with_idempotency_freeze():
     with tempfile.TemporaryDirectory() as tmpdir:
         snapshot_dir = Path(tmpdir)
         store = DurableOrderStore(redis_client=redis, snapshot_dir=snapshot_dir, clock=clock)
-        exchange = FakeExchangeClient(clock=clock)
-        risk = RuntimeRiskMonitor(clock=clock)
+        exchange = FakeExchangeClient(fill_rate=0.0, reject_rate=0.0, seed=42)
+        risk = RuntimeRiskMonitor(
+            max_inventory_usd_per_symbol=10000.0,
+            max_total_notional_usd=50000.0,
+            edge_freeze_threshold_bps=1.5,
+        )
         
         # Create ExecutionLoop with idempotency enabled
         loop = ExecutionLoop(
@@ -234,13 +256,6 @@ def test_exec_loop_with_idempotency_freeze():
             risk_monitor=risk,
             clock=clock,
             enable_idempotency=True
-        )
-        
-        # Run single iteration
-        params = ExecutionParams(
-            symbols=["BTCUSDT"],
-            iterations=1,
-            aggressive=False
         )
         
         # Mock quote
@@ -286,8 +301,12 @@ def test_exec_loop_recover_from_restart():
         
         # --- Phase 1: Initial run with orders ---
         store1 = DurableOrderStore(redis_client=redis, snapshot_dir=snapshot_dir, clock=clock)
-        exchange1 = FakeExchangeClient(clock=clock)
-        risk1 = RuntimeRiskMonitor(clock=clock)
+        exchange1 = FakeExchangeClient(fill_rate=0.0, reject_rate=0.0, seed=42)
+        risk1 = RuntimeRiskMonitor(
+            max_inventory_usd_per_symbol=10000.0,
+            max_total_notional_usd=50000.0,
+            edge_freeze_threshold_bps=1.5,
+        )
         loop1 = ExecutionLoop(
             exchange=exchange1,
             order_store=store1,
@@ -297,8 +316,12 @@ def test_exec_loop_recover_from_restart():
         )
         
         # Place orders
-        order1 = store1.place_order("BTCUSDT", Side.BUY, 0.001, 50000.0, idem_key="p1")
-        order2 = store1.place_order("ETHUSDT", Side.SELL, 0.01, 3000.0, idem_key="p2")
+        result1 = store1.place_order("BTCUSDT", Side.BUY, 0.001, 50000.0, idem_key="p1")
+        result2 = store1.place_order("ETHUSDT", Side.SELL, 0.01, 3000.0, idem_key="p2")
+        assert result1.success
+        assert result2.success
+        order1 = result1.order
+        order2 = result2.order
         store1.update_order_state(order1.client_order_id, OrderState.OPEN, idem_key="o1")
         store1.update_order_state(order2.client_order_id, OrderState.OPEN, idem_key="o2")
         
@@ -310,8 +333,12 @@ def test_exec_loop_recover_from_restart():
         
         # Create new instances (simulating restart)
         store2 = DurableOrderStore(redis_client=redis, snapshot_dir=snapshot_dir, clock=clock)
-        exchange2 = FakeExchangeClient(clock=clock)
-        risk2 = RuntimeRiskMonitor(clock=clock)
+        exchange2 = FakeExchangeClient(fill_rate=0.0, reject_rate=0.0, seed=42)
+        risk2 = RuntimeRiskMonitor(
+            max_inventory_usd_per_symbol=10000.0,
+            max_total_notional_usd=50000.0,
+            edge_freeze_threshold_bps=1.5,
+        )
         loop2 = ExecutionLoop(
             exchange=exchange2,
             order_store=store2,

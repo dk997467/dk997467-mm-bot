@@ -125,8 +125,8 @@ class DurableOrderStore:
         side: str,
         qty: float,
         price: float,
-        timestamp_ms: int,
         idem_key: str,
+        timestamp_ms: int | None = None,
     ) -> IdempotentResult:
         """
         Place order idempotently.
@@ -136,12 +136,19 @@ class DurableOrderStore:
             side: "Buy" or "Sell"
             qty: Quantity
             price: Price
-            timestamp_ms: Timestamp
             idem_key: Idempotency key (e.g., "place:CLI00000001:v1")
+            timestamp_ms: Optional timestamp (defaults to clock())
             
         Returns:
             IdempotentResult with order and duplicate flag
         """
+        # Use clock if timestamp not provided
+        if timestamp_ms is None:
+            if self._clock is not None:
+                timestamp_ms = int(self._clock() * 1000)  # clock() returns seconds
+            else:
+                import time
+                timestamp_ms = int(time.time() * 1000)
         # Check idempotency cache
         cached = self.redis.get(f"idem:{idem_key}")
         if cached:
@@ -203,8 +210,8 @@ class DurableOrderStore:
         self,
         client_order_id: str,
         state: OrderState,
-        timestamp_ms: int,
         idem_key: str,
+        timestamp_ms: int | None = None,
         order_id: str | None = None,
         message: str | None = None,
     ) -> IdempotentResult:
@@ -214,14 +221,21 @@ class DurableOrderStore:
         Args:
             client_order_id: Client order ID
             state: New state
-            timestamp_ms: Timestamp
             idem_key: Idempotency key
+            timestamp_ms: Optional timestamp (defaults to clock())
             order_id: Optional exchange order ID
             message: Optional message
             
         Returns:
             IdempotentResult
         """
+        # Use clock if timestamp not provided
+        if timestamp_ms is None:
+            if self._clock is not None:
+                timestamp_ms = int(self._clock() * 1000)  # clock() returns seconds
+            else:
+                import time
+                timestamp_ms = int(time.time() * 1000)
         # Check idempotency cache
         cached = self.redis.get(f"idem:{idem_key}")
         if cached:
@@ -297,8 +311,8 @@ class DurableOrderStore:
         client_order_id: str,
         filled_qty: float,
         avg_fill_price: float,
-        timestamp_ms: int,
         idem_key: str,
+        timestamp_ms: int | None = None,
     ) -> IdempotentResult:
         """
         Update fill information idempotently.
@@ -307,12 +321,19 @@ class DurableOrderStore:
             client_order_id: Client order ID
             filled_qty: Filled quantity
             avg_fill_price: Average fill price
-            timestamp_ms: Timestamp
             idem_key: Idempotency key
+            timestamp_ms: Optional timestamp (defaults to clock())
             
         Returns:
             IdempotentResult
         """
+        # Use clock if timestamp not provided
+        if timestamp_ms is None:
+            if self._clock is not None:
+                timestamp_ms = int(self._clock() * 1000)  # clock() returns seconds
+            else:
+                import time
+                timestamp_ms = int(time.time() * 1000)
         # Check idempotency cache
         cached = self.redis.get(f"idem:{idem_key}")
         if cached:
@@ -407,17 +428,24 @@ class DurableOrderStore:
                 orders.append(order)
         return orders
 
-    def cancel_all_open(self, timestamp_ms: int, idem_key: str) -> IdempotentResult:
+    def cancel_all_open(self, idem_key: str, timestamp_ms: int | None = None) -> IdempotentResult:
         """
         Cancel all open orders idempotently.
         
         Args:
-            timestamp_ms: Timestamp
             idem_key: Idempotency key (e.g., "cancel_all:freeze_20240101_120000")
+            timestamp_ms: Optional timestamp (defaults to clock())
             
         Returns:
             IdempotentResult with count of canceled orders
         """
+        # Use clock if timestamp not provided
+        if timestamp_ms is None:
+            if self._clock is not None:
+                timestamp_ms = int(self._clock() * 1000)  # clock() returns seconds
+            else:
+                import time
+                timestamp_ms = int(time.time() * 1000)
         # Check idempotency cache
         cached = self.redis.get(f"idem:{idem_key}")
         if cached:

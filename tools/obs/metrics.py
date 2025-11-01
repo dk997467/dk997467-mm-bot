@@ -436,6 +436,20 @@ FREEZE_EVENTS = _REGISTRY.register_counter(
     labels=(),
 )
 
+
+def inc_freeze_event() -> None:
+    """
+    Increment freeze events counter.
+    
+    Thread-safe helper for incrementing mm_freeze_events_total.
+    Never raises exceptions (fails silently to avoid breaking main flow).
+    """
+    try:
+        FREEZE_EVENTS.inc()
+    except Exception:
+        # Never break main flow due to metrics
+        pass
+
 # P0.3 Live-prep metrics
 ORDERS_BLOCKED = _REGISTRY.register_counter(
     "mm_orders_blocked_total",
