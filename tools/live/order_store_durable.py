@@ -532,6 +532,57 @@ class DurableOrderStore:
         
         return recovered
 
+    def save_snapshot(self) -> None:
+        """
+        Persist current orders snapshot into snapshot_dir in deterministic JSON.
+        Best-effort: never raise if snapshotting fails.
+        """
+        try:
+            import time as _time
+            
+            # Get all orders from Redis
+            all_orders = {}
+            cursor = 0
+            while True:
+                cursor, keys = self.redis.scan(cursor, match="orders:CLI*", count=100)
+                for key in keys:
+                    order_data = self.redis.get(key)
+                    if order_data:
+                        order = self._deserialize_order(json.loads(order_data))
+                        cid = order.client_order_id
+                        all_orders[cid] = {
+                            "symbol": order.symbol,
+                            "side": order.side,
+                            "qty": order.qty,
+                            "price": order.price,
+                            "state": order.state.value if hasattr(order.state, "value") else str(order.state),
+                            "updated_at_ms": order.updated_at_ms,
+                            "order_id": order.order_id,
+                            "client_order_id": cid,
+                        }
+                
+                if cursor == 0:
+                    break
+            
+            # Determine timestamp
+            if self._clock is not None and callable(self._clock):
+                now_ms = int(self._clock() * 1000)
+            else:
+                now_ms = int(_time.time() * 1000)
+            
+            # Write to JSON snapshot
+            snapshot_path = self.snapshot_dir / "orders_snapshot.json"
+            data = {
+                "ts_ms": now_ms,
+                "orders": all_orders
+            }
+            
+            with open(snapshot_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
+        except Exception:
+            # Best-effort: never raise
+            pass
+
     def clear_snapshot(self) -> None:
         """Clear disk snapshot (for testing)."""
         if self.snapshot_file.exists():
