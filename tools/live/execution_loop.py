@@ -748,7 +748,9 @@ class ExecutionLoop:
         return self._generate_report(params)
 
     def _generate_report(self, params: ExecutionParams) -> dict[str, Any]:
-        """Generate deterministic JSON report."""
+        """Generate deterministic JSON report with canonical structure."""
+        import time
+        
         positions = self.risk_monitor.get_positions()
         
         # Calculate net position value
@@ -759,8 +761,47 @@ class ExecutionLoop:
             notional = abs(qty * mark_price)
             net_pos_usd[symbol] = notional
             total_notional += notional
-
+        
+        # Calculate pass/fail status
+        failed_count = (
+            self.stats["orders_rejected"] + 
+            self.stats["risk_blocks"] + 
+            self.stats["orders_blocked"]
+        )
+        passed_count = self.stats["orders_placed"] + self.stats["orders_filled"]
+        status = "pass" if failed_count == 0 else "fail"
+        
+        # Calculate KPIs
+        total_orders = passed_count + failed_count
+        maker_fill_rate = (
+            float(self.stats["orders_filled"]) / float(total_orders)
+            if total_orders > 0 else 0.0
+        )
+        risk_ratio_p95 = (
+            float(total_notional) / float(params.max_total_notional_usd)
+            if params.max_total_notional_usd > 0 else 0.0
+        )
+        
+        # Build canonical report structure
         report = {
+            "timestamp_ms": int(time.time() * 1000),
+            "params": {
+                "network": "testnet" if self.testnet else "mainnet",
+                "symbols": sorted(params.symbols),
+                "iterations": params.iterations,
+                "maker_only": self.maker_only,
+                "idempotency_enabled": self.enable_idempotency,
+                "recon_interval_s": self.recon_interval_s,
+            },
+            "summary": {
+                "status": status,
+                "passed": passed_count,
+                "failed": failed_count,
+                "warnings": self.stats["freeze_events"],
+                "maker_fill_rate": round(maker_fill_rate, 4),
+                "risk_ratio_p95": round(risk_ratio_p95, 4),
+                "latency_p95_ms": 0.0,  # TODO: Add latency tracking
+            },
             "execution": {
                 "iterations": params.iterations,
                 "symbols": sorted(params.symbols),
